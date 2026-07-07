@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <NoWarn>1591</NoWarn>
+    <AssemblyName>ClientRelationshipManagement.Web</AssemblyName>
+    <RootNamespace>ClientRelationshipManagement.Web</RootNamespace>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <LocalAIProject>..\..\..\cCoder.AI\src\cCoder.AI\cCoder.AI.csproj</LocalAIProject>
+    <UseLocalAI Condition="'$(UseLocalAI)' == '' and Exists('$(LocalAIProject)')">true</UseLocalAI>
+    <UseLocalAI Condition="'$(UseLocalAI)' == '' and !Exists('$(LocalAIProject)')">false</UseLocalAI>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="cCoder.Security" Version="2026.4.29.2038" />
+    <PackageReference Include="cCoder.Security.Data.EF.MSSQL" Version="2026.4.29.2038" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\cCoder.ClientRelationshipManagement\cCoder.ClientRelationshipManagement.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UseLocalAI)' == 'true'">
+    <ProjectReference Include="$(LocalAIProject)" />
+  </ItemGroup>
+
+  <Target Name="ValidateLocalAIDependency" BeforeTargets="PrepareForBuild" Condition="'$(UseLocalAI)' != 'true'">
+    <Error Text="ClientRelationshipManagement.Web currently requires a local cCoder.AI checkout at $(LocalAIProject). Set UseLocalAI=true after cloning cCoder.AI beside this repo, or update the dependency once cCoder.AI is ready to consume normally." />
+  </Target>
+
+</Project>

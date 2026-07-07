@@ -1,0 +1,210 @@
+@model ClientRelationshipManagement.Web.Models.Emails.EmailsPageViewModel
+@{
+    ViewData["Title"] = "Emails";
+}
+
+<main class="page-shell">
+    <section class="page-hero">
+        <div>
+            <h1>Emails Page</h1>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(Model.Notice))
+    {
+        <section class="notice-banner">
+            <strong>Email queue</strong>
+            <p>@Model.Notice</p>
+        </section>
+    }
+
+    <section class="dashboard-overview email-overview">
+        <div class="stats-rail stats-rail--primary">
+            <article class="metric-pill metric-pill--primary">
+                <span>Total Emails</span>
+                <strong>@Model.TotalEmails</strong>
+            </article>
+            <article class="metric-pill metric-pill--primary">
+                <span>Draft Or Failed</span>
+                <strong>@Model.DraftEmails</strong>
+            </article>
+            <article class="metric-pill metric-pill--primary">
+                <span>Approved Or Sending</span>
+                <strong>@Model.ApprovedEmails</strong>
+            </article>
+            <article class="metric-pill metric-pill--primary">
+                <span>Sent</span>
+                <strong>@Model.SentEmails</strong>
+            </article>
+        </div>
+    </section>
+
+    <section class="data-panel">
+        <form method="get" class="filter-bar">
+            <label class="auth-field auth-field--full">
+                <span>Search</span>
+                <input type="search" name="search" value="@Model.Search" placeholder="Search by client, subject, or recipient" />
+            </label>
+
+            <label class="auth-field">
+                <span>State</span>
+                <select name="state" asp-items="Model.StateOptions"></select>
+            </label>
+
+            <div class="filter-bar__actions">
+                <button type="submit" class="primary-action">Filter</button>
+                <a class="secondary-action" href="/Emails">Reset</a>
+            </div>
+        </form>
+
+        @if (Model.Emails.Count == 0)
+        {
+            <div class="empty-state empty-state--compact">
+                <strong>No emails match the current filter.</strong>
+                <p>Drafts approved from scheduled actions and client communications will appear here.</p>
+            </div>
+        }
+        else
+        {
+            <div class="table-shell">
+                <table class="crm-table">
+                    <thead>
+                        <tr>
+                            <th>Client</th>
+                            <th>State</th>
+                            <th>To</th>
+                            <th>Subject</th>
+                            <th>Scheduled</th>
+                            <th>Sent</th>
+                            <th>Created</th>
+                            <th class="table-actions">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var email in Model.Emails)
+                        {
+                            string dialogId = $"email-{email.Id}";
+                            <tr>
+                                <td><a href="/Clients/Edit/@email.ClientId">@email.ClientName</a></td>
+                                <td>@email.StateLabel</td>
+                                <td>@(string.IsNullOrWhiteSpace(email.ToAddresses) ? "Recipient pending" : email.ToAddresses)</td>
+                                <td>@email.Subject</td>
+                                <td>@email.ScheduledSendLabel</td>
+                                <td>@(string.IsNullOrWhiteSpace(email.SentOnLabel) ? "Not sent" : email.SentOnLabel)</td>
+                                <td>@email.CreatedOnLabel</td>
+                                <td class="table-actions">
+                                    <div class="inline-actions">
+                                        <button type="button" class="secondary-action" data-open-dialog="@dialogId">View</button>
+                                        @if (email.CanApprove)
+                                        {
+                                            <button type="button" class="secondary-action" data-open-dialog="approve-@email.Id">Approve</button>
+                                        }
+                                        @if (email.CanMarkSent)
+                                        {
+                                            <form asp-action="MarkSent" method="post">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="ClientId" value="@email.ClientId" />
+                                                <input type="hidden" name="EmailId" value="@email.Id" />
+                                                <button type="submit" class="secondary-action">Mark Sent</button>
+                                            </form>
+                                        }
+                                    </div>
+                                </td>
+                            </tr>
+
+                            <dialog id="@dialogId" class="crm-dialog">
+                                <div class="crm-dialog__header">
+                                    <div>
+                                        <h3>@email.Subject</h3>
+                                        <p>@email.ClientName | @email.StateLabel</p>
+                                    </div>
+                                    <button type="button" class="crm-dialog__close" data-close-dialog="@dialogId">Close</button>
+                                </div>
+                                <div class="crm-dialog__body">
+                                    <div class="crm-dialog__meta">
+                                        <span class="queue-count">To: @(string.IsNullOrWhiteSpace(email.ToAddresses) ? "Recipient pending" : email.ToAddresses)</span>
+                                        <span class="queue-count">@email.ScheduledSendLabel</span>
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(email.LastError))
+                                    {
+                                        <section class="notice-banner notice-banner--embedded">
+                                            <strong>Last send error</strong>
+                                            <p>@email.LastError</p>
+                                        </section>
+                                    }
+                                    <div class="crm-dialog__content">@email.Preview</div>
+                                    <div class="form-actions form-actions--start">
+                                        <a class="secondary-action" href="/Clients/Edit/@email.ClientId">View client</a>
+                                    </div>
+                                </div>
+                            </dialog>
+
+                            @if (email.CanApprove)
+                            {
+                                <dialog id="approve-@email.Id" class="crm-dialog">
+                                    <div class="crm-dialog__header">
+                                        <div>
+                                            <h3>Approve Email</h3>
+                                            <p>@email.Subject</p>
+                                        </div>
+                                        <button type="button" class="crm-dialog__close" data-close-dialog="approve-@email.Id">Close</button>
+                                    </div>
+                                    <div class="crm-dialog__body">
+                                        <form asp-action="Approve" method="post" class="crm-form crm-form--compact">
+                                            @Html.AntiForgeryToken()
+                                            <input type="hidden" name="ClientId" value="@email.ClientId" />
+                                            <input type="hidden" name="EmailId" value="@email.Id" />
+                                            <div class="form-grid">
+                                                <label class="auth-field auth-field--full">
+                                                    <span>Scheduled Send On</span>
+                                                    <input name="ScheduledSendOn" type="datetime-local" value="@email.ScheduledSendValue" />
+                                                </label>
+                                            </div>
+                                            <div class="form-actions form-actions--start">
+                                                <button type="submit" class="primary-action">Approve Send</button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </dialog>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+</main>
+
+<script>
+    (() => {
+        const openButtons = document.querySelectorAll("[data-open-dialog]");
+        const closeButtons = document.querySelectorAll("[data-close-dialog]");
+
+        openButtons.forEach(button => {
+            button.addEventListener("click", () => {
+                document.getElementById(button.dataset.openDialog)?.showModal();
+            });
+        });
+
+        closeButtons.forEach(button => {
+            button.addEventListener("click", () => {
+                document.getElementById(button.dataset.closeDialog)?.close();
+            });
+        });
+
+        document.querySelectorAll(".crm-dialog").forEach(dialog => {
+            dialog.addEventListener("click", event => {
+                const bounds = dialog.getBoundingClientRect();
+                const isInside =
+                    event.clientX >= bounds.left &&
+                    event.clientX <= bounds.right &&
+                    event.clientY >= bounds.top &&
+                    event.clientY <= bounds.bottom;
+
+                if (!isInside) {
+                    dialog.close();
+                }
+            });
+        });
+    })();
+</script>

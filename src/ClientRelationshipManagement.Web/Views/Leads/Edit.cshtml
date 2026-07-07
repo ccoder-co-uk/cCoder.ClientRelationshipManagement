@@ -1,0 +1,151 @@
+@model ClientRelationshipManagement.Web.Models.Leads.LeadEditorViewModel
+@{
+    ViewData["Title"] = "Lead Details";
+}
+
+<main class="page-shell">
+    <section class="page-hero">
+        <div>
+            <h1>@Model.FormTitle</h1>
+            <p class="lede">
+                Correct raw lead data, capture qualification notes, and keep the intake side of
+                the workflow trustworthy before conversion.
+            </p>
+        </div>
+
+        <div class="page-hero__actions">
+            <a class="secondary-action" href="/Leads">Back to Leads</a>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(Model.Notice))
+    {
+        <section class="notice-banner">
+            <strong>Lead workspace</strong>
+            <p>@Model.Notice</p>
+        </section>
+    }
+
+    <section class="form-panel">
+        <form asp-action="Edit" method="post" class="crm-form">
+            @Html.AntiForgeryToken()
+            <input asp-for="Id" type="hidden" />
+
+            <div class="form-grid">
+                <label class="auth-field">
+                    <span>Tenant</span>
+                    <input asp-for="TenantId" />
+                </label>
+
+                <label class="auth-field">
+                    <span>Status</span>
+                    <select asp-for="Status" asp-items="Model.StatusOptions"></select>
+                </label>
+
+                <label class="auth-field">
+                    <span>Source System</span>
+                    <input asp-for="SourceSystem" />
+                </label>
+
+                <label class="auth-field">
+                    <span>Source Record Id</span>
+                    <input asp-for="SourceRecordId" />
+                </label>
+
+                <label class="auth-field">
+                    <span>Source File Name</span>
+                    <input asp-for="SourceFileName" />
+                </label>
+
+                <label class="auth-field auth-field--full">
+                    <span>Company Name</span>
+                    <input asp-for="RawCompanyName" />
+                </label>
+
+                <label class="auth-field">
+                    <span>Trading Name</span>
+                    <input asp-for="RawTradingName" />
+                </label>
+
+                <label class="auth-field">
+                    <span>Company Number</span>
+                    <input asp-for="RawCompanyNumber" />
+                </label>
+
+                <label class="auth-field">
+                    <span>VAT Number</span>
+                    <input asp-for="RawVatNumber" />
+                </label>
+
+                <label class="auth-field">
+                    <span>Website</span>
+                    <input asp-for="RawWebsiteUrl" />
+                </label>
+
+                <label class="auth-field">
+                    <span>Lead Email</span>
+                    <input asp-for="RawContactEmailAddress" />
+                </label>
+
+                <label class="auth-field">
+                    <span>Lead Phone</span>
+                    <input asp-for="RawContactPhoneNumber" />
+                </label>
+
+                <label class="auth-field auth-field--full auth-field--multiline">
+                    <span>Raw Address</span>
+                    <textarea asp-for="RawAddressText"></textarea>
+                </label>
+
+                <label class="auth-field auth-field--full auth-field--multiline">
+                    <span>Qualification Notes</span>
+                    <textarea asp-for="QualificationNotes"></textarea>
+                </label>
+
+                <label class="auth-field">
+                    <span>Contact Name</span>
+                    <input asp-for="ContactName" />
+                </label>
+
+                <label class="auth-field">
+                    <span>Contact Position</span>
+                    <input asp-for="ContactPosition" />
+                </label>
+
+                <label class="auth-field">
+                    <span>Contact Email</span>
+                    <input asp-for="ContactEmailAddress" />
+                </label>
+
+                <label class="auth-field">
+                    <span>Contact Phone</span>
+                    <input asp-for="ContactPhoneNumber" />
+                </label>
+
+                <label class="auth-field auth-field--full">
+                    <span>LinkedIn URL</span>
+                    <input asp-for="ContactLinkedInUrl" />
+                </label>
+            </div>
+
+            <div class="workspace-card__stats">
+                @if (!string.IsNullOrWhiteSpace(Model.LinkedCompanyId))
+                {
+                    <span>Company linked</span>
+                }
+                @if (!string.IsNullOrWhiteSpace(Model.LinkedRelationshipId))
+                {
+                    <span>Relationship linked</span>
+                }
+                @if (!string.IsNullOrWhiteSpace(Model.LinkedOpportunityId))
+                {
+                    <span>Opportunity linked</span>
+                }
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="primary-action">@Model.SubmitLabel</button>
+            </div>
+        </form>
+    </section>
+</main>

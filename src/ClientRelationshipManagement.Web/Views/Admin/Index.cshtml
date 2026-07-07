@@ -1,0 +1,157 @@
+@model ClientRelationshipManagement.Web.Models.Admin.AdminDashboardViewModel
+@{
+    ViewData["Title"] = "Admin";
+}
+
+<section class="crm-section">
+    <div class="crm-section__header">
+        <div>
+            <h1>Admin</h1>
+            <p>Operational visibility for agent runs, approvals, and process improvement proposals.</p>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Model.Notice))
+    {
+        <div class="crm-notice">@Model.Notice</div>
+    }
+
+    <div class="stats-grid stats-grid--top">
+        <article class="stat-card">
+            <span>Pending email approvals</span>
+            <strong>@Model.PendingEmailApprovalCount</strong>
+        </article>
+        <article class="stat-card">
+            <span>Pending agent messages</span>
+            <strong>@Model.PendingAgentMessageCount</strong>
+        </article>
+        <article class="stat-card">
+            <span>Pending process proposals</span>
+            <strong>@Model.PendingProcessProposalCount</strong>
+        </article>
+    </div>
+
+    <div class="crm-split crm-split--admin">
+        <section class="crm-card">
+            <div class="crm-card__header">
+                <h2>Pending Agent Messages</h2>
+            </div>
+            <div class="crm-stack">
+                @if (Model.PendingMessages.Count == 0)
+                {
+                    <p class="crm-muted">No pending messages are waiting for a response.</p>
+                }
+                else
+                {
+                    @foreach (var message in Model.PendingMessages)
+                    {
+                        <article class="crm-feed-card">
+                            <div class="crm-feed-card__header">
+                                <div>
+                                    <span class="crm-pill">@message.Kind</span>
+                                    <h3>@message.Title</h3>
+                                </div>
+                                <span class="crm-muted">@message.CreatedOn</span>
+                            </div>
+                            <p>@message.Body</p>
+                            <div class="crm-feed-card__actions">
+                                <a class="secondary-action" href="@message.ContextLink">Open Context</a>
+                                <form asp-action="ApproveMessage" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="id" value="@message.Id" />
+                                    <input type="hidden" name="proposedProcessDefinitionId" value="@message.ProposedProcessDefinitionId" />
+                                    <button type="submit" class="primary-action">Approve</button>
+                                </form>
+                                <form asp-action="RejectMessage" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="id" value="@message.Id" />
+                                    <button type="submit" class="secondary-action">Reject</button>
+                                </form>
+                                <form asp-action="DismissMessage" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="id" value="@message.Id" />
+                                    <button type="submit" class="secondary-action">Dismiss</button>
+                                </form>
+                            </div>
+                        </article>
+                    }
+                }
+            </div>
+        </section>
+
+        <section class="crm-card">
+            <div class="crm-card__header">
+                <h2>Recent Agent Runs</h2>
+            </div>
+            <div class="crm-table">
+                <table>
+                    <thead>
+                    <tr>
+                        <th>Kind</th>
+                        <th>State</th>
+                        <th>User</th>
+                        <th>Provider</th>
+                        <th>Iterations</th>
+                        <th>Started</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var run in Model.RecentRuns)
+                    {
+                        <tr>
+                            <td>@run.Kind</td>
+                            <td>@run.State</td>
+                            <td>@run.ExecutionUserId</td>
+                            <td>@run.Provider / @run.Model</td>
+                            <td>@run.Iterations</td>
+                            <td>@run.StartedOn</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+
+    <section class="crm-card">
+        <div class="crm-card__header">
+            <h2>Draft Process Proposals</h2>
+        </div>
+        <div class="crm-table">
+            <table>
+                <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Scope</th>
+                    <th>Version</th>
+                    <th>Agent</th>
+                    <th>Summary</th>
+                    <th>Created</th>
+                </tr>
+                </thead>
+                <tbody>
+                @if (Model.DraftProcesses.Count == 0)
+                {
+                    <tr>
+                        <td colspan="6">No process drafts are waiting for review.</td>
+                    </tr>
+                }
+                else
+                {
+                    @foreach (var draft in Model.DraftProcesses)
+                    {
+                        <tr>
+                            <td>@draft.Name</td>
+                            <td>@draft.ScopeType</td>
+                            <td>@draft.VersionNumber</td>
+                            <td>@draft.ProposedByAgent</td>
+                            <td>@draft.ChangeSummary</td>
+                            <td>@draft.CreatedOn</td>
+                        </tr>
+                    }
+                }
+                </tbody>
+            </table>
+        </div>
+    </section>
+</section>

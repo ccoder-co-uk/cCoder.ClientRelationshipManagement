@@ -1,0 +1,799 @@
+@model ClientEditorViewModel
+@{
+    ViewData["Title"] = Model.IsNew ? "Add Client" : "Client Details";
+}
+
+<main class="page-shell">
+    <section class="page-hero">
+        <div>
+            <h1>@Model.FormTitle</h1>
+        </div>
+
+        <div class="page-hero__actions">
+            <a class="secondary-action" href="/Documentation/Pages/Client-Details-Page">Client Details Notes</a>
+            <a class="secondary-action" href="/Clients">Back to Clients</a>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(Model.Notice))
+    {
+        <section class="notice-banner">
+            <strong>Client workspace</strong>
+            <p>@Model.Notice</p>
+        </section>
+    }
+
+    <section class="client-overview-layout">
+        <section class="form-panel">
+            <form asp-action="Edit" method="post" class="crm-form">
+                @Html.AntiForgeryToken()
+                <input asp-for="Id" type="hidden" />
+
+                <div asp-validation-summary="ModelOnly" class="auth-error" role="alert"></div>
+
+                <div class="form-grid">
+                    <label class="auth-field">
+                        <span>Company Name</span>
+                        <input asp-for="CompanyName" />
+                    </label>
+
+                    <label class="auth-field">
+                        <span>Trading Name</span>
+                        <input asp-for="TradingName" />
+                    </label>
+
+                    <label class="auth-field">
+                        <span>Account Owner</span>
+                        <input asp-for="AccountOwner" />
+                    </label>
+
+                    <label class="auth-field">
+                        <span>Lead Source</span>
+                        <input asp-for="LeadSource" />
+                    </label>
+
+                    <label class="auth-field">
+                        <span>Status</span>
+                        <select asp-for="Status" asp-items="Model.StatusOptions"></select>
+                    </label>
+
+                    <label class="auth-field">
+                        <span>Stage</span>
+                        <select asp-for="CurrentStage" asp-items="Model.StageOptions"></select>
+                    </label>
+
+                    <label class="auth-field">
+                        <span>Priority</span>
+                        <select asp-for="Priority" asp-items="Model.PriorityOptions"></select>
+                    </label>
+
+                    <label class="auth-field">
+                        <span>Fit Score</span>
+                        <input asp-for="FitScore" type="number" step="0.1" />
+                    </label>
+
+                    <label class="auth-field">
+                        <span>Contact Email</span>
+                        <input asp-for="ContactEmailAddress" />
+                    </label>
+
+                    <label class="auth-field">
+                        <span>Contact Phone</span>
+                        <input asp-for="ContactPhoneNumber" />
+                    </label>
+
+                    <label class="auth-field">
+                        <span>Website</span>
+                        <input asp-for="WebsiteUrl" />
+                    </label>
+
+                    <label class="auth-field">
+                        <span>Initial Route</span>
+                        <input asp-for="InitialRoute" />
+                    </label>
+
+                    <label class="auth-field auth-field--full auth-field--multiline">
+                        <span>Opportunity Summary</span>
+                        <textarea asp-for="OpportunitySummary"></textarea>
+                    </label>
+
+                    <label class="auth-field auth-field--full auth-field--multiline">
+                        <span>Research Summary</span>
+                        <textarea asp-for="ResearchSummary"></textarea>
+                    </label>
+
+                    <label class="auth-field auth-field--full auth-field--multiline">
+                        <span>Data Quality Notes</span>
+                        <textarea asp-for="DataQualityNotes"></textarea>
+                    </label>
+
+                    <label class="auth-field auth-field--full auth-field--multiline">
+                        <span>Preferred Opening Angle</span>
+                        <textarea asp-for="PreferredOpeningAngle"></textarea>
+                    </label>
+
+                    <label class="checkbox-field">
+                        <input asp-for="IsArchived" type="checkbox" />
+                        <span>Archive this client</span>
+                    </label>
+
+                    <label class="checkbox-field">
+                        <input asp-for="IsVerified" type="checkbox" />
+                        <span>Verified company record</span>
+                    </label>
+                </div>
+
+                <div class="form-actions">
+                    <a class="secondary-action" href="/Clients">Cancel</a>
+                    <button type="submit" class="primary-action">@Model.SubmitLabel</button>
+                </div>
+            </form>
+        </section>
+
+        @if (!Model.IsNew)
+        {
+            <aside class="workspace-panel action-rail">
+                <div class="section-heading">
+                    <div>
+                        <h2>Scheduled Actions</h2>
+                    </div>
+                </div>
+
+                @if (Model.ScheduledActions.Count == 0)
+                {
+                    <div class="empty-state empty-state--compact">
+                        <strong>No scheduled actions are currently set.</strong>
+                        <p>As client, opportunity, and activity follow-ups are added they will appear here for quick reference.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="action-rail__list">
+                        @foreach (ClientScheduledActionItemViewModel action in Model.ScheduledActions)
+                        {
+                            <article class="action-rail__item">
+                                <div class="workspace-card__meta">
+                                    <span class="todo-type">@action.TypeLabel</span>
+                                    <span class="todo-due">@action.DueLabel</span>
+                                </div>
+                                <h3 class="workspace-card__title">@action.ActionText</h3>
+                                <p class="workspace-card__copy">@action.SourceLabel</p>
+                            </article>
+                        }
+                    </div>
+                }
+            </aside>
+        }
+    </section>
+
+    @if (!Model.IsNew && Model.Id.HasValue)
+    {
+        <section class="workspace-panel workspace-panel--tabs">
+            <div class="tab-strip" role="tablist" aria-label="Client child collections">
+                <button
+                    type="button"
+                    class="tab-strip__tab is-active"
+                    id="tab-opportunities"
+                    role="tab"
+                    aria-selected="true"
+                    aria-controls="panel-opportunities"
+                    data-tab-target="panel-opportunities">
+                    Client Opportunities
+                    <span class="tab-strip__count">@Model.Opportunities.Count</span>
+                </button>
+                <button
+                    type="button"
+                    class="tab-strip__tab"
+                    id="tab-communications"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="panel-communications"
+                    data-tab-target="panel-communications"
+                    tabindex="-1">
+                    Communications
+                    <span class="tab-strip__count">@Model.Communications.Count</span>
+                </button>
+                <button
+                    type="button"
+                    class="tab-strip__tab"
+                    id="tab-activities"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="panel-activities"
+                    data-tab-target="panel-activities"
+                    tabindex="-1">
+                    Client Activity
+                    <span class="tab-strip__count">@Model.RecentActivities.Count</span>
+                </button>
+            </div>
+
+            <section
+                id="panel-opportunities"
+                class="tab-panel"
+                role="tabpanel"
+                aria-labelledby="tab-opportunities">
+                <div class="tab-panel__toolbar">
+                    <button type="button" class="secondary-action" data-open-dialog="add-opportunity-dialog">Add Opportunity</button>
+                </div>
+
+                @if (Model.Opportunities.Count == 0)
+                {
+                    <div class="empty-state empty-state--compact">
+                        <strong>No opportunities captured yet.</strong>
+                        <p>Add the first opportunity to start tracking value, stage, and the next commercial move.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="collection-grid">
+                        @foreach (ClientOpportunitySummaryViewModel opportunity in Model.Opportunities)
+                        {
+                            <article class="workspace-card">
+                                <div class="workspace-card__meta">
+                                    <span class="todo-type">@opportunity.TypeLabel</span>
+                                    <span class="todo-due">@opportunity.StageLabel</span>
+                                </div>
+                                <h4 class="workspace-card__title">@opportunity.PainSummary</h4>
+                                <p class="workspace-card__copy">@opportunity.ValueHypothesis</p>
+                                <div class="workspace-card__stats">
+                                    <span>Value: @opportunity.EstimatedAnnualValueLabel</span>
+                                    <span>Probability: @opportunity.ProbabilityLabel</span>
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(opportunity.NextAction))
+                                {
+                                    <p class="workspace-card__note"><strong>Next action:</strong> @opportunity.NextAction @(!string.IsNullOrWhiteSpace(opportunity.NextActionDueLabel) ? $"({opportunity.NextActionDueLabel})" : string.Empty)</p>
+                                }
+                            </article>
+                        }
+                    </div>
+                }
+            </section>
+
+            <section
+                id="panel-communications"
+                class="tab-panel"
+                role="tabpanel"
+                aria-labelledby="tab-communications"
+                hidden>
+                <div class="tab-panel__toolbar">
+                    <button type="button" class="secondary-action" data-open-dialog="draft-email-dialog">Draft Email</button>
+                    <button type="button" class="secondary-action" data-open-dialog="add-activity-dialog" data-activity-type="PhoneCall" data-activity-direction="Outbound">Record Call</button>
+                </div>
+
+                @if (Model.Communications.Count == 0)
+                {
+                    <div class="empty-state empty-state--compact">
+                        <strong>No communications have been logged yet.</strong>
+                        <p>This is where emails, calls, meetings, and demos will build into a single communication history.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="collection-grid">
+                        @foreach (ClientCommunicationItemViewModel communication in Model.Communications)
+                        {
+                            string communicationDialogId = communication.MaterialId.HasValue
+                                ? $"communication-material-{communication.MaterialId}"
+                                : $"communication-activity-{communication.ActivityId}";
+
+                            <article class="workspace-card communication-card">
+                                <div class="workspace-card__meta">
+                                    <span class="todo-type">@communication.TypeLabel</span>
+                                    <span class="todo-due">@communication.WhenLabel</span>
+                                </div>
+                                <div class="communication-card__header">
+                                    <h3 class="workspace-card__title">@communication.Title</h3>
+                                    <div class="communication-card__badges">
+                                        <span class="queue-count">@communication.DirectionLabel</span>
+                                        @if (!string.IsNullOrWhiteSpace(communication.StatusLabel))
+                                        {
+                                            <span class="queue-count">@communication.StatusLabel</span>
+                                        }
+                                    </div>
+                                </div>
+                                <p class="workspace-card__copy">@communication.Content</p>
+                                @if (!string.IsNullOrWhiteSpace(communication.NextAction))
+                                {
+                                    <p class="workspace-card__note"><strong>Next action:</strong> @communication.NextAction @(!string.IsNullOrWhiteSpace(communication.NextActionDueLabel) ? $"({communication.NextActionDueLabel})" : string.Empty)</p>
+                                }
+
+                                @if (communication.IsDraftEmail && communication.MaterialId.HasValue)
+                                {
+                                    <div class="communication-card__actions">
+                                        <button type="button" class="secondary-action" data-open-dialog="@communicationDialogId">View Content</button>
+                                        <button type="button" class="secondary-action" data-open-dialog="edit-draft-email-@communication.MaterialId">Edit Draft</button>
+                                        <form asp-action="ApproveEmail" method="post">
+                                            @Html.AntiForgeryToken()
+                                            <input type="hidden" name="ClientId" value="@Model.Id" />
+                                            <input type="hidden" name="EmailId" value="@communication.EmailId" />
+                                            <input type="hidden" name="ScheduledSendOn" value="@communication.ScheduledSendOnValue" />
+                                            <button type="submit" class="secondary-action">Approve Send</button>
+                                        </form>
+                                        <form asp-action="MarkEmailSent" method="post">
+                                            @Html.AntiForgeryToken()
+                                            <input type="hidden" name="ClientId" value="@Model.Id" />
+                                            <input type="hidden" name="EmailId" value="@communication.EmailId" />
+                                            <button type="submit" class="primary-action">Mark Sent</button>
+                                        </form>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="communication-card__actions">
+                                        <button type="button" class="secondary-action" data-open-dialog="@communicationDialogId">View Content</button>
+                                    </div>
+                                }
+                            </article>
+
+                            <dialog id="@communicationDialogId" class="crm-dialog">
+                                <div class="crm-dialog__header">
+                                    <div>
+                                        <h3>@communication.Title</h3>
+                                        <p>@communication.TypeLabel | @communication.DirectionLabel | @communication.WhenLabel</p>
+                                    </div>
+                                    <button type="button" class="crm-dialog__close" data-close-dialog="@communicationDialogId">Close</button>
+                                </div>
+
+                                <div class="crm-dialog__body">
+                                    <div class="crm-dialog__meta">
+                                        @if (!string.IsNullOrWhiteSpace(communication.StatusLabel))
+                                        {
+                                            <span class="queue-count">@communication.StatusLabel</span>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(communication.NextActionDueLabel))
+                                        {
+                                            <span class="queue-count">Next due @communication.NextActionDueLabel</span>
+                                        }
+                                    </div>
+
+                                    <div class="crm-dialog__content">
+                                        @communication.Content
+                                    </div>
+
+                                    @if (!string.IsNullOrWhiteSpace(communication.NextAction))
+                                    {
+                                        <div class="crm-dialog__follow-up">
+                                            <strong>Next action</strong>
+                                            <p>@communication.NextAction</p>
+                                        </div>
+                                    }
+
+                                    @if (communication.IsDraftEmail && communication.MaterialId.HasValue)
+                                    {
+                                        <div class="form-actions form-actions--start">
+                                            <button type="button" class="secondary-action" data-open-dialog="edit-draft-email-@communication.MaterialId">Edit Draft</button>
+                                            <form asp-action="ApproveEmail" method="post">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="ClientId" value="@Model.Id" />
+                                                <input type="hidden" name="EmailId" value="@communication.EmailId" />
+                                                <input type="hidden" name="ScheduledSendOn" value="@communication.ScheduledSendOnValue" />
+                                                <button type="submit" class="secondary-action">Approve Send</button>
+                                            </form>
+                                            <form asp-action="MarkEmailSent" method="post">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="ClientId" value="@Model.Id" />
+                                                <input type="hidden" name="EmailId" value="@communication.EmailId" />
+                                                <button type="submit" class="primary-action">Mark Sent</button>
+                                            </form>
+                                        </div>
+                                    }
+                                </div>
+                            </dialog>
+                        }
+                    </div>
+                }
+            </section>
+
+            <section
+                id="panel-activities"
+                class="tab-panel"
+                role="tabpanel"
+                aria-labelledby="tab-activities"
+                hidden>
+                <div class="tab-panel__toolbar">
+                    <button type="button" class="secondary-action" data-open-dialog="add-activity-dialog">Add Activity</button>
+                </div>
+
+                @if (Model.RecentActivities.Count == 0)
+                {
+                    <div class="empty-state empty-state--compact">
+                        <strong>No activity has been recorded yet.</strong>
+                        <p>This is where progress notes, completed actions, and follow-up history will appear.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="collection-grid">
+                        @foreach (ClientActivityTimelineItemViewModel activity in Model.RecentActivities)
+                        {
+                            <article class="timeline-item">
+                                <div class="timeline-item__meta">
+                                    <span class="todo-type">@activity.TypeLabel</span>
+                                    <span class="todo-due">@activity.WhenLabel</span>
+                                </div>
+                                <h4 class="workspace-card__title">@activity.Summary</h4>
+                                <p class="workspace-card__copy">@activity.Outcome</p>
+                                <div class="workspace-card__stats">
+                                    <span>@activity.DirectionLabel</span>
+                                    @if (!string.IsNullOrWhiteSpace(activity.OpportunityStageLabel))
+                                    {
+                                        <span>Opportunity stage: @activity.OpportunityStageLabel</span>
+                                    }
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(activity.NextAction))
+                                {
+                                    <p class="workspace-card__note"><strong>Next action:</strong> @activity.NextAction @(!string.IsNullOrWhiteSpace(activity.NextActionDueLabel) ? $"({activity.NextActionDueLabel})" : string.Empty)</p>
+                                }
+                            </article>
+                        }
+                    </div>
+                }
+            </section>
+        </section>
+
+        <dialog id="add-opportunity-dialog" class="crm-dialog">
+            <div class="crm-dialog__header">
+                <div>
+                    <h3>Add Opportunity</h3>
+                    <p>Capture the commercial shape, expected value, and next move without pushing the current client context off screen.</p>
+                </div>
+                <button type="button" class="crm-dialog__close" data-close-dialog="add-opportunity-dialog">Close</button>
+            </div>
+
+            <div class="crm-dialog__body">
+                <form asp-action="AddOpportunity" method="post" class="crm-form crm-form--compact">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="ClientId" value="@Model.Id" />
+
+                    <div class="form-grid">
+                        <label class="auth-field">
+                            <span>Type</span>
+                            <select name="Type" asp-items="Model.OpportunityTypeOptions"></select>
+                        </label>
+
+                        <label class="auth-field">
+                            <span>Stage</span>
+                            <select name="Stage" asp-items="Model.StageOptions"></select>
+                        </label>
+
+                        <label class="auth-field">
+                            <span>Estimated Annual Value</span>
+                            <input name="EstimatedAnnualValue" type="number" step="0.01" />
+                        </label>
+
+                        <label class="auth-field">
+                            <span>Probability</span>
+                            <input name="Probability" type="number" step="0.1" min="0" max="100" />
+                        </label>
+
+                        <label class="auth-field auth-field--full auth-field--multiline">
+                            <span>Pain Summary</span>
+                            <textarea name="PainSummary" required></textarea>
+                        </label>
+
+                        <label class="auth-field auth-field--full auth-field--multiline">
+                            <span>Value Hypothesis</span>
+                            <textarea name="ValueHypothesis"></textarea>
+                        </label>
+
+                        <label class="auth-field auth-field--full auth-field--multiline">
+                            <span>Decision Process</span>
+                            <textarea name="DecisionProcess"></textarea>
+                        </label>
+
+                        <label class="auth-field auth-field--full auth-field--multiline">
+                            <span>Next Action</span>
+                            <textarea name="NextAction"></textarea>
+                        </label>
+
+                        <label class="auth-field">
+                            <span>Next Action Due On</span>
+                            <input name="NextActionDueOn" type="date" />
+                        </label>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="primary-action">Add opportunity</button>
+                    </div>
+                </form>
+            </div>
+        </dialog>
+
+        <dialog id="draft-email-dialog" class="crm-dialog">
+            <div class="crm-dialog__header">
+                <div>
+                    <h3>Draft Email</h3>
+                    <p>Create an email draft that stays in the communication history until you are ready to mark it as sent.</p>
+                </div>
+                <button type="button" class="crm-dialog__close" data-close-dialog="draft-email-dialog">Close</button>
+            </div>
+
+            <div class="crm-dialog__body">
+                <form asp-action="SaveEmailDraft" method="post" class="crm-form crm-form--compact">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="ClientId" value="@Model.Id" />
+
+                    <div class="form-grid">
+                        <label class="auth-field auth-field--full">
+                            <span>To</span>
+                            <input name="ToAddresses" value="@Model.ContactEmailAddress" />
+                        </label>
+
+                        <label class="auth-field">
+                            <span>CC</span>
+                            <input name="CcAddresses" />
+                        </label>
+
+                        <label class="auth-field">
+                            <span>BCC</span>
+                            <input name="BccAddresses" />
+                        </label>
+
+                        <label class="auth-field">
+                            <span>Direction</span>
+                            <select name="Direction" asp-items="Model.ActivityDirectionOptions"></select>
+                        </label>
+
+                        <label class="auth-field">
+                            <span>Linked Opportunity</span>
+                            <select name="ClientOpportunityId">
+                                <option value="">None</option>
+                                @foreach (ClientOpportunitySummaryViewModel opportunity in Model.Opportunities)
+                                {
+                                    <option value="@opportunity.Id">@opportunity.TypeLabel | @opportunity.StageLabel</option>
+                                }
+                            </select>
+                        </label>
+
+                        <label class="auth-field auth-field--full">
+                            <span>Subject</span>
+                            <input name="Subject" required />
+                        </label>
+
+                        <label class="auth-field auth-field--full auth-field--multiline">
+                            <span>Email Body</span>
+                            <textarea name="Body" required></textarea>
+                        </label>
+
+                        <label class="auth-field auth-field--full auth-field--multiline">
+                            <span>Next Action</span>
+                            <textarea name="NextAction"></textarea>
+                        </label>
+
+                        <label class="auth-field">
+                            <span>Next Action Due On</span>
+                            <input name="NextActionDueOn" type="date" />
+                        </label>
+
+                        <label class="auth-field auth-field--full">
+                            <span>Scheduled Send On</span>
+                            <input name="ScheduledSendOn" type="datetime-local" />
+                        </label>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="primary-action">Save draft</button>
+                    </div>
+                </form>
+            </div>
+        </dialog>
+
+        <dialog id="add-activity-dialog" class="crm-dialog">
+            <div class="crm-dialog__header">
+                <div>
+                    <h3>Add Activity</h3>
+                    <p>Record what happened, the outcome, and the next follow-up while keeping the client timeline front and centre.</p>
+                </div>
+                <button type="button" class="crm-dialog__close" data-close-dialog="add-activity-dialog">Close</button>
+            </div>
+
+            <div class="crm-dialog__body">
+                <form asp-action="RecordActivity" method="post" class="crm-form crm-form--compact">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="ClientId" value="@Model.Id" />
+
+                    <div class="form-grid">
+                        <label class="auth-field">
+                            <span>Activity Type</span>
+                            <select id="activity-type-input" name="Type" asp-items="Model.ActivityTypeOptions"></select>
+                        </label>
+
+                        <label class="auth-field">
+                            <span>Direction</span>
+                            <select id="activity-direction-input" name="Direction" asp-items="Model.ActivityDirectionOptions"></select>
+                        </label>
+
+                        <label class="auth-field">
+                            <span>Activity On</span>
+                            <input name="ActivityOn" type="datetime-local" />
+                        </label>
+
+                        <label class="auth-field">
+                            <span>Linked Opportunity</span>
+                            <select name="ClientOpportunityId">
+                                <option value="">None</option>
+                                @foreach (ClientOpportunitySummaryViewModel opportunity in Model.Opportunities)
+                                {
+                                    <option value="@opportunity.Id">@opportunity.TypeLabel | @opportunity.StageLabel</option>
+                                }
+                            </select>
+                        </label>
+
+                        <label class="auth-field auth-field--full auth-field--multiline">
+                            <span>Summary</span>
+                            <textarea name="Summary" required></textarea>
+                        </label>
+
+                        <label class="auth-field auth-field--full auth-field--multiline">
+                            <span>Outcome</span>
+                            <textarea name="Outcome" required></textarea>
+                        </label>
+
+                        <label class="auth-field auth-field--full auth-field--multiline">
+                            <span>Next Action</span>
+                            <textarea name="NextAction"></textarea>
+                        </label>
+
+                        <label class="auth-field">
+                            <span>Next Action Due On</span>
+                            <input name="NextActionDueOn" type="date" />
+                        </label>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="primary-action">Record activity</button>
+                    </div>
+                </form>
+            </div>
+        </dialog>
+
+        @foreach (ClientCommunicationItemViewModel communication in Model.Communications.Where(item => item.IsDraftEmail && item.MaterialId.HasValue))
+        {
+            <dialog id="edit-draft-email-@communication.MaterialId" class="crm-dialog">
+                <div class="crm-dialog__header">
+                    <div>
+                        <h3>Edit Draft Email</h3>
+                        <p>Refine the email draft, keep it in draft, or return to the client once you are happy to mark it as sent.</p>
+                    </div>
+                    <button type="button" class="crm-dialog__close" data-close-dialog="edit-draft-email-@communication.MaterialId">Close</button>
+                </div>
+
+                <div class="crm-dialog__body">
+                    <form asp-action="SaveEmailDraft" method="post" class="crm-form crm-form--compact">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="ClientId" value="@Model.Id" />
+                        <input type="hidden" name="EmailId" value="@communication.EmailId" />
+                        <input type="hidden" name="ClientMaterialId" value="@communication.MaterialId" />
+
+                        <div class="form-grid">
+                            <label class="auth-field auth-field--full">
+                                <span>To</span>
+                                <input name="ToAddresses" value="@communication.ToAddresses" />
+                            </label>
+
+                            <label class="auth-field">
+                                <span>CC</span>
+                                <input name="CcAddresses" value="@communication.CcAddresses" />
+                            </label>
+
+                            <label class="auth-field">
+                                <span>BCC</span>
+                                <input name="BccAddresses" value="@communication.BccAddresses" />
+                            </label>
+
+                            <label class="auth-field">
+                                <span>Direction</span>
+                                <select name="Direction">
+                                    @foreach (var option in Model.ActivityDirectionOptions)
+                                    {
+                                        <option value="@option.Value" selected="@(option.Value == communication.DirectionValue ? "selected" : null)">@option.Text</option>
+                                    }
+                                </select>
+                            </label>
+
+                            <input type="hidden" name="ClientOpportunityId" value="@communication.ClientOpportunityId" />
+
+                            <label class="auth-field auth-field--full">
+                                <span>Subject</span>
+                                <input name="Subject" value="@communication.Title" required />
+                            </label>
+
+                            <label class="auth-field auth-field--full auth-field--multiline">
+                                <span>Email Body</span>
+                                <textarea name="Body" required>@communication.Content</textarea>
+                            </label>
+
+                            <label class="auth-field auth-field--full auth-field--multiline">
+                                <span>Next Action</span>
+                                <textarea name="NextAction">@communication.NextAction</textarea>
+                            </label>
+
+                            <label class="auth-field">
+                                <span>Next Action Due On</span>
+                                <input name="NextActionDueOn" type="date" value="@communication.NextActionDueValue" />
+                            </label>
+
+                            <label class="auth-field auth-field--full">
+                                <span>Scheduled Send On</span>
+                                <input name="ScheduledSendOn" type="datetime-local" value="@communication.ScheduledSendOnValue" />
+                            </label>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="submit" class="primary-action">Update draft</button>
+                        </div>
+                    </form>
+                </div>
+            </dialog>
+        }
+    }
+</main>
+
+<script>
+    (() => {
+        const openButtons = document.querySelectorAll("[data-open-dialog]");
+        const closeButtons = document.querySelectorAll("[data-close-dialog]");
+
+        openButtons.forEach(button => {
+            button.addEventListener("click", () => {
+                const dialog = document.getElementById(button.dataset.openDialog);
+                const activityTypeInput = document.getElementById("activity-type-input");
+                const activityDirectionInput = document.getElementById("activity-direction-input");
+
+                if (dialog?.id === "add-activity-dialog") {
+                    if (button.dataset.activityType && activityTypeInput) {
+                        activityTypeInput.value = button.dataset.activityType;
+                    }
+
+                    if (button.dataset.activityDirection && activityDirectionInput) {
+                        activityDirectionInput.value = button.dataset.activityDirection;
+                    }
+                }
+
+                dialog?.showModal();
+            });
+        });
+
+        closeButtons.forEach(button => {
+            button.addEventListener("click", () => {
+                const dialog = document.getElementById(button.dataset.closeDialog);
+                dialog?.close();
+            });
+        });
+
+        document.querySelectorAll(".crm-dialog").forEach(dialog => {
+            dialog.addEventListener("click", event => {
+                const bounds = dialog.getBoundingClientRect();
+                const isInside =
+                    event.clientX >= bounds.left &&
+                    event.clientX <= bounds.right &&
+                    event.clientY >= bounds.top &&
+                    event.clientY <= bounds.bottom;
+
+                if (!isInside) {
+                    dialog.close();
+                }
+            });
+        });
+
+        const tabButtons = document.querySelectorAll("[data-tab-target]");
+        const tabPanels = document.querySelectorAll(".tab-panel");
+
+        tabButtons.forEach(button => {
+            button.addEventListener("click", () => {
+                const targetId = button.dataset.tabTarget;
+
+                tabButtons.forEach(candidate => {
+                    const isActive = candidate === button;
+                    candidate.classList.toggle("is-active", isActive);
+                    candidate.setAttribute("aria-selected", String(isActive));
+                    candidate.tabIndex = isActive ? 0 : -1;
+                });
+
+                tabPanels.forEach(panel => {
+                    panel.hidden = panel.id !== targetId;
+                });
+            });
+        });
+    })();
+</script>

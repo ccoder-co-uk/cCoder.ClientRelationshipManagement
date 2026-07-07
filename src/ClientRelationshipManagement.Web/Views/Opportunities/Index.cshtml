@@ -1,0 +1,106 @@
+@model OpportunitiesPageViewModel
+@{
+    ViewData["Title"] = "Opportunities";
+}
+
+<main class="page-shell">
+    <section class="page-hero">
+        <div>
+            <h1>Opportunities</h1>
+            <p class="lede">
+                Track live opportunities, monitor the next scheduled action, and jump into the
+                client workspace when a commercial decision needs attention.
+            </p>
+        </div>
+
+        <div class="page-hero__actions">
+            <span class="queue-count">@Model.TotalOpportunities active opportunities</span>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(Model.Notice))
+    {
+        <section class="notice-banner">
+            <strong>Opportunities update</strong>
+            <p>@Model.Notice</p>
+        </section>
+    }
+
+    <section class="data-panel">
+        <div class="section-heading">
+            <div>
+                <h2>Opportunities Page</h2>
+            </div>
+        </div>
+
+        <form method="get" class="filter-bar">
+            <label class="auth-field">
+                <span>Search</span>
+                <input type="search" name="search" value="@Model.Search" placeholder="Company, contact, type, next action" />
+            </label>
+
+            <label class="auth-field">
+                <span>Stage</span>
+                <select name="stage" asp-items="Model.StageOptions"></select>
+            </label>
+
+            <label class="auth-field">
+                <span>Sort By</span>
+                <select name="sort" asp-items="Model.SortOptions"></select>
+            </label>
+
+            <div class="filter-bar__actions">
+                <button type="submit" class="primary-action">Apply</button>
+                <a class="secondary-action" href="/Opportunities">Reset</a>
+            </div>
+        </form>
+
+        @if (Model.Opportunities.Count == 0)
+        {
+            <div class="empty-state">
+                <strong>No opportunities match the current filter.</strong>
+                <p>Qualified leads will appear here once outreach is underway.</p>
+            </div>
+        }
+        else
+        {
+            <div class="table-shell">
+                <table class="crm-table">
+                    <thead>
+                        <tr>
+                            <th>Company</th>
+                            <th>Relationship</th>
+                            <th>Stage</th>
+                            <th>Type</th>
+                            <th>Primary Contact</th>
+                            <th>Value</th>
+                            <th>Probability</th>
+                            <th>Next Action</th>
+                            <th>Due</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (OpportunityListItemViewModel opportunity in Model.Opportunities)
+                        {
+                            <tr>
+                                <td>@opportunity.CompanyName</td>
+                                <td>@opportunity.RelationshipStatusLabel</td>
+                                <td>@opportunity.StageLabel</td>
+                                <td>@opportunity.TypeLabel</td>
+                                <td>@opportunity.PrimaryContactName</td>
+                                <td>@opportunity.EstimatedAnnualValueLabel</td>
+                                <td>@opportunity.ProbabilityLabel</td>
+                                <td>@(string.IsNullOrWhiteSpace(opportunity.NextAction) ? "None set" : opportunity.NextAction)</td>
+                                <td>@opportunity.NextActionDueLabel</td>
+                                <td class="table-actions">
+                                    <a class="secondary-action" href="/Clients/Edit/@opportunity.ClientId">View client</a>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+</main>

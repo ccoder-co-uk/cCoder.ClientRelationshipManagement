@@ -1,0 +1,315 @@
+@using System.Text.Json
+@using cCoder.ClientRelationshipManagement.Platform.Models.Enums
+@model ClientRelationshipManagement.Web.Models.Imports.ImportListPageViewModel
+@{
+    ViewData["Title"] = "Imports";
+    string sourceOptionsJson = JsonSerializer.Serialize(Model.Sources);
+}
+
+<main class="page-shell">
+    <section class="page-hero">
+        <div>
+            <h1>Imports</h1>
+            <p class="lede">Manage large source files, review mapping, and release imports for Hosted Services processing.</p>
+        </div>
+        <div class="page-hero__actions">
+            <button type="button" class="primary-action" onclick="document.getElementById('importWizardDialog').showModal()">New Import</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(Model.Notice))
+    {
+        <section class="notice-banner">
+            <strong>Import workflow</strong>
+            <p>@Model.Notice</p>
+        </section>
+    }
+
+    <section class="data-panel">
+        <div class="section-heading">
+            <div>
+                <h2>Import Jobs</h2>
+            </div>
+        </div>
+
+        @if (Model.Imports.Count == 0)
+        {
+            <div class="empty-state">
+                <strong>No imports have been created yet.</strong>
+                <p>Upload authority or supplier data files from the new import workflow.</p>
+            </div>
+        }
+        else
+        {
+            <div class="table-shell">
+                <table class="crm-table">
+                    <thead>
+                        <tr>
+                            <th>File</th>
+                            <th>Source</th>
+                            <th>Job</th>
+                            <th>Upload</th>
+                            <th>Processing</th>
+                            <th>Rows</th>
+                            <th>Created</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var import in Model.Imports)
+                    {
+                        <tr data-import-id="@import.Id">
+                            <td>@import.FileName</td>
+                            <td>@import.SourceName</td>
+                            <td>@import.JobStatus</td>
+                            <td>@import.UploadStatus (@import.UploadedBytes / @import.SizeBytes)</td>
+                            <td>@import.ProcessingStatus</td>
+                            <td>@import.ImportedRowCount / @import.TotalRowCount</td>
+                            <td>@import.CreatedOn</td>
+                            <td class="table-actions">
+                                <button type="button" class="secondary-action" data-refresh-import="@import.Id">Refresh</button>
+                                <button type="button" class="secondary-action" data-delete-import="@import.Id">Delete</button>
+                            </td>
+                        </tr>
+                        @if (!string.IsNullOrWhiteSpace(import.ErrorSummary) || !string.IsNullOrWhiteSpace(import.WarningSummary))
+                        {
+                            <tr>
+                                <td colspan="8">
+                                    @if (!string.IsNullOrWhiteSpace(import.WarningSummary))
+                                    {
+                                        <strong>Warnings:</strong> @import.WarningSummary
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(import.ErrorSummary))
+                                    {
+                                        <strong>Errors:</strong> @import.ErrorSummary
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+</main>
+
+<dialog id="importWizardDialog" class="crm-dialog crm-dialog--wide">
+    <div class="crm-dialog__header">
+        <div>
+            <h3>New Import</h3>
+            <p>Create a tracked import, upload directly to Hosted Services, then approve the mapping.</p>
+        </div>
+        <button type="button" class="crm-dialog__close" onclick="document.getElementById('importWizardDialog').close()">Close</button>
+    </div>
+
+    <div class="crm-dialog__body">
+        <form id="importWizardForm" class="crm-form crm-form--compact">
+            <div class="form-grid">
+                <label class="auth-field">
+                    <span>Existing Source</span>
+                    <select id="sourceId" name="sourceId">
+                        <option value="">Create new source</option>
+                        @foreach (var source in Model.Sources)
+                        {
+                            <option value="@source.Id">@source.Name (@source.CountryCode)</option>
+                        }
+                    </select>
+                </label>
+
+                <label class="auth-field">
+                    <span>Source Name</span>
+                    <input id="sourceName" name="sourceName" placeholder="Companies House" />
+                </label>
+
+                <label class="auth-field">
+                    <span>Source Type</span>
+                    <select id="sourceType" name="sourceType">
+                        <option value="@SourceType.Authority">Authority</option>
+                        <option value="@SourceType.Other">Other</option>
+                    </select>
+                </label>
+
+                <label class="auth-field">
+                    <span>Country Code</span>
+                    <input id="countryCode" name="countryCode" value="GB" />
+                </label>
+
+                <label class="auth-field">
+                    <span>Authoritative</span>
+                    <select id="isAuthoritative" name="isAuthoritative">
+                        <option value="true">Yes</option>
+                        <option value="false">No</option>
+                    </select>
+                </label>
+
+                <label class="auth-field auth-field--full auth-field--multiline">
+                    <span>User Instructions</span>
+                    <textarea id="userInstructions" name="userInstructions" placeholder="Hints for AI mapping and processing"></textarea>
+                </label>
+
+                <label class="auth-field auth-field--full">
+                    <span>File</span>
+                    <input id="importFile" type="file" />
+                </label>
+            </div>
+
+            <div class="import-progress">
+                <div class="import-progress__bar">
+                    <span id="uploadProgressBar"></span>
+                </div>
+                <p id="importStatusText">No upload started.</p>
+            </div>
+
+            <label class="auth-field auth-field--full auth-field--multiline">
+                <span>Mapping Snapshot</span>
+                <textarea id="mappingSnapshot" rows="14" placeholder="Mapping appears here after analysis"></textarea>
+            </label>
+
+            <div class="form-actions form-actions--start">
+                <button type="submit" class="primary-action">Upload and Analyse</button>
+                <button type="button" id="saveMappingButton" class="secondary-action" disabled>Save Mapping</button>
+                <button type="button" id="markReadyButton" class="secondary-action" disabled>Mark Ready</button>
+            </div>
+        </form>
+    </div>
+</dialog>
+
+<script>
+    const importWizardForm = document.getElementById('importWizardForm');
+    const uploadProgressBar = document.getElementById('uploadProgressBar');
+    const importStatusText = document.getElementById('importStatusText');
+    const mappingSnapshot = document.getElementById('mappingSnapshot');
+    const saveMappingButton = document.getElementById('saveMappingButton');
+    const markReadyButton = document.getElementById('markReadyButton');
+    let currentImportId = null;
+
+    importWizardForm.addEventListener('submit', async event => {
+        event.preventDefault();
+        const file = document.getElementById('importFile').files[0];
+        if (!file) {
+            importStatusText.textContent = 'Choose a file before starting the import.';
+            return;
+        }
+
+        setProgress(0, 'Creating import job.');
+        const createResponse = await fetch('/Api/Imports', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                sourceId: document.getElementById('sourceId').value || null,
+                sourceName: document.getElementById('sourceName').value,
+                sourceType: document.getElementById('sourceType').value === 'Authority' ? 1 : 0,
+                countryCode: document.getElementById('countryCode').value,
+                isAuthoritative: document.getElementById('isAuthoritative').value === 'true',
+                userInstructions: document.getElementById('userInstructions').value,
+                fileName: file.name,
+                contentType: file.type || 'application/octet-stream',
+                sizeBytes: file.size
+            })
+        });
+
+        if (!createResponse.ok) {
+            setProgress(0, await createResponse.text());
+            return;
+        }
+
+        const importStatus = await createResponse.json();
+        currentImportId = importStatus.id;
+
+        const sessionResponse = await fetch(`/Api/Imports/${currentImportId}/upload-session`, { method: 'POST' });
+        if (!sessionResponse.ok) {
+            setProgress(0, await sessionResponse.text());
+            return;
+        }
+
+        const session = await sessionResponse.json();
+        await uploadInChunks(file, session);
+
+        setProgress(100, 'Upload complete. Analysing mapping.');
+        const analyseResponse = await fetch(`/Api/Imports/${currentImportId}/analyse`, { method: 'POST' });
+        if (!analyseResponse.ok) {
+            setProgress(100, await analyseResponse.text());
+            return;
+        }
+
+        const analysed = await analyseResponse.json();
+        mappingSnapshot.value = analysed.mappingSnapshotJson || '';
+        saveMappingButton.disabled = false;
+        markReadyButton.disabled = false;
+        setProgress(100, 'Mapping ready for review.');
+    });
+
+    saveMappingButton.addEventListener('click', async () => {
+        await saveMapping();
+    });
+
+    async function saveMapping() {
+        if (!currentImportId) return;
+        const response = await fetch(`/Api/Imports/${currentImportId}/mapping`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                mappingSnapshotJson: mappingSnapshot.value,
+                userInstructions: document.getElementById('userInstructions').value
+            })
+        });
+        setProgress(100, response.ok ? 'Mapping saved.' : await response.text());
+    }
+
+    markReadyButton.addEventListener('click', async () => {
+        if (!currentImportId) return;
+        await saveMapping();
+        const response = await fetch(`/Api/Imports/${currentImportId}/mark-ready`, { method: 'POST' });
+        setProgress(100, response.ok ? 'Import marked ready for Hosted Services processing.' : await response.text());
+        if (response.ok) {
+            setTimeout(() => window.location.reload(), 900);
+        }
+    });
+
+    document.querySelectorAll('[data-refresh-import]').forEach(button => {
+        button.addEventListener('click', async () => {
+            const id = button.getAttribute('data-refresh-import');
+            const response = await fetch(`/Api/Imports/${id}`);
+            alert(response.ok ? JSON.stringify(await response.json(), null, 2) : await response.text());
+        });
+    });
+
+    document.querySelectorAll('[data-delete-import]').forEach(button => {
+        button.addEventListener('click', async () => {
+            const id = button.getAttribute('data-delete-import');
+            if (!confirm('Delete this import and its staged files?')) return;
+            const response = await fetch(`/Api/Imports/${id}`, { method: 'DELETE' });
+            if (response.ok) window.location.reload();
+            else alert(await response.text());
+        });
+    });
+
+    async function uploadInChunks(file, session) {
+        const chunkSize = session.chunkSizeBytes || @Model.ChunkSizeBytes;
+        const totalChunks = Math.ceil(file.size / chunkSize);
+
+        for (let index = 0; index < totalChunks; index++) {
+            const start = index * chunkSize;
+            const end = Math.min(file.size, start + chunkSize);
+            const chunk = file.slice(start, end);
+            const url = session.chunkUploadUrl.replace('{chunkIndex}', index);
+            const response = await fetch(url, { method: 'PUT', body: chunk });
+            if (!response.ok) throw new Error(await response.text());
+            setProgress(Math.round((end / file.size) * 100), `Uploaded chunk ${index + 1} of ${totalChunks}.`);
+        }
+
+        const completeResponse = await fetch(session.completeUploadUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uploadSessionId: session.uploadSessionId, totalChunks })
+        });
+
+        if (!completeResponse.ok) throw new Error(await completeResponse.text());
+    }
+
+    function setProgress(percent, message) {
+        uploadProgressBar.style.width = `${percent}%`;
+        importStatusText.textContent = message;
+    }
+</script>

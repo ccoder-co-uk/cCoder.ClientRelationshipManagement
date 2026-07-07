@@ -1,0 +1,376 @@
+@model HomeDashboardViewModel
+@{
+    ViewData["Title"] = "Dashboard";
+}
+
+<main class="dashboard-shell">
+    <section class="dashboard-overview">
+        <div class="section-heading">
+            <div>
+                <h1>Action Board</h1>
+            </div>
+        </div>
+
+        <div class="stats-rail stats-rail--primary">
+            <a class="metric-pill metric-link metric-pill--primary" href="/Clients">
+                <span>Total Clients</span>
+                <strong>@Model.TotalClients</strong>
+            </a>
+            <article class="metric-pill metric-pill--primary">
+                <span>Open Actions</span>
+                <strong>@Model.TotalOpenActions</strong>
+            </article>
+            <article class="metric-pill metric-pill--primary">
+                <span>Due Today</span>
+                <strong>@Model.DueTodayActions</strong>
+            </article>
+            <article class="metric-pill metric-pill--primary">
+                <span>Overdue</span>
+                <strong>@Model.OverdueActions</strong>
+            </article>
+        </div>
+
+        <div class="stats-rail stats-rail--states">
+            @foreach (ClientStateSummaryViewModel state in Model.ClientStateSummaries)
+            {
+                <a class="metric-pill metric-link metric-pill--state @state.AccentClass" href="@state.LinkUrl" title="@state.Tooltip">
+                    <span>@state.Label</span>
+                    <strong>@state.Count</strong>
+                </a>
+            }
+        </div>
+    </section>
+
+    <section class="todo-panel todo-panel--full">
+        <div class="section-heading">
+            <div>
+                <h2>Top 5 scheduled actions</h2>
+            </div>
+            <div class="section-heading__actions">
+                @if (Model.AdditionalActionCount > 0)
+                {
+                    <span class="queue-count">+@Model.AdditionalActionCount more queued</span>
+                }
+            </div>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(Model.Notice))
+        {
+            <section class="notice-banner notice-banner--embedded">
+                <strong>Dashboard update</strong>
+                <p>@Model.Notice</p>
+            </section>
+        }
+
+        @if (Model.TodoItems.Count == 0)
+        {
+            <div class="empty-state">
+                <strong>No scheduled actions right now.</strong>
+                <p>Once clients, opportunities, or activities have a next action with a due date, they will appear here.</p>
+            </div>
+        }
+        else
+        {
+                <div class="todo-list">
+                @foreach (TodoItemViewModel todo in Model.TodoItems)
+                {
+                    string detailLinkText = todo.DetailUrl.Contains("/Leads/", StringComparison.OrdinalIgnoreCase)
+                        ? "View Lead Details"
+                        : "View Client Details";
+
+                    <article class="todo-card @(todo.IsOverdue ? "is-overdue" : string.Empty)">
+                        <div class="todo-meta">
+                            <span class="todo-type">@todo.SourceLabel</span>
+                            <div class="todo-meta__actions">
+                                <a class="todo-detail-link" href="@todo.DetailUrl">@detailLinkText</a>
+                                <span class="todo-due">@todo.DueLabel</span>
+                            </div>
+                        </div>
+
+                        <div class="todo-card__content">
+                            <div class="todo-card__header">
+                                <h3><a href="@todo.DetailUrl">@todo.Title</a></h3>
+                            </div>
+                            <p class="todo-context">@todo.Context</p>
+                            <p class="todo-description">@todo.Description</p>
+                            @if (todo.HasDraftEmail)
+                            {
+                                <div class="todo-draft-callout">
+                                    <span class="queue-count">Draft email attached</span>
+                                    @if (!string.IsNullOrWhiteSpace(todo.DraftEmailStatusLabel))
+                                    {
+                                        <span class="queue-count">@todo.DraftEmailStatusLabel</span>
+                                    }
+                                </div>
+                            }
+                        </div>
+
+                        <div class="todo-card__actions">
+                            @if (todo.HasDraftEmail)
+                            {
+                                <button type="button" class="secondary-action" data-open-dialog="draft-@todo.Id">Review Draft</button>
+                            }
+
+                            <button type="button" class="secondary-action" data-open-dialog="progress-@todo.Id">Record Progress</button>
+
+                            <dialog id="progress-@todo.Id" class="crm-dialog">
+                                <div class="crm-dialog__header">
+                                    <div>
+                                        <h3>Record Progress</h3>
+                                        <p>@todo.Title</p>
+                                    </div>
+                                    <button type="button" class="crm-dialog__close" data-close-dialog="progress-@todo.Id" aria-label="Close">Close</button>
+                                </div>
+
+                                <form asp-action="CompleteTodo" method="post" class="todo-progress-form">
+                                    <input type="hidden" name="Id" value="@todo.Id" />
+                                    <input type="hidden" name="SourceType" value="@todo.SourceType" />
+
+                                    @if (todo.HasProcessGuidance)
+                                    {
+                                        <div class="crm-dialog__content">
+                                            @if (!string.IsNullOrWhiteSpace(todo.ProcessInstructions))
+                                            {
+                                                <p>@todo.ProcessInstructions</p>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(todo.ProcessCallScript))
+                                            {
+                                                <strong>Call script</strong>
+                                                <p>@todo.ProcessCallScript</p>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(todo.ProcessQuestionSet))
+                                            {
+                                                <strong>Key questions</strong>
+                                                <p>@todo.ProcessQuestionSet</p>
+                                            }
+                                        </div>
+                                    }
+
+                                    @if (todo.OutcomeOptions.Count > 0)
+                                    {
+                                        <label class="auth-field">
+                                            <span>Outcome</span>
+                                            <select name="OutcomeKey">
+                                                @foreach (TodoOutcomeOptionViewModel option in todo.OutcomeOptions)
+                                                {
+                                                    <option value="@option.Key">@option.Label</option>
+                                                }
+                                            </select>
+                                        </label>
+                                    }
+
+                                    <label class="auth-field auth-field--full">
+                                        <span>Outcome Note</span>
+                                        <textarea name="CompletionNote" required placeholder="What happened, what changed, or what should the team know?"></textarea>
+                                    </label>
+
+                                    @if (!todo.IsProcessTask)
+                                    {
+                                        <label class="auth-field">
+                                            <span>Client Status</span>
+                                            <select name="Status">
+                                                <option value="">Keep current</option>
+                                                @foreach (SelectListItem option in Model.StatusOptions)
+                                                {
+                                                    <option value="@option.Value">@option.Text</option>
+                                                }
+                                            </select>
+                                        </label>
+
+                                        <label class="auth-field">
+                                            <span>Pipeline Stage</span>
+                                            <select name="Stage">
+                                                <option value="">Keep current</option>
+                                                @foreach (SelectListItem option in Model.StageOptions)
+                                                {
+                                                    <option value="@option.Value">@option.Text</option>
+                                                }
+                                            </select>
+                                        </label>
+
+                                        <label class="auth-field auth-field--full">
+                                            <span>Next Action</span>
+                                            <textarea name="NextAction" placeholder="Leave blank if this thread is fully complete."></textarea>
+                                        </label>
+
+                                        <label class="auth-field">
+                                            <span>Next Action Due On</span>
+                                            <input name="NextActionDueOn" type="date" />
+                                        </label>
+                                    }
+
+                                    <div class="form-actions form-actions--compact">
+                                        <button type="submit" class="complete-action">Save Progress</button>
+                                    </div>
+                                </form>
+                            </dialog>
+
+                            @if (todo.HasDraftEmail)
+                            {
+                                <dialog id="draft-@todo.Id" class="crm-dialog">
+                                    <div class="crm-dialog__header">
+                                        <div>
+                                            <h3>@todo.DraftEmailSubject</h3>
+                                            <p>@todo.Title | @todo.DueLabel</p>
+                                        </div>
+                                        <button type="button" class="crm-dialog__close" data-close-dialog="draft-@todo.Id" aria-label="Close">Close</button>
+                                    </div>
+
+                                    <div class="crm-dialog__body">
+                                        <div class="crm-dialog__meta">
+                                            <span class="queue-count">Draft email attached</span>
+                                            @if (!string.IsNullOrWhiteSpace(todo.DraftEmailStatusLabel))
+                                            {
+                                                <span class="queue-count">@todo.DraftEmailStatusLabel</span>
+                                            }
+                                        </div>
+
+                                        <form asp-action="SaveDraftEmail" method="post" class="crm-form crm-form--compact">
+                                            @Html.AntiForgeryToken()
+                                            <input type="hidden" name="ClientId" value="@todo.ClientId" />
+                                            <input type="hidden" name="Id" value="@todo.Id" />
+                                            <input type="hidden" name="SourceType" value="@todo.SourceType" />
+                                            <input type="hidden" name="EmailId" value="@todo.DraftEmailId" />
+                                            <input type="hidden" name="ClientMaterialId" value="@todo.DraftEmailMaterialId" />
+                                            <input type="hidden" name="ClientOpportunityId" value="@todo.DraftEmailClientOpportunityId" />
+
+                                            <div class="form-grid">
+                                                <label class="auth-field auth-field--full">
+                                                    <span>To</span>
+                                                    <input name="ToAddresses" value="@todo.DraftEmailToAddresses" />
+                                                </label>
+
+                                                <label class="auth-field">
+                                                    <span>CC</span>
+                                                    <input name="CcAddresses" value="@todo.DraftEmailCcAddresses" />
+                                                </label>
+
+                                                <label class="auth-field">
+                                                    <span>BCC</span>
+                                                    <input name="BccAddresses" value="@todo.DraftEmailBccAddresses" />
+                                                </label>
+
+                                                <label class="auth-field">
+                                                    <span>Direction</span>
+                                                    <select name="Direction">
+                                                        <option value="Outbound" selected="@(todo.DraftEmailDirectionValue == "Outbound" ? "selected" : null)">Outbound</option>
+                                                        <option value="Inbound" selected="@(todo.DraftEmailDirectionValue == "Inbound" ? "selected" : null)">Inbound</option>
+                                                        <option value="Internal" selected="@(todo.DraftEmailDirectionValue == "Internal" ? "selected" : null)">Internal</option>
+                                                    </select>
+                                                </label>
+
+                                                <label class="auth-field auth-field--full">
+                                                    <span>Subject</span>
+                                                    <input name="Subject" value="@todo.DraftEmailSubject" required />
+                                                </label>
+
+                                                <label class="auth-field auth-field--full auth-field--multiline">
+                                                    <span>Email Body</span>
+                                                    <textarea name="Body" required>@todo.DraftEmailBody</textarea>
+                                                </label>
+
+                                                <label class="auth-field auth-field--full">
+                                                    <span>Scheduled Send On</span>
+                                                    <input name="ScheduledSendOn" type="datetime-local" value="@todo.DraftEmailScheduledSendOnValue" />
+                                                </label>
+                                            </div>
+
+                                            <div class="form-actions form-actions--start">
+                                                <button type="button" class="secondary-action" data-copy-email="@todo.Id">Copy Email</button>
+                                                <button type="submit" class="secondary-action">Save Draft</button>
+                                            </div>
+                                        </form>
+
+                                        <form asp-action="ApproveDraftEmail" method="post" class="todo-email-confirm-form">
+                                            @Html.AntiForgeryToken()
+                                            <input type="hidden" name="ClientId" value="@todo.ClientId" />
+                                            <input type="hidden" name="EmailId" value="@todo.DraftEmailId" />
+                                            <input type="hidden" name="ScheduledSendOn" value="@todo.DraftEmailScheduledSendOnValue" />
+                                            <div class="form-actions form-actions--start">
+                                                <button type="submit" class="secondary-action">Approve Send</button>
+                                            </div>
+                                        </form>
+
+                                        <form asp-action="ConfirmDraftEmailSent" method="post" class="todo-email-confirm-form">
+                                            @Html.AntiForgeryToken()
+                                            <input type="hidden" name="ClientId" value="@todo.ClientId" />
+                                            <input type="hidden" name="Id" value="@todo.Id" />
+                                            <input type="hidden" name="SourceType" value="@todo.SourceType" />
+                                            <input type="hidden" name="EmailId" value="@todo.DraftEmailId" />
+                                            <div class="form-actions form-actions--start">
+                                                <button type="submit" class="primary-action">Confirm Sent</button>
+                                            </div>
+                                        </form>
+
+                                        <textarea id="copy-email-@todo.Id" class="copy-buffer" aria-hidden="true">@todo.DraftEmailSubject
+
+@todo.DraftEmailBody</textarea>
+                                    </div>
+                                </dialog>
+                            }
+                        </div>
+                    </article>
+                }
+            </div>
+        }
+    </section>
+</main>
+
+<script>
+    (() => {
+        const openButtons = document.querySelectorAll("[data-open-dialog]");
+        const closeButtons = document.querySelectorAll("[data-close-dialog]");
+
+        openButtons.forEach((button) => {
+            button.addEventListener("click", () => {
+                const dialog = document.getElementById(button.dataset.openDialog);
+                if (dialog && typeof dialog.showModal === "function") {
+                    dialog.showModal();
+                }
+            });
+        });
+
+        closeButtons.forEach((button) => {
+            button.addEventListener("click", () => {
+                const dialog = document.getElementById(button.dataset.closeDialog);
+                if (dialog) {
+                    dialog.close();
+                }
+            });
+        });
+
+        document.querySelectorAll("dialog.crm-dialog").forEach((dialog) => {
+            dialog.addEventListener("click", (event) => {
+                const rect = dialog.getBoundingClientRect();
+                const isInside =
+                    rect.top <= event.clientY &&
+                    event.clientY <= rect.top + rect.height &&
+                    rect.left <= event.clientX &&
+                    event.clientX <= rect.left + rect.width;
+
+                if (!isInside) {
+                    dialog.close();
+                }
+            });
+        });
+
+        document.querySelectorAll("[data-copy-email]").forEach((button) => {
+            button.addEventListener("click", async () => {
+                const source = document.getElementById(`copy-email-${button.dataset.copyEmail}`);
+                if (!source) {
+                    return;
+                }
+
+                try {
+                    await navigator.clipboard.writeText(source.value);
+                    button.textContent = "Copied";
+                    window.setTimeout(() => {
+                        button.textContent = "Copy Email";
+                    }, 1200);
+                } catch {
+                    window.prompt("Copy the email content below:", source.value);
+                }
+            });
+        });
+    })();
+</script>

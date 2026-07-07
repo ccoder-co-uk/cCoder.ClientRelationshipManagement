@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Proposed CRM Entity Model</title>
+    <style>
+        :root {
+            color-scheme: light;
+            --bg: #f5f7fb;
+            --panel: #ffffff;
+            --ink: #20324d;
+            --muted: #5d6d86;
+            --accent: #0d5c63;
+            --rule: #d5deea;
+            --line: #647c9d;
+            --master: #eef7f7;
+            --lead: #f7f3ea;
+            --tenant: #eef3fb;
+            --process: #f4eefb;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 24px;
+            background: linear-gradient(180deg, #f8fafc 0%, #eef3f8 100%);
+            color: var(--ink);
+            font: 15px/1.45 "Segoe UI", Tahoma, sans-serif;
+        }
+
+        main {
+            max-width: 2520px;
+            margin: 0 auto;
+        }
+
+        .hero {
+            background: var(--panel);
+            border: 1px solid var(--rule);
+            border-radius: 12px;
+            padding: 24px 28px;
+            margin-bottom: 18px;
+            box-shadow: 0 18px 40px rgba(34, 51, 84, 0.08);
+        }
+
+        h1 {
+            margin: 0 0 8px;
+            font-size: 32px;
+            line-height: 1.1;
+        }
+
+        p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .notes {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(260px, 1fr));
+            gap: 14px;
+            margin: 0 0 18px;
+        }
+
+        .note {
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid var(--rule);
+            border-radius: 12px;
+            padding: 16px 18px;
+        }
+
+        .note strong {
+            display: block;
+            margin-bottom: 6px;
+            color: var(--accent);
+            font-size: 12px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+
+        .diagram-shell {
+            background: var(--panel);
+            border: 1px solid var(--rule);
+            border-radius: 16px;
+            padding: 12px;
+            box-shadow: 0 18px 40px rgba(34, 51, 84, 0.08);
+            overflow: auto;
+        }
+
+        .diagram-canvas {
+            position: relative;
+            width: 2400px;
+            height: 1140px;
+            margin: 0 auto;
+            border-radius: 14px;
+            background:
+                radial-gradient(circle at top left, rgba(13, 92, 99, 0.05), transparent 20%),
+                linear-gradient(180deg, #fbfcfe 0%, #f5f8fc 100%);
+        }
+
+        .zone {
+            position: absolute;
+            border: 1px solid var(--rule);
+            border-radius: 14px;
+            padding: 12px;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.7);
+        }
+
+        .zone h2 {
+            margin: 0;
+            font-size: 13px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--accent);
+        }
+
+        .zone-master { background: var(--master); left: 20px; top: 20px; width: 560px; height: 280px; }
+        .zone-lead { background: var(--lead); left: 20px; top: 340px; width: 560px; height: 260px; }
+        .zone-tenant { background: var(--tenant); left: 620px; top: 20px; width: 1120px; height: 1080px; }
+        .zone-process { background: var(--process); left: 1780px; top: 20px; width: 580px; height: 1080px; }
+
+        .entity {
+            position: absolute;
+            background: #ffffff;
+            border: 1px solid #afc0d8;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 12px 28px rgba(34, 51, 84, 0.10);
+        }
+
+        .entity-header {
+            padding: 10px 12px 8px;
+            background: linear-gradient(180deg, #fffdfa 0%, #f7f0de 100%);
+            border-bottom: 1px solid #d9cda7;
+        }
+
+        .entity-header strong {
+            display: block;
+            font-size: 15px;
+            line-height: 1.2;
+        }
+
+        .entity-header span {
+            display: block;
+            margin-top: 2px;
+            color: var(--muted);
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .entity-body {
+            padding: 10px 12px 12px;
+            font-size: 12px;
+            line-height: 1.4;
+            color: #41536f;
+        }
+
+        .entity-body ul {
+            margin: 0;
+            padding-left: 16px;
+        }
+
+        .entity-body li {
+            margin: 0 0 3px;
+        }
+
+        .entity.compact .entity-body li:nth-child(n+6) {
+            display: none;
+        }
+
+        .diagram-lines {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+        }
+
+        .diagram-lines path {
+            stroke: var(--line);
+            stroke-width: 2.2;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .diagram-lines text {
+            fill: #627a9d;
+            font-size: 11px;
+            font-family: "Segoe UI", Tahoma, sans-serif;
+        }
+
+        .legend {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(250px, 1fr));
+            gap: 12px;
+            margin-top: 14px;
+        }
+
+        .legend-item {
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid var(--rule);
+            border-radius: 10px;
+            padding: 10px 12px;
+        }
+
+        .legend-item strong {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 12px;
+            color: var(--accent);
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+<main>
+    <section class="hero">
+        <h1>Proposed CRM Entity Model</h1>
+        <p>
+            Proposed future-state data model based on the current discussion: separate provisional lead intake from
+            trusted master company data, then manage tenant-specific opportunity and client journeys from that shared foundation.
+        </p>
+    </section>
+
+    <section class="notes">
+        <article class="note">
+            <strong>Master Data</strong>
+            Official company identity is global and deduplicated. This is where verification and registrar-sourced data lives.
+        </article>
+        <article class="note">
+            <strong>Tenant Journey</strong>
+            Each tenant has its own commercial relationship to the company, with opportunities, activities, materials, and client-state data.
+        </article>
+        <article class="note">
+            <strong>Process Engine</strong>
+            One shared process system can target qualification, opportunity, and client flows without duplicating the process definition tree.
+        </article>
+    </section>
+
+    <section class="diagram-shell">
+        <div class="diagram-canvas">
+            <div class="zone zone-master"><h2>Global Master Data</h2></div>
+            <div class="zone zone-lead"><h2>Lead Intake & Qualification</h2></div>
+            <div class="zone zone-tenant"><h2>Tenant CRM</h2></div>
+            <div class="zone zone-process"><h2>Shared Process Engine</h2></div>
+
+            <article class="entity compact" style="left: 70px; top: 90px; width: 230px;">
+                <div class="entity-header"><strong>CompanyMaster</strong><span>Canonical identity</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>OfficialName</li>
+                        <li>CompanyNumber</li>
+                        <li>VatNumber</li>
+                        <li>RegisteredAddressId</li>
+                        <li>IsVerified</li>
+                        <li>VerificationSource</li>
+                        <li>VerifiedOn</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 350px; top: 90px; width: 180px;">
+                <div class="entity-header"><strong>Address</strong><span>Verified address</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>Line1</li>
+                        <li>Line2</li>
+                        <li>TownOrCity</li>
+                        <li>ZipOrPostalCode</li>
+                        <li>CountryId</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 70px; top: 410px; width: 230px;">
+                <div class="entity-header"><strong>LeadRecord</strong><span>Imported raw company</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>SourceSystem</li>
+                        <li>SourceTenantId</li>
+                        <li>RawCompanyName</li>
+                        <li>RawVatNumber</li>
+                        <li>QualificationStatus</li>
+                        <li>CompanyMasterId</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 350px; top: 410px; width: 180px;">
+                <div class="entity-header"><strong>LeadContact</strong><span>Unqualified contact</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>LeadRecordId</li>
+                        <li>Name</li>
+                        <li>EmailAddress</li>
+                        <li>PhoneNumber</li>
+                        <li>Role</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 700px; top: 90px; width: 280px;">
+                <div class="entity-header"><strong>TenantCompanyRelationship</strong><span>Tenant-specific anchor</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>TenantId</li>
+                        <li>CompanyMasterId</li>
+                        <li>RelationshipStage</li>
+                        <li>AccountOwner</li>
+                        <li>FitScore</li>
+                        <li>QualificationSummary</li>
+                        <li>NextAction / DueOn</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 1100px; top: 90px; width: 250px;">
+                <div class="entity-header"><strong>TenantContact</strong><span>Contextual contact</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>TenantCompanyRelationshipId</li>
+                        <li>Name</li>
+                        <li>EmailAddress</li>
+                        <li>PhoneNumber</li>
+                        <li>RelationshipRoute</li>
+                        <li>IsPrimary</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 700px; top: 330px; width: 280px;">
+                <div class="entity-header"><strong>Opportunity</strong><span>Pre-sale commercial unit</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>TenantCompanyRelationshipId</li>
+                        <li>PrimaryContactId</li>
+                        <li>Type</li>
+                        <li>Stage</li>
+                        <li>EstimatedAnnualValue</li>
+                        <li>Probability</li>
+                        <li>PainSummary</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 1100px; top: 300px; width: 250px;">
+                <div class="entity-header"><strong>Email</strong><span>Sendable payload</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>MaterialId</li>
+                        <li>SenderUserId</li>
+                        <li>Subject</li>
+                        <li>Body</li>
+                        <li>BodyFormat</li>
+                        <li>State</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 1100px; top: 500px; width: 250px;">
+                <div class="entity-header"><strong>EmailRecipient</strong><span>Resolved recipients</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>EmailId</li>
+                        <li>ContactId</li>
+                        <li>Address</li>
+                        <li>RecipientType</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 700px; top: 590px; width: 280px;">
+                <div class="entity-header"><strong>ClientAccount</strong><span>Post-win profile</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>TenantCompanyRelationshipId</li>
+                        <li>WonOpportunityId</li>
+                        <li>Status</li>
+                        <li>ContractSignedOn</li>
+                        <li>GoLiveOn</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 1100px; top: 700px; width: 250px;">
+                <div class="entity-header"><strong>HandoffPack</strong><span>Onboarding detail</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>ClientAccountId</li>
+                        <li>AgreedScope</li>
+                        <li>CommercialTermsSummary</li>
+                        <li>PromisedOutcomes</li>
+                        <li>OnboardingOwner</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 700px; top: 850px; width: 280px;">
+                <div class="entity-header"><strong>Activity</strong><span>Shared interaction history</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>TenantCompanyRelationshipId</li>
+                        <li>OpportunityId</li>
+                        <li>ClientAccountId</li>
+                        <li>ContactId</li>
+                        <li>Type / Direction</li>
+                        <li>Summary / Outcome</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 1100px; top: 900px; width: 250px;">
+                <div class="entity-header"><strong>Material</strong><span>Reusable artefacts</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>TenantCompanyRelationshipId</li>
+                        <li>OpportunityId</li>
+                        <li>ClientAccountId</li>
+                        <li>ContactId</li>
+                        <li>Type / Status</li>
+                        <li>Notes</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 1880px; top: 90px; width: 210px;">
+                <div class="entity-header"><strong>ProcessDefinition</strong><span>Reusable flow</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>ScopeType</li>
+                        <li>Name</li>
+                        <li>Description</li>
+                        <li>IsDefault</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 2150px; top: 90px; width: 170px;">
+                <div class="entity-header"><strong>ProcessStep</strong><span>Flow step</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>ProcessDefinitionId</li>
+                        <li>Key</li>
+                        <li>Name</li>
+                        <li>ActionType</li>
+                        <li>DueAfterDays</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 2150px; top: 330px; width: 170px;">
+                <div class="entity-header"><strong>ProcessTransition</strong><span>Outcome route</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>ProcessStepId</li>
+                        <li>NextProcessStepId</li>
+                        <li>OutcomeKey</li>
+                        <li>OutcomeLabel</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 1880px; top: 610px; width: 210px;">
+                <div class="entity-header"><strong>ProcessInstance</strong><span>Runtime flow</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>ProcessDefinitionId</li>
+                        <li>TenantCompanyRelationshipId</li>
+                        <li>OpportunityId</li>
+                        <li>ClientAccountId</li>
+                        <li>State</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="entity compact" style="left: 2150px; top: 610px; width: 170px;">
+                <div class="entity-header"><strong>ProcessTask</strong><span>Step instance</span></div>
+                <div class="entity-body">
+                    <ul>
+                        <li>Id</li>
+                        <li>ProcessInstanceId</li>
+                        <li>ProcessStepId</li>
+                        <li>EmailId</li>
+                        <li>DueOn</li>
+                        <li>RenderedTitle</li>
+                    </ul>
+                </div>
+            </article>
+
+            <svg class="diagram-lines" viewBox="0 0 2400 1140" aria-hidden="true">
+                <defs>
+                    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+                        <path d="M0,0 L10,4 L0,8 z" fill="#647c9d"></path>
+                    </marker>
+                </defs>
+
+                <path d="M300 175 L350 175" marker-end="url(#arrow)"></path>
+                <text x="308" y="164">registered address</text>
+
+                <path d="M300 495 L350 495" marker-end="url(#arrow)"></path>
+                <text x="314" y="484">lead contacts</text>
+
+                <path d="M185 410 L185 230" marker-end="url(#arrow)"></path>
+
+                <path d="M300 160 L300 72 L660 72 L660 175 L700 175" marker-end="url(#arrow)"></path>
+                <text x="560" y="62">canonical company</text>
+
+                <path d="M980 175 L1100 175" marker-end="url(#arrow)"></path>
+                <text x="1000" y="164">tenant contacts</text>
+
+                <path d="M700 175 L680 175 L680 420 L700 420" marker-end="url(#arrow)"></path>
+                <text x="688" y="286">opportunities</text>
+
+                <path d="M700 195 L660 195 L660 680 L700 680" marker-end="url(#arrow)"></path>
+                <text x="668" y="454">client profile</text>
+
+                <path d="M700 215 L640 215 L640 940 L700 940" marker-end="url(#arrow)"></path>
+                <text x="648" y="580">shared history</text>
+
+                <path d="M980 420 L1040 420 L1040 240 L1100 240" marker-end="url(#arrow)"></path>
+                <text x="1048" y="300">primary contact</text>
+
+                <path d="M980 670 L1100 670" marker-end="url(#arrow)"></path>
+                <text x="998" y="658">handoff</text>
+
+                <path d="M1225 230 L1225 300" marker-end="url(#arrow)"></path>
+                <text x="1236" y="274">email</text>
+
+                <path d="M1225 430 L1225 500" marker-end="url(#arrow)"></path>
+                <text x="1236" y="468">recipients</text>
+
+                <path d="M1350 945 L1410 945 L1410 365 L1350 365" marker-end="url(#arrow)"></path>
+                <text x="1422" y="658">material payload</text>
+
+                <path d="M1225 830 L1225 900" marker-end="url(#arrow)"></path>
+                <text x="1236" y="872">material</text>
+
+                <path d="M1100 945 L980 945" marker-end="url(#arrow)"></path>
+
+                <path d="M980 420 L1760 420 L1760 675 L1880 675" marker-end="url(#arrow)"></path>
+                <text x="1508" y="408">opportunity scope</text>
+
+                <path d="M980 670 L1760 670 L1760 720 L1880 720" marker-end="url(#arrow)"></path>
+                <text x="1544" y="658">client scope</text>
+
+                <path d="M1350 945 L1760 945 L1760 765 L1880 765" marker-end="url(#arrow)"></path>
+                <text x="1514" y="934">relationship scope</text>
+
+                <path d="M2090 175 L2150 175" marker-end="url(#arrow)"></path>
+                <text x="2068" y="164">steps</text>
+
+                <path d="M2235 330 L2235 230" marker-end="url(#arrow)"></path>
+                <text x="2248" y="284">next step</text>
+
+                <path d="M2090 695 L2150 695" marker-end="url(#arrow)"></path>
+                <text x="2046" y="684">runtime tasks</text>
+
+                <path d="M2150 675 L2110 675 L2110 260 L2150 260" marker-end="url(#arrow)"></path>
+
+                <path d="M2150 695 L1840 695 L1840 270 L1350 270 L1350 365" marker-end="url(#arrow)"></path>
+                <text x="1730" y="258">attached email</text>
+            </svg>
+        </div>
+
+        <div class="legend">
+            <article class="legend-item">
+                <strong>Global Master Data</strong>
+                One verified company record shared across tenants.
+            </article>
+            <article class="legend-item">
+                <strong>Lead Intake</strong>
+                Raw imported records are provisional until matched and qualified.
+            </article>
+            <article class="legend-item">
+                <strong>Tenant CRM</strong>
+                Commercial work happens in a tenant-scoped relationship to the company.
+            </article>
+            <article class="legend-item">
+                <strong>Process Engine</strong>
+                One process system can attach to qualification, opportunity, or client scopes.
+            </article>
+        </div>
+    </section>
+</main>
+</body>
+</html>

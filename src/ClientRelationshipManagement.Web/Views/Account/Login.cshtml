@@ -1,0 +1,118 @@
+@model ClientRelationshipManagement.Web.Models.Account.LoginViewModel
+@{
+    ViewData["Title"] = "Login";
+    ViewData["UseProductShell"] = "false";
+}
+
+<main class="auth-shell">
+    <section class="auth-card">
+        <div class="auth-copy">
+            <p class="eyebrow">Corporate LinX</p>
+            <h1>CRM Login</h1>
+            <p class="lede">
+                Sign in with your SSO account to unlock the dashboard, client actions,
+                and the CRM API surface behind it.
+            </p>
+        </div>
+
+        <div class="auth-panel">
+            <form asp-action="Login" method="post" class="auth-form" data-api-login="true">
+                <input asp-for="ReturnUrl" type="hidden" />
+
+                @if (!string.IsNullOrWhiteSpace(Model.ErrorMessage))
+                {
+                    <div class="auth-error" data-auth-error role="alert">@Model.ErrorMessage</div>
+                }
+                else
+                {
+                    <div class="auth-error is-hidden" data-auth-error role="alert"></div>
+                }
+
+                <div asp-validation-summary="ModelOnly" class="auth-error" role="alert"></div>
+
+                <label class="auth-field">
+                    <span>Username</span>
+                    <input asp-for="User" autocomplete="username" />
+                </label>
+
+                <label class="auth-field">
+                    <span>Password</span>
+                    <input asp-for="Pass" type="password" autocomplete="current-password" />
+                </label>
+
+                <button type="submit" class="primary-action auth-submit">Login</button>
+            </form>
+        </div>
+    </section>
+</main>
+
+<script>
+    (() => {
+        const form = document.querySelector("form[data-api-login='true']");
+        if (!form) {
+            return;
+        }
+
+        const userInput = form.querySelector("input[name='User']");
+        const passInput = form.querySelector("input[name='Pass']");
+        const returnUrlInput = form.querySelector("input[name='ReturnUrl']");
+        const submitButton = form.querySelector("button[type='submit']");
+        const errorPanel = form.querySelector("[data-auth-error]");
+
+        const setError = (message) => {
+            if (!errorPanel) {
+                return;
+            }
+
+            errorPanel.textContent = message;
+            errorPanel.classList.toggle("is-hidden", !message);
+        };
+
+        const setBusy = (isBusy) => {
+            submitButton.disabled = isBusy;
+            submitButton.textContent = isBusy ? "Logging in..." : "Login";
+        };
+
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            setError("");
+
+            const user = (userInput?.value || "").trim();
+            const pass = passInput?.value || "";
+            const returnUrl = returnUrlInput?.value || "/";
+
+            if (!user || !pass) {
+                setError("Enter both your username and password.");
+                return;
+            }
+
+            setBusy(true);
+
+            try {
+                const response = await fetch("/Api/Account/Login", {
+                    method: "POST",
+                    credentials: "same-origin",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Accept": "application/json"
+                    },
+                    body: JSON.stringify({
+                        user,
+                        pass
+                    })
+                });
+
+                if (!response.ok) {
+                    setError("Access denied. Please check your username and password.");
+                    setBusy(false);
+                    return;
+                }
+
+                window.location.replace(returnUrl);
+            } catch {
+                setError("Login could not be completed right now. Please try again.");
+                setBusy(false);
+            }
+        });
+    })();
+</script>

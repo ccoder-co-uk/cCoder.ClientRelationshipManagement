@@ -1,0 +1,85 @@
+@using cCoder.Security.Objects.Entities
+@inject cCoder.Security.Exposures.IAccountManager AccountManager
+@inject cCoder.Security.Objects.ISSOAuthInfo AuthInfo
+@{
+    string pageTitle = ViewData["Title"]?.ToString() ?? "Corporate LinX CRM";
+    bool useProductShell = !string.Equals(
+        ViewData["UseProductShell"]?.ToString(),
+        "false",
+        StringComparison.OrdinalIgnoreCase);
+    bool isAuthenticated = !string.IsNullOrWhiteSpace(AuthInfo?.SSOUserId)
+        && !string.Equals(AuthInfo.SSOUserId, "Guest", StringComparison.OrdinalIgnoreCase);
+    SSOUser currentUser = useProductShell && isAuthenticated
+        ? AccountManager.Me()
+        : null;
+    string currentUserDisplay = currentUser?.DisplayName ?? AuthInfo?.SSOUserId ?? string.Empty;
+    PathString currentPath = ViewContext.HttpContext.Request.Path;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@pageTitle | Corporate LinX CRM</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="~/css/dashboard.css" asp-append-version="true" />
+</head>
+<body class="@(useProductShell ? "app-shell-body" : string.Empty)">
+    @if (useProductShell)
+    {
+        <header class="product-header">
+            <div class="product-header__inner">
+                <a class="product-brand" href="/">
+                    <img
+                        class="product-brand__logo"
+                        src="https://docs.dev.corporatelinx.com/Api/DMS/Content/CompanyLogo.png"
+                        alt="Corporate LinX" />
+                    <span class="product-brand__product">CRM</span>
+                </a>
+
+                <nav class="product-nav" aria-label="Primary">
+                    <a class="@(currentPath == "/" ? "is-active" : string.Empty)" href="/">Dashboard</a>
+                    <a class="@(currentPath.StartsWithSegments("/Leads") ? "is-active" : string.Empty)" href="/Leads">Leads</a>
+                    <a class="@(currentPath.StartsWithSegments("/Opportunities") ? "is-active" : string.Empty)" href="/Opportunities">Opportunities</a>
+                    <a class="@(currentPath.StartsWithSegments("/Clients") ? "is-active" : string.Empty)" href="/Clients">Clients</a>
+                    <a class="@(currentPath.StartsWithSegments("/Documentation") ? "is-active" : string.Empty)" href="/Documentation">Documentation</a>
+                    <details class="product-nav__dropdown @((currentPath.StartsWithSegments("/Admin") || currentPath.StartsWithSegments("/Emails") || currentPath.StartsWithSegments("/Imports") || currentPath.StartsWithSegments("/Process")) ? "is-active" : string.Empty)">
+                        <summary>Admin</summary>
+                        <div class="product-nav__submenu">
+                            <a class="@(currentPath.StartsWithSegments("/Admin") ? "is-active" : string.Empty)" href="/Admin">Overview</a>
+                            <a class="@(currentPath.StartsWithSegments("/Emails") ? "is-active" : string.Empty)" href="/Emails">Emails</a>
+                            <a class="@(currentPath.StartsWithSegments("/Imports") ? "is-active" : string.Empty)" href="/Imports">Imports</a>
+                            <a class="@(currentPath.StartsWithSegments("/Process") ? "is-active" : string.Empty)" href="/Process">Process</a>
+                        </div>
+                    </details>
+                </nav>
+
+                @if (isAuthenticated)
+                {
+                    <div class="product-user">
+                        <div class="product-user__details">
+                            <span class="product-user__label">Signed In As</span>
+                            <strong>@currentUserDisplay</strong>
+                        </div>
+
+                        <form asp-controller="Account" asp-action="Logout" method="post" class="product-user__logout">
+                            <input type="hidden" name="returnUrl" value="/" />
+                            <button type="submit" class="secondary-action">Logout</button>
+                        </form>
+                    </div>
+                }
+            </div>
+        </header>
+
+        <div class="product-page">
+            @RenderBody()
+        </div>
+    }
+    else
+    {
+        @RenderBody()
+    }
+</body>
+</html>

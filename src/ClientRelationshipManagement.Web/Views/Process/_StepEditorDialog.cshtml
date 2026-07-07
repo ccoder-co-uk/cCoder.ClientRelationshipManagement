@@ -1,0 +1,174 @@
+@model ProcessStepEditorViewModel
+
+<form asp-action="SaveStep" method="post" class="crm-form crm-form--compact">
+    @Html.AntiForgeryToken()
+    <input type="hidden" name="Id" value="@Model.Id" />
+    <input type="hidden" name="ProcessDefinitionId" value="@Model.ProcessDefinitionId" />
+
+    <div class="form-grid">
+        <label class="auth-field">
+            <span>Key</span>
+            <input name="Key" value="@Model.Key" required />
+        </label>
+        <label class="auth-field">
+            <span>Name</span>
+            <input name="Name" value="@Model.Name" required />
+        </label>
+        <label class="auth-field">
+            <span>Sequence</span>
+            <input name="Sequence" type="number" value="@Model.Sequence" />
+        </label>
+        <label class="auth-field">
+            <span>Action Type</span>
+            <select name="ActionType" asp-items="Model.ActionTypeOptions"></select>
+        </label>
+        <label class="auth-field">
+            <span>Relationship Status On Activate</span>
+            <select name="RelationshipStatusOnActivate" asp-items="Model.RelationshipStatusOptions"></select>
+        </label>
+        <label class="auth-field">
+            <span>Sales Stage On Activate</span>
+            <select name="SalesStageOnActivate" asp-items="Model.SalesStageOptions"></select>
+        </label>
+        <label class="auth-field">
+            <span>Client Account Status On Activate</span>
+            <select name="ClientAccountStatusOnActivate" asp-items="Model.ClientAccountStatusOptions"></select>
+        </label>
+        <label class="auth-field">
+            <span>Due After Days</span>
+            <input name="DueAfterDays" type="number" value="@Model.DueAfterDays" />
+        </label>
+        <label class="auth-field">
+            <span>Due After Hours</span>
+            <input name="DueAfterHours" type="number" value="@Model.DueAfterHours" />
+        </label>
+        <label class="checkbox-field">
+            <input name="IsEntryPoint" type="checkbox" value="true" checked="@Model.IsEntryPoint" />
+            <span>Entry point</span>
+        </label>
+        <label class="checkbox-field">
+            <input name="IsActive" type="checkbox" value="true" checked="@Model.IsActive" />
+            <span>Active</span>
+        </label>
+        <label class="auth-field auth-field--full">
+            <span>Task Title Template</span>
+            <input name="TaskTitleTemplate" value="@Model.TaskTitleTemplate" required />
+        </label>
+        <label class="auth-field auth-field--full auth-field--multiline">
+            <span>Task Instructions Template</span>
+            <textarea name="TaskInstructionsTemplate">@Model.TaskInstructionsTemplate</textarea>
+        </label>
+        <label class="auth-field auth-field--full">
+            <span>Email Subject Template</span>
+            <input name="EmailSubjectTemplate" value="@Model.EmailSubjectTemplate" />
+        </label>
+        <label class="auth-field auth-field--full auth-field--multiline">
+            <span>Email Body Template</span>
+            <textarea name="EmailBodyTemplate">@Model.EmailBodyTemplate</textarea>
+        </label>
+        <label class="auth-field auth-field--full auth-field--multiline">
+            <span>Call Script Template</span>
+            <textarea name="CallScriptTemplate">@Model.CallScriptTemplate</textarea>
+        </label>
+        <label class="auth-field auth-field--full auth-field--multiline">
+            <span>Question Set Template</span>
+            <textarea name="QuestionSetTemplate">@Model.QuestionSetTemplate</textarea>
+        </label>
+    </div>
+
+    <div class="form-actions">
+        <button type="submit" class="primary-action">@(Model.Id.HasValue ? "Save step" : "Create step")</button>
+    </div>
+</form>
+
+@if (Model.Id.HasValue)
+{
+    <div class="workspace-card__subsection">
+        <h3 class="workspace-card__title">Transitions</h3>
+        <div class="table-shell">
+            <table class="crm-table">
+                <thead>
+                    <tr>
+                        <th>Outcome</th>
+                        <th>Label</th>
+                        <th>Next Step</th>
+                        <th>Effect</th>
+                        <th>Default</th>
+                        <th>Terminal</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (ProcessTransitionEditorViewModel transition in Model.Transitions)
+                    {
+                        bool isNewTransition = !transition.Id.HasValue;
+                        string deleteFormId = transition.Id.HasValue ? $"delete-transition-{transition.Id}" : string.Empty;
+                        <tr>
+                            <td colspan="7">
+                                <form asp-action="SaveTransition" method="post" class="crm-form crm-form--compact crm-form--borderless">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="Id" value="@transition.Id" />
+                                    <input type="hidden" name="ProcessStepId" value="@transition.ProcessStepId" />
+
+                                    <div class="form-grid">
+                                        <label class="auth-field">
+                                            <span>Outcome Key</span>
+                                            <input name="OutcomeKey" value="@transition.OutcomeKey" required />
+                                        </label>
+                                        <label class="auth-field">
+                                            <span>Outcome Label</span>
+                                            <input name="OutcomeLabel" value="@transition.OutcomeLabel" required />
+                                        </label>
+                                        <label class="auth-field">
+                                            <span>Next Step</span>
+                                            <select name="NextProcessStepId" asp-items="transition.NextStepOptions"></select>
+                                        </label>
+                                        <label class="auth-field">
+                                            <span>Effect</span>
+                                            <select name="Effect" asp-items="transition.EffectOptions"></select>
+                                        </label>
+                                        <label class="auth-field">
+                                            <span>Resulting Relationship Status</span>
+                                            <select name="ResultingRelationshipStatus" asp-items="transition.RelationshipStatusOptions"></select>
+                                        </label>
+                                        <label class="auth-field">
+                                            <span>Resulting Sales Stage</span>
+                                            <select name="ResultingSalesStage" asp-items="transition.SalesStageOptions"></select>
+                                        </label>
+                                        <label class="auth-field">
+                                            <span>Resulting Client Status</span>
+                                            <select name="ResultingClientAccountStatus" asp-items="transition.ClientAccountStatusOptions"></select>
+                                        </label>
+                                        <label class="checkbox-field">
+                                            <input name="IsDefaultOutcome" type="checkbox" value="true" checked="@transition.IsDefaultOutcome" />
+                                            <span>Default outcome</span>
+                                        </label>
+                                        <label class="checkbox-field">
+                                            <input name="IsTerminal" type="checkbox" value="true" checked="@transition.IsTerminal" />
+                                            <span>Terminal</span>
+                                        </label>
+                                    </div>
+
+                                    <div class="form-actions form-actions--between">
+                                        <button type="submit" class="secondary-action">@(isNewTransition ? "Add transition" : "Save transition")</button>
+                                        @if (!isNewTransition)
+                                        {
+                                            <button type="submit" class="secondary-action" form="@deleteFormId">Delete transition</button>
+                                        }
+                                    </div>
+                                </form>
+                                @if (!isNewTransition)
+                                {
+                                    <form id="@deleteFormId" asp-action="DeleteTransition" method="post" class="inline-form">
+                                        @Html.AntiForgeryToken()
+                                        <input type="hidden" name="id" value="@transition.Id" />
+                                    </form>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}

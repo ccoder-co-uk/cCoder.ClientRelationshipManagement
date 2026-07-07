@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ClassDiagram MajorVersion="1" MinorVersion="1">
+  <Comment CommentText="Current CRM entity model from Models\Entities. Client is the primary root in the present code structure, with process automation and email history linked into it.">
+    <Position X="1" Y="0.5" Height="1" Width="5.5" />
+  </Comment>
+  <Class Name="cCoder.ClientRelationshipManagement.Models.Entities.Client">
+    <Position X="12.25" Y="5.25" Width="2.5" />
+    <TypeIdentifier>
+      <HashCode>BEACACAEICAAAAAEAAACQAGiAAACAAASQFCgBIACAAE=</HashCode>
+      <FileName>Models\Entities\Client.cs</FileName>
+    </TypeIdentifier>
+    <ShowAsAssociation>
+      <Property Name="Company" />
+    </ShowAsAssociation>
+  </Class>
+  <Class Name="cCoder.ClientRelationshipManagement.Models.Entities.Company">
+    <Position X="8.25" Y="2.25" Width="2.25" />
+    <TypeIdentifier>
+      <HashCode>AAACACAAAAAAAQAAkCAAAAUSECICAAAAAAACAACAAEU=</HashCode>
+      <FileName>Models\Entities\Company.cs</FileName>
+    </TypeIdentifier>
+    <ShowAsAssociation>
+      <Property Name="RegisteredAddress" />
+    </ShowAsAssociation>
+  </Class>
+  <Class Name="cCoder.ClientRelationshipManagement.Models.Entities.Address">
+    <Position X="4.25" Y="2.25" Width="2" />
+    <TypeIdentifier>
+      <HashCode>AAQCAAIAAAQAAAAAEAAAAAEAAAAyAAAgAAAAQAAAEAA=</HashCode>
+      <FileName>Models\Entities\Address.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="cCoder.ClientRelationshipManagement.Models.Entities.ClientContact">
+    <Position X="7.25" Y="8.5" Width="2.5" />
+    <TypeIdentifier>
+      <HashCode>AQAiAAAEAiAAAAAggBABQAUCAAACAAAAAAAAAoAAAAU=</HashCode>
+      <FileName>Models\Entities\ClientContact.cs</FileName>
+    </TypeIdentifier>
+    <ShowAsAssociation>
+      <Property Name="Client" />
+    </ShowAsAssociation>
+  </Class>
+  <Class Name="cCoder.ClientRelationshipManagement.Models.Entities.ClientOpportunity">
+    <Position X="17.5" Y="11.75" Width="2.75" />
+    <AssociationLine Name="Client" Type="cCoder.ClientRelationshipManagement.Models.Entities.Client" FixedFromPoint="true" FixedToPoint="true">
+      <Path>
+        <Point X="19.531" Y="11.75" />
+        <Point X="19.531" Y="11" />
+        <Point X="18.208" Y="11" Type="JumpStart" />
+        <Point X="18.042" Y="11" Type="JumpEnd" />
+        <Point X="14.75" Y="11" />
+      </Path>
+    </AssociationLine>
+    <AssociationLine Name="PrimaryContact" Type="cCoder.ClientRelationshipManagement.Models.Entities.ClientContact" FixedFromPoint="true">
+      <Path>
+        <Point X="17.5" Y="12.062" />
+        <Point X="13.958" Y="12.062" Type="JumpStart" />
+        <Point X="13.792" Y="12.062" Type="JumpEnd" />
+        <Point X="11.333" Y="12.062" Type="JumpStart" />
+        <Point X="11.167" Y="12.062" Type="JumpEnd" />
+        <Point X="9.75" Y="12.062" />
+      </Path>
+    </AssociationLine>
+    <TypeIdentifier>
+      <HashCode>AAACAAAAAAAAgCAAgAAAAIGqAAACAAAQASgIAIAAAAU=</HashCode>
+      <FileName>Models\Entities\ClientOpportunity.cs</FileName>
+    </TypeIdentifier>
+    <ShowAsAssociation>
+      <Property Name="Client" />
+      <Property Name="PrimaryContact" />
+    </ShowAsAssociation>
+  </Class>
+  <Class Name="cCoder.ClientRelationshipManagement.Models.Entities.ClientActivity">
+    <Position X="13" Y="12.25" Width="2.75" />
+    <AssociationLine Name="ClientContact" Type="cCoder.ClientRelationshipManagement.Models.Entities.ClientContact" ManuallyRouted="true" FixedFromPoint="true">
+      <Path>
+        <Point X="13" Y="12.5" />
+        <Point X="11.333" Y="12.5" Type="JumpStart" />
+        <Point X="11.167" Y="12.5" Type="JumpEnd" />
+        <Point X="9.75" Y="12.5" />
+      </Path>
+    </AssociationLine>
+    <AssociationLine Name="ClientOpportunity" Type="cCoder.ClientRelationshipManagement.Models.Entities.ClientOpportunity" FixedFromPoint="true">
+      <Path>
+        <Point X="15.75" Y="12.75" />
+        <Point X="17.5" Y="12.75" />
+      </Path>
+    </AssociationLine>
+    <TypeIdentifier>
+      <HashCode>EACCAEAAAAAAAAAQgSAAQACgAAICAAgAAQAAAAEAAAU=</HashCode>
+      <FileName>Models\Entities\ClientActivity.cs</FileName>
+    </TypeIdentifier>
+    <ShowAsAssociation>
+      <Property Name="Client" />
+      <Property Name="ClientContact" />
+      <Property Name="ClientOpportunity" />
+      <Property Name="ClientMaterial" />
+    </ShowAsAssociation>
+  </Class>
+  <Class Name="cCoder.ClientRelationshipManagement.Models.Entities.ClientMaterial">
+    <Position X="9" Y="13.75" Width="2.75" />
+    <AssociationLine Name="Client" Type="cCoder.ClientRelationshipManagement.Models.Entities.Client" FixedFromPoint="true" FixedToPoint="true">
+      <Path>
+        <Point X="11.25" Y="13.75" />
+        <Point X="11.25" Y="10.625" />
+        <Point X="12.25" Y="10.625" />
+      </Path>
+    </AssociationLine>
+    <TypeIdentifier>
+      <HashCode>AAAiAAgkACAAAAAAgAAAAAUCAAADAAAAAQBAAIAAAAU=</HashCode>
+      <FileName>Models\Entities\ClientMaterial.cs</FileName>
+    </TypeIdentifier>
+    <ShowAsAssociation>
+      <Property Name="Client" />
+      <Property Name="SentToContact" />
+      <Property Name="Email" />
+    </ShowAsAssociation>
+  </Class>
+  <Class Name="cCoder.ClientRelationshipManagement.Models.Entities.Email">
+    <Position X="2.5" Y="11.75" Width="2.75" />
+    <TypeIdentifier>
+      <HashCode>gCATAEmgIEAAIAAAgIAAQSGCAAADAAEAAAAQBSIAAAU=</HashCode>
+      <FileName>Models\Entities\Email.cs</FileName>
+    </TypeIdentifier>
+    <ShowAsAssociation>
+      <Property Name="Client" />
+      <Property Name="ClientMaterial" />
+      <Property Name="SentToContact" />
+    </ShowAsAssociation>
+  </Class>
+  <Class Name="cCoder.ClientRelationshipManagement.Models.Entities.ClientHandoffPack">
+    <Position X="16" Y="5.5" Width="2.75" />
+    <TypeIdentifier>
+      <HashCode>EAACAgAMAAAAAgAAgCAAQAkCAAECAEAAAAACAAEAAAU=</HashCode>
+      <FileName>Models\Entities\ClientHandoffPack.cs</FileName>
+    </TypeIdentifier>
+    <ShowAsAssociation>
+      <Property Name="Client" />
+      <Property Name="ClientOpportunity" />
+    </ShowAsAssociation>
+  </Class>
+  <Class Name="cCoder.ClientRelationshipManagement.Models.Entities.ClientProcessDefinition">
+    <Position X="19" Y="1.75" Width="3" />
+    <TypeIdentifier>
+      <HashCode>AAADAQAAAAAgAAAAEAAAAAUCAAACAAAAQAAgAAAAAAE=</HashCode>
+      <FileName>Models\Entities\ClientProcessDefinition.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="cCoder.ClientRelationshipManagement.Models.Entities.ClientProcessStep">
+    <Position X="23.75" Y="1.75" Width="3" />
+    <TypeIdentifier>
+      <HashCode>AAAKAABQAAAEQAQAEAAABAUKAAACUAAICAQIAGFAQAE=</HashCode>
+      <FileName>Models\Entities\ClientProcessStep.cs</FileName>
+    </TypeIdentifier>
+    <ShowAsAssociation>
+      <Property Name="ClientProcessDefinition" />
+    </ShowAsAssociation>
+  </Class>
+  <Class Name="cCoder.ClientRelationshipManagement.Models.Entities.ClientProcessTransition">
+    <Position X="28.5" Y="1.75" Width="3" />
+    <TypeIdentifier>
+      <HashCode>AAACABAAAAAgAAAAAgAABIECAAICAAgAAQAAAASAAAE=</HashCode>
+      <FileName>Models\Entities\ClientProcessTransition.cs</FileName>
+    </TypeIdentifier>
+    <ShowAsAssociation>
+      <Property Name="ClientProcessStep" />
+      <Property Name="NextClientProcessStep" />
+    </ShowAsAssociation>
+  </Class>
+  <Class Name="cCoder.ClientRelationshipManagement.Models.Entities.ClientProcessInstance">
+    <Position X="21" Y="11.75" Width="3" />
+    <AssociationLine Name="Client" Type="cCoder.ClientRelationshipManagement.Models.Entities.Client" FixedFromPoint="true" FixedToPoint="true">
+      <Path>
+        <Point X="22.156" Y="11.75" />
+        <Point X="22.156" Y="10.688" />
+        <Point X="21.583" Y="10.688" Type="JumpStart" />
+        <Point X="21.417" Y="10.688" Type="JumpEnd" />
+        <Point X="18.208" Y="10.688" Type="JumpStart" />
+        <Point X="18.042" Y="10.688" Type="JumpEnd" />
+        <Point X="14.75" Y="10.688" />
+      </Path>
+    </AssociationLine>
+    <AssociationLine Name="CurrentClientProcessStep" Type="cCoder.ClientRelationshipManagement.Models.Entities.ClientProcessStep" FixedFromPoint="true" FixedToPoint="true">
+      <Path>
+        <Point X="23.375" Y="11.75" />
+        <Point X="23.375" Y="6.346" />
+        <Point X="23.75" Y="6.346" />
+      </Path>
+    </AssociationLine>
+    <TypeIdentifier>
+      <HashCode>AEACAAAAACABQAAAgAAAJAECIAACAAAAAAQIBAAAAAU=</HashCode>
+      <FileName>Models\Entities\ClientProcessInstance.cs</FileName>
+    </TypeIdentifier>
+    <ShowAsAssociation>
+      <Property Name="Client" />
+      <Property Name="ClientProcessDefinition" />
+      <Property Name="CurrentClientProcessStep" />
+      <Property Name="CurrentClientProcessTask" />
+    </ShowAsAssociation>
+  </Class>
+  <Class Name="cCoder.ClientRelationshipManagement.Models.Entities.ClientProcessTask">
+    <Position X="27" Y="11.75" Width="3" />
+    <TypeIdentifier>
+      <HashCode>AAACAAAAgDAwQAAAggAAAAMCIGACEgAgQgAABAAAACU=</HashCode>
+      <FileName>Models\Entities\ClientProcessTask.cs</FileName>
+    </TypeIdentifier>
+    <ShowAsAssociation>
+      <Property Name="Client" />
+      <Property Name="ClientProcessInstance" />
+      <Property Name="ClientProcessStep" />
+      <Property Name="Email" />
+    </ShowAsAssociation>
+  </Class>
+  <Font Name="Segoe UI" Size="9" />
+</ClassDiagram>

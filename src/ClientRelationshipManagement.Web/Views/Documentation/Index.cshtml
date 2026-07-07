@@ -1,0 +1,59 @@
+@model DocumentationPageViewModel
+@{
+    ViewData["Title"] = Model.Title;
+}
+
+<main class="page-shell docs-shell">
+    <aside class="docs-sidebar">
+        <div class="docs-sidebar__intro">
+            <p class="eyebrow">Documentation</p>
+            <h2>CRM Library</h2>
+            <p>
+                Browse product pages and API notes from the tree below.
+            </p>
+        </div>
+
+        <nav aria-label="Documentation tree" class="docs-tree">
+            <a class="docs-tree__root @(Model.CurrentSlug.Length == 0 ? "is-active" : string.Empty)" href="/Documentation">
+                Documentation
+            </a>
+
+            @foreach (DocumentationNavItemViewModel item in Model.Navigation)
+            {
+                @await Html.PartialAsync("_TreeNode", item)
+            }
+        </nav>
+    </aside>
+
+    <section class="docs-content">
+        <div class="docs-hero">
+            <p class="eyebrow">@Model.Eyebrow</p>
+            <h1>@Model.Title</h1>
+            <p class="lede">@Model.Lead</p>
+        </div>
+
+        <div class="docs-sections">
+            @foreach (DocumentationSectionDefinition docSection in Model.Sections)
+            {
+                <article class="docs-section" id="@docSection.Id">
+                    <h2>@docSection.Title</h2>
+
+                    @foreach (string paragraph in docSection.Paragraphs)
+                    {
+                        <p>@paragraph</p>
+                    }
+
+                    @if (docSection.Bullets.Count > 0)
+                    {
+                        <ul>
+                            @foreach (string bullet in docSection.Bullets)
+                            {
+                                <li>@bullet</li>
+                            }
+                        </ul>
+                    }
+                </article>
+            }
+        </div>
+    </section>
+</main>

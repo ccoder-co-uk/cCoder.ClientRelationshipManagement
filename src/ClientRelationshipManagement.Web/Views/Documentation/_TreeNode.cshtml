@@ -1,0 +1,17 @@
+@model DocumentationNavItemViewModel
+
+<div class="docs-tree__item">
+    <a class="@(Model.IsCurrent ? "is-active" : Model.IsCurrentOrAncestor ? "is-expanded" : string.Empty)" href="@Model.Url">
+        @Model.Title
+    </a>
+
+    @if (Model.Children.Count > 0)
+    {
+        <div class="docs-tree__children">
+            @foreach (DocumentationNavItemViewModel child in Model.Children)
+            {
+                @await Html.PartialAsync("_TreeNode", child)
+            }
+        </div>
+    }
+</div>

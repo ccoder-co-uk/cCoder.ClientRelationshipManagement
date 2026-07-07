@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OutputType>Library</OutputType>
+    <IsPackable>true</IsPackable>
+    <NoWarn>1591</NoWarn>
+    <PackageId>cCoder.ClientRelationshipManagement</PackageId>
+    <PackageTags>cCoder;CRM;ClientRelationshipManagement;CorporateLinX</PackageTags>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <ProjectUrl>https://github.com/ccoder-co-uk/cCoder.ClientRelationshipManagement</ProjectUrl>
+    <RepositoryUrl>https://github.com/ccoder-co-uk/cCoder.ClientRelationshipManagement.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Description>Tenant-scoped CRM domain for client acquisition, relationship management, and onboarding handoff.</Description>
+    <Authors>cCoder</Authors>
+    <Copyright>2026 Paul Ward</Copyright>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.2" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.2">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.2" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.2" />
+    <PackageReference Include="cCoder.Eventing" Version="2026.4.28.2114" />
+    <PackageReference Include="cCoder.Security.Data" Version="2026.4.29.2038" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="Api\**\*.cs" />
+    <Compile Remove="Brokers\Events\**\*.cs" />
+    <Compile Remove="Brokers\Storages\**\*.cs" />
+    <Compile Remove="Data\**\*.cs" />
+    <Compile Remove="Migrations\**\*.cs" />
+    <Compile Remove="Models\Configuration\**\*.cs" />
+    <Compile Remove="Models\Entities\**\*.cs" />
+    <Compile Remove="Models\Enums\**\*.cs" />
+    <Compile Remove="Models\Requests\**\*.cs" />
+    <Compile Remove="Services\**\*.cs" />
+    <Compile Remove="AppExtensions.cs" />
+  </ItemGroup>
+
+</Project>

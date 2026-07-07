@@ -1,0 +1,15 @@
+bin/
+obj/
+.vs/
+TestResults/
+*.user
+*.rsuser
+*.suo
+*.nupkg
+*.snupkg
+coverage/
+coverage*.xml
+artifacts/
+Agent Workspace/Authority Data/Archive/
+Agent Workspace/Authority Data/Failed/
+Agent Workspace/Process Optimiser/Session History/

@@ -1,0 +1,106 @@
+@model ClientListPageViewModel
+@{
+    ViewData["Title"] = "Clients";
+}
+
+<main class="page-shell">
+    <section class="page-hero">
+        <div>
+            <h1>Clients</h1>
+            <p class="lede">
+                Review the active client book, track ownership, and jump into the key
+                commercial fields that keep the CRM accurate.
+            </p>
+        </div>
+
+        <div class="page-hero__actions">
+            <span class="queue-count">@Model.TotalClients active clients</span>
+            <a class="primary-action" href="/Leads">New Lead</a>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(Model.Notice))
+    {
+        <section class="notice-banner">
+            <strong>Clients update</strong>
+            <p>@Model.Notice</p>
+        </section>
+    }
+
+    <section class="data-panel">
+        <div class="section-heading">
+            <div>
+                <h2>Clients Page</h2>
+            </div>
+            <a class="secondary-action" href="/Documentation/Pages/Clients-Page">Page Notes</a>
+        </div>
+
+        <form method="get" class="filter-bar">
+            <label class="auth-field">
+                <span>Search</span>
+                <input type="text" name="search" value="@Model.Search" placeholder="Client, owner, lead source, next action" />
+            </label>
+
+            <label class="auth-field">
+                <span>Status</span>
+                <select name="status" asp-items="Model.StatusOptions"></select>
+            </label>
+
+            <label class="auth-field">
+                <span>Sort By</span>
+                <select name="sort" asp-items="Model.SortOptions"></select>
+            </label>
+
+            <div class="filter-bar__actions">
+                <button type="submit" class="primary-action">Apply</button>
+                <a class="secondary-action" href="/Clients">Reset</a>
+            </div>
+        </form>
+
+        @if (Model.Clients.Count == 0)
+        {
+            <div class="empty-state">
+                <strong>No clients are visible in this tenant.</strong>
+                <p>Add a lead or qualify an imported record to start building the working list.</p>
+            </div>
+        }
+        else
+        {
+            <div class="table-shell">
+                <table class="crm-table">
+                    <thead>
+                        <tr>
+                            <th>Client</th>
+                            <th>Owner</th>
+                            <th>Status</th>
+                            <th>Stage</th>
+                            <th>Priority</th>
+                            <th>Lead Source</th>
+                            <th>Next Action</th>
+                            <th>Due</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (ClientListItemViewModel client in Model.Clients)
+                        {
+                            <tr>
+                                <td>@client.CompanyName</td>
+                                <td>@client.AccountOwner</td>
+                                <td>@client.StatusLabel</td>
+                                <td>@client.StageLabel</td>
+                                <td>@client.PriorityLabel</td>
+                                <td>@client.LeadSource</td>
+                                <td>@(string.IsNullOrWhiteSpace(client.NextAction) ? "None set" : client.NextAction)</td>
+                                <td>@client.NextActionDueLabel</td>
+                                <td class="table-actions">
+                                    <a class="secondary-action" href="/Clients/Edit/@client.Id">View details</a>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+</main>

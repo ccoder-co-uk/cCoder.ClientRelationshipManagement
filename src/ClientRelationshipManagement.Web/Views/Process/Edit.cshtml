@@ -1,0 +1,166 @@
+@model ProcessEditPageViewModel
+@{
+    ViewData["Title"] = "Process";
+}
+
+<main class="page-shell">
+    <section class="page-hero">
+        <div>
+            <h1>@Model.Definition.Name</h1>
+            <p class="lede">
+                Edit the scalar process definition fields, then manage the ordered step list
+                that drives generated tasks, emails, calls, and approvals.
+            </p>
+        </div>
+
+        <div class="page-hero__actions">
+            <button type="button" class="primary-action" onclick="document.getElementById('newStepDialog').showModal()">New step</button>
+            <a class="secondary-action" href="/Process">Back to Process List</a>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(Model.Notice))
+    {
+        <section class="notice-banner">
+            <strong>Process designer</strong>
+            <p>@Model.Notice</p>
+        </section>
+    }
+
+    <section class="form-panel">
+        <div class="section-heading">
+            <div>
+                <h2>Process Details</h2>
+            </div>
+        </div>
+
+        <form asp-action="SaveDefinition" method="post" class="crm-form crm-form--compact">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="Id" value="@Model.Definition.Id" />
+            <div class="form-grid">
+                <label class="auth-field">
+                    <span>Tenant</span>
+                    <input name="TenantId" value="@Model.Definition.TenantId" />
+                </label>
+                <label class="auth-field">
+                    <span>Scope</span>
+                    <select name="ScopeType" asp-items="Model.Definition.ScopeTypeOptions"></select>
+                </label>
+                <label class="auth-field auth-field--full">
+                    <span>Name</span>
+                    <input name="Name" value="@Model.Definition.Name" required />
+                </label>
+                <label class="auth-field auth-field--full auth-field--multiline">
+                    <span>Description</span>
+                    <textarea name="Description">@Model.Definition.Description</textarea>
+                </label>
+                <label class="checkbox-field">
+                    <input name="IsDefault" type="checkbox" value="true" checked="@Model.Definition.IsDefault" />
+                    <span>Default process</span>
+                </label>
+                <label class="checkbox-field">
+                    <input name="IsActive" type="checkbox" value="true" checked="@Model.Definition.IsActive" />
+                    <span>Active</span>
+                </label>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="primary-action">Save process</button>
+            </div>
+        </form>
+    </section>
+
+    <section class="data-panel">
+        <div class="section-heading">
+            <div>
+                <h2>Step List</h2>
+            </div>
+        </div>
+
+        <div class="table-shell">
+            <table class="crm-table">
+                <thead>
+                    <tr>
+                        <th>Sequence</th>
+                        <th>Name</th>
+                        <th>Key</th>
+                        <th>Action</th>
+                        <th>Due Offset</th>
+                        <th>Entry</th>
+                        <th>Active</th>
+                        <th>Transitions</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (ProcessStepEditorViewModel step in Model.Steps.Where(item => item.Id.HasValue))
+                    {
+                        <tr>
+                            <td>@step.Sequence</td>
+                            <td>@step.Name</td>
+                            <td>@step.Key</td>
+                            <td>@DisplayText.Humanize(step.ActionType)</td>
+                            <td>@($"{step.DueAfterDays}d {step.DueAfterHours}h")</td>
+                            <td>@(step.IsEntryPoint ? "Yes" : "No")</td>
+                            <td>@(step.IsActive ? "Yes" : "No")</td>
+                            <td>@(step.Transitions.Count - 1)</td>
+                            <td class="table-actions">
+                                <button type="button" class="secondary-action" onclick="document.getElementById('stepDialog-@step.Id').showModal()">Edit</button>
+                                <form asp-action="DeleteStep" method="post" class="inline-form">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="id" value="@step.Id" />
+                                    <button type="submit" class="secondary-action">Delete</button>
+                                </form>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="workspace-panel">
+        <div class="section-heading">
+            <div>
+                <h2>Supported Tokens</h2>
+            </div>
+        </div>
+        <div class="workspace-card__stats">
+            @foreach (string token in Model.SupportedTokens)
+            {
+                <span>@token</span>
+            }
+        </div>
+    </section>
+</main>
+
+@foreach (ProcessStepEditorViewModel step in Model.Steps.Where(item => item.Id.HasValue))
+{
+    string dialogId = $"stepDialog-{step.Id}";
+    <dialog id="@dialogId" class="crm-dialog crm-dialog--wide">
+        <div class="crm-dialog__header">
+            <div>
+                <h3>Edit Step</h3>
+                <p>Maintain task generation, activation state, templates, and outcome transitions for this step.</p>
+            </div>
+            <button type="button" class="crm-dialog__close" onclick="document.getElementById('@dialogId').close()">Close</button>
+        </div>
+
+        <div class="crm-dialog__body">
+            @await Html.PartialAsync("_StepEditorDialog", step)
+        </div>
+    </dialog>
+}
+
+<dialog id="newStepDialog" class="crm-dialog crm-dialog--wide">
+    <div class="crm-dialog__header">
+        <div>
+            <h3>Create Step</h3>
+            <p>Add the next workflow step and its transition outcomes.</p>
+        </div>
+        <button type="button" class="crm-dialog__close" onclick="document.getElementById('newStepDialog').close()">Close</button>
+    </div>
+
+    <div class="crm-dialog__body">
+        @await Html.PartialAsync("_StepEditorDialog", Model.Steps.Single(item => !item.Id.HasValue))
+    </div>
+</dialog>
