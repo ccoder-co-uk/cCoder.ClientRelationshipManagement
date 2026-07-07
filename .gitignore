@@ -13,3 +13,7 @@ artifacts/
 Agent Workspace/Authority Data/Archive/
 Agent Workspace/Authority Data/Failed/
 Agent Workspace/Process Optimiser/Session History/
+Agent Workspace/Shared/helper-scripts/temp-message.json
+Agent Workspace/Task Agent/agent_message.txt
+Agent Workspace/Task Agent/scratch/
+Agent Workspace/Task Agent/temp.json

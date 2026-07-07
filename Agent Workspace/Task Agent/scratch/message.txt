@@ -1,1 +1,0 @@
-We are unable to connect to the CRM API at https://localhost:7294 to retrieve due tasks. Please ensure the API service is running and accessible. Once the API is available, we can proceed with fetching and completing the task. If you need assistance starting the service, let us know.
