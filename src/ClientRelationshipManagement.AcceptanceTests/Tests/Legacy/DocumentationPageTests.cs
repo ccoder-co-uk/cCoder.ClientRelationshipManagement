@@ -22,9 +22,9 @@ public sealed class DocumentationPageTests(CRMAcceptanceFixture fixture)
     [CRMAcceptanceFact]
     public async Task Get_ClientListPage_ReturnsOperationalGuidance()
     {
-        string response = await GetStringAsync("/Documentation/Pages/Clients-Page");
+        string response = await GetStringAsync("/Documentation/Pages/Clients");
 
-        response.Should().Contain("Clients Page");
+        response.Should().Contain("Clients");
         response.Should().Contain("filtering and sorting");
     }
 }

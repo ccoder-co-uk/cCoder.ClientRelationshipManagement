@@ -1,0 +1,52 @@
+@model ClientRelationshipManagement.Web.Models.Admin.AdminProcessProposalsPageViewModel
+@{
+    ViewData["Title"] = "Process proposals";
+}
+
+<main class="page-shell">
+    <section class="page-hero">
+        <div>
+            <h1>Process proposals</h1>
+            <p>Draft process definitions waiting for review before they affect live work.</p>
+        </div>
+    </section>
+
+    <section class="data-panel">
+        <div class="table-shell">
+            <table class="crm-table">
+                <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Scope</th>
+                    <th>Version</th>
+                    <th>Agent</th>
+                    <th>Summary</th>
+                    <th>Created</th>
+                    <th><span class="sr-only">Actions</span></th>
+                </tr>
+                </thead>
+                <tbody>
+                @if (Model.Proposals.Count == 0)
+                {
+                    <tr><td colspan="7">No process drafts are waiting for review.</td></tr>
+                }
+                else
+                {
+                    @foreach (var proposal in Model.Proposals)
+                    {
+                        <tr>
+                            <td>@proposal.Name</td>
+                            <td>@proposal.ScopeType</td>
+                            <td>@proposal.VersionNumber</td>
+                            <td>@proposal.ProposedByAgent</td>
+                            <td>@proposal.ChangeSummary</td>
+                            <td>@proposal.CreatedOn</td>
+                            <td><a class="secondary-action" href="/Admin/Process/Edit/@proposal.Id">Review</a></td>
+                        </tr>
+                    }
+                }
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>

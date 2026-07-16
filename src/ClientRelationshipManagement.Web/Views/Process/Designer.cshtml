@@ -1,0 +1,199 @@
+@model ProcessDesignerPageViewModel
+@{
+    ViewData["Title"] = "Process Designer";
+    Dictionary<Guid, string> stepNames = Model.Lanes
+        .SelectMany(lane => lane.Steps)
+        .ToDictionary(step => step.Id, step => step.Name);
+}
+
+<main class="page-shell process-designer">
+    <section class="page-hero">
+        <div>
+            <h1>Company Lifecycle</h1>
+            <p class="lede">One end-to-end view of how a company becomes a lead, an opportunity, and a maintained client.</p>
+        </div>
+        <div class="page-hero__actions">
+            <a class="secondary-action" href="/Admin/Process/WorkflowModel">Workflow model</a>
+            <a class="secondary-action" href="/Admin/Process">Process list</a>
+        </div>
+    </section>
+
+    <section class="process-validation-summary @(Model.IsValid ? "is-valid" : "has-errors")">
+        <div>
+            <strong>@(Model.IsValid ? "Process contracts are complete" : "Process needs attention")</strong>
+            <span>Validated @Model.ValidatedOn.ToLocalTime().ToString("dd MMM yyyy HH:mm")</span>
+        </div>
+        <span class="process-validation-summary__count">@Model.Issues.Count issue@(Model.Issues.Count == 1 ? "" : "s")</span>
+    </section>
+
+    @if (Model.Issues.Count > 0)
+    {
+        <details class="data-panel process-validation-issues" open="@(!Model.IsValid)">
+            <summary>Validation findings</summary>
+            <div class="process-validation-issues__list">
+                @foreach (var issue in Model.Issues)
+                {
+                    <a class="process-validation-issue process-validation-issue--@issue.Severity.ToString().ToLowerInvariant()"
+                       href="/Admin/Process/Edit/@issue.ProcessDefinitionId">
+                        <strong>@issue.ProcessName@(string.IsNullOrWhiteSpace(issue.StepName) ? "" : $" · {issue.StepName}")</strong>
+                        <span>@issue.Message</span>
+                    </a>
+                }
+            </div>
+        </details>
+    }
+
+    <form id="designerToken" class="visually-hidden">@Html.AntiForgeryToken()</form>
+    <p id="designerMessage" class="process-designer__message" aria-live="polite"></p>
+
+    <section class="process-swimlanes" aria-label="Company lifecycle process">
+        @foreach (ProcessDesignerLaneViewModel lane in Model.Lanes)
+        {
+            <article class="process-lane @lane.CssClass" data-process-id="@lane.ProcessDefinitionId">
+                <header class="process-lane__header">
+                    <div>
+                        <span class="process-lane__tenant">@lane.TenantId</span>
+                        <h2>@lane.Name</h2>
+                    </div>
+                    <a class="secondary-action" href="/Admin/Process/Edit/@lane.ProcessDefinitionId">Edit lane</a>
+                </header>
+                <p class="process-lane__description">@lane.Description</p>
+
+                <div class="process-lane__steps" data-step-list>
+                    @foreach (ProcessDesignerStepViewModel step in lane.Steps)
+                    {
+                        <section class="process-node" draggable="true" data-step-id="@step.Id">
+                            <div class="process-node__toolbar">
+                                <span class="process-node__drag" title="Drag to reorder" aria-label="Drag to reorder">⋮⋮</span>
+                                <span class="process-node__sequence">@step.Sequence</span>
+                                <span class="process-node__action">@step.ActionType</span>
+                                @if (step.IsEntryPoint)
+                                {
+                                    <span class="process-node__entry">Entry</span>
+                                }
+                                <button type="button" class="process-node__link" data-link-step="@step.Id">Link</button>
+                            </div>
+                            <h3>@step.Name</h3>
+                            <p class="process-node__objective">@step.Objective</p>
+
+                            <dl class="process-node__contract">
+                                <div>
+                                    <dt>Adds</dt>
+                                    <dd>@(string.IsNullOrWhiteSpace(step.ProducedFacts) ? "Nothing declared" : step.ProducedFacts)</dd>
+                                </div>
+                                <div>
+                                    <dt>Impact</dt>
+                                    <dd>@(string.IsNullOrWhiteSpace(step.ViabilityImpact) ? "Not declared" : step.ViabilityImpact)</dd>
+                                </div>
+                            </dl>
+
+                            <div class="process-node__health" aria-label="Step health">
+                                <span>@step.Health.Pending pending</span>
+                                <span class="@(step.Health.Overdue > 0 ? "has-warning" : "")">@step.Health.Overdue overdue</span>
+                                <span>@step.Health.Completed done</span>
+                                @if (step.Health.AverageTurnaroundMinutes.HasValue)
+                                {
+                                    <span>@Math.Round(step.Health.AverageTurnaroundMinutes.Value) min avg</span>
+                                }
+                            </div>
+
+                            <div class="process-node__outcomes">
+                                @foreach (ProcessDesignerTransitionViewModel transition in step.Transitions.OrderByDescending(item => item.IsDefault))
+                                {
+                                    string target = transition.IsTerminal
+                                        ? "End"
+                                        : transition.NextProcessStepId.HasValue && stepNames.TryGetValue(transition.NextProcessStepId.Value, out string name)
+                                            ? name
+                                            : "Unlinked";
+                                    <span class="process-outcome @(transition.IsDefault ? "is-default" : "")">
+                                        @transition.OutcomeLabel <b>→</b> @target
+                                    </span>
+                                }
+                            </div>
+                        </section>
+                    }
+                </div>
+            </article>
+        }
+    </section>
+</main>
+
+<script>
+(() => {
+    const token = document.querySelector('#designerToken input[name="__RequestVerificationToken"]')?.value;
+    const message = document.getElementById('designerMessage');
+    let dragged = null;
+    let linkSource = null;
+
+    async function post(url, body) {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'RequestVerificationToken': token
+            },
+            body: JSON.stringify(body)
+        });
+        if (!response.ok) throw new Error(await response.text() || 'The change could not be saved.');
+    }
+
+    document.querySelectorAll('.process-node').forEach(node => {
+        node.addEventListener('dragstart', () => {
+            dragged = node;
+            node.classList.add('is-dragging');
+        });
+        node.addEventListener('dragend', () => {
+            node.classList.remove('is-dragging');
+            dragged = null;
+        });
+        node.addEventListener('dragover', event => {
+            if (dragged && dragged.closest('.process-lane') === node.closest('.process-lane')) event.preventDefault();
+        });
+        node.addEventListener('drop', async event => {
+            event.preventDefault();
+            if (!dragged || dragged === node || dragged.closest('.process-lane') !== node.closest('.process-lane')) return;
+            const list = node.parentElement;
+            const box = node.getBoundingClientRect();
+            list.insertBefore(dragged, event.clientY < box.top + box.height / 2 ? node : node.nextSibling);
+            const lane = list.closest('.process-lane');
+            try {
+                await post('/Admin/Process/ReorderSteps', {
+                    processDefinitionId: lane.dataset.processId,
+                    stepIds: [...list.querySelectorAll('.process-node')].map(item => item.dataset.stepId)
+                });
+                message.textContent = 'Step order saved.';
+                location.reload();
+            } catch (error) {
+                message.textContent = error.message;
+            }
+        });
+    });
+
+    document.querySelectorAll('[data-link-step]').forEach(button => button.addEventListener('click', async () => {
+        const node = button.closest('.process-node');
+        const lane = node.closest('.process-lane');
+        if (!linkSource) {
+            linkSource = { id: button.dataset.linkStep, lane, node };
+            node.classList.add('is-link-source');
+            message.textContent = 'Now choose Link on the destination step in the same lane.';
+            return;
+        }
+        if (linkSource.lane !== lane) {
+            message.textContent = 'Runtime links stay inside one versioned lane; lane handoffs are composed automatically.';
+            return;
+        }
+        try {
+            await post('/Admin/Process/ConnectSteps', {
+                processDefinitionId: lane.dataset.processId,
+                fromStepId: linkSource.id,
+                toStepId: button.dataset.linkStep
+            });
+            location.reload();
+        } catch (error) {
+            message.textContent = error.message;
+            linkSource.node.classList.remove('is-link-source');
+            linkSource = null;
+        }
+    }));
+})();
+</script>

@@ -7,13 +7,45 @@ namespace ClientRelationshipManagement.Web.Services.Agents;
 
 public sealed class AgentRunJournalService(IPlatformDbContextFactory dbContextFactory) : IAgentRunJournalService
 {
+    public async ValueTask<int> FailAbandonedAsync(
+        AgentRunKind kind,
+        DateTimeOffset startedBefore,
+        CancellationToken cancellationToken = default)
+    {
+        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
+        List<AgentRun> abandoned = await context.AgentRuns
+            .Where(item => item.Kind == kind
+                && item.State == AgentRunState.Running
+                && item.StartedOn < startedBefore)
+            .ToListAsync(cancellationToken);
+        if (abandoned.Count == 0)
+            return 0;
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        foreach (AgentRun run in abandoned)
+        {
+            run.State = AgentRunState.Failed;
+            run.ErrorMessage = "Recovered as abandoned after the agent host stopped before recording completion.";
+            run.CompletedOn = now;
+            run.LastUpdatedBy = "agent-run-recovery";
+            run.LastUpdated = now;
+        }
+
+        await context.SaveChangesAsync(cancellationToken);
+        return abandoned.Count;
+    }
+
     public async ValueTask<AgentRun> StartAsync(
         AgentRunKind kind,
         string executionUserId,
         string provider,
         string model,
         string workingDirectory,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        AgentWorkLane? workLane = null,
+        Guid? processTaskId = null,
+        Guid? processStepId = null,
+        string processStepKey = null)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
@@ -22,6 +54,10 @@ public sealed class AgentRunJournalService(IPlatformDbContextFactory dbContextFa
         {
             Id = Guid.NewGuid(),
             Kind = kind,
+            WorkLane = workLane,
+            ProcessTaskId = processTaskId,
+            ProcessStepId = processStepId,
+            ProcessStepKey = processStepKey?.Trim(),
             State = AgentRunState.Running,
             ExecutionUserId = string.IsNullOrWhiteSpace(executionUserId) ? "system" : executionUserId,
             Provider = provider ?? string.Empty,

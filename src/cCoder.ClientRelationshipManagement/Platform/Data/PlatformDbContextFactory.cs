@@ -16,7 +16,7 @@ public class PlatformDbContextFactory(
 
         DbContextOptions<PlatformDbContext> options =
             new DbContextOptionsBuilder<PlatformDbContext>()
-                .UseSqlServer(connectionString)
+                .UseSqlServer(connectionString, sqlServer => sqlServer.CommandTimeout(600))
                 .Options;
 
         return new PlatformDbContext(options, authInfo);

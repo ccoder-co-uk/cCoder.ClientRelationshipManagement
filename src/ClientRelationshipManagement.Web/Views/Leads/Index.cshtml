@@ -15,7 +15,7 @@
 
         <div class="page-hero__actions">
             <button type="button" class="primary-action" onclick="document.getElementById('newLeadDialog').showModal()">New Lead</button>
-            <a class="secondary-action" href="/Imports">Bulk Import</a>
+            <a class="secondary-action" href="/Admin/Imports">Bulk Import</a>
         </div>
     </section>
 
@@ -30,28 +30,84 @@
     <section class="data-panel">
         <div class="section-heading">
             <div>
-                <h2>Lead Queue</h2>
+                <h2>@Model.QueueTitle</h2>
+                @if (Model.Companies.Count > 0 || Model.Scope is "candidates" or "suppressed")
+                {
+                    <p>Showing the highest-ranked 100 of @Model.MatchingCompanyCount.ToString("N0") matching companies.</p>
+                }
             </div>
         </div>
 
         <form method="get" class="filter-bar">
+            @if (!string.IsNullOrWhiteSpace(Model.Scope))
+            {
+                <input type="hidden" name="scope" value="@Model.Scope" />
+            }
+            @if (!string.IsNullOrWhiteSpace(Model.TaskFilter))
+            {
+                <input type="hidden" name="tasks" value="@Model.TaskFilter" />
+            }
             <label class="auth-field auth-field--full">
                 <span>Search</span>
                 <input type="search" name="search" value="@Model.Search" placeholder="Company, contact, source, tenant" />
             </label>
 
-            <label class="auth-field">
-                <span>Status</span>
-                <select name="status" asp-items="Model.StatusOptions"></select>
-            </label>
+            @if (Model.Scope is not ("candidates" or "suppressed"))
+            {
+                <label class="auth-field">
+                    <span>Status</span>
+                    <select name="status" asp-items="Model.StatusOptions"></select>
+                </label>
+            }
 
             <div class="filter-bar__actions">
                 <button type="submit" class="primary-action">Filter</button>
-                <a class="secondary-action" href="/Leads">Reset</a>
+                <a class="secondary-action" href="@(string.IsNullOrWhiteSpace(Model.Scope) ? "/Leads" : $"/Leads?scope={Model.Scope}")">Reset</a>
             </div>
         </form>
 
-        @if (Model.Leads.Count == 0)
+        @if (Model.Scope is "candidates" or "suppressed")
+        {
+            @if (Model.Companies.Count == 0)
+            {
+                <div class="empty-state">
+                    <strong>No companies match the current filter.</strong>
+                    <p>Try clearing the search or selecting another lead-generation view.</p>
+                </div>
+            }
+            else
+            {
+                <div class="table-shell">
+                    <table class="crm-table">
+                        <thead>
+                            <tr>
+                                <th class="tree-grid__toggle-column"><span class="sr-only">Expand</span></th>
+                                <th>Company</th>
+                                <th>Company Number</th>
+                                <th>Status</th>
+                                <th>Ranking</th>
+                                <th>Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var company in Model.Companies)
+                            {
+                                <tr>
+                                    <td class="tree-grid__toggle-cell"><button type="button" class="tree-grid__toggle" data-detail-expand="company-@company.Id" data-detail-url="/Companies/@company.Id/Details" aria-expanded="false" aria-label="Expand @company.CompanyName"><span aria-hidden="true"></span></button></td>
+                                    <td>@company.CompanyName</td>
+                                    <td>@company.CompanyNumber</td>
+                                    <td>@company.CompanyStatus</td>
+                                    <td>@(company.RankingScore?.ToString() ?? "Not ranked")</td>
+                                    <td>@(string.IsNullOrWhiteSpace(company.SuppressionReason) ? "—" : company.SuppressionReason)</td>
+                                </tr>
+                                <tr class="tree-grid__detail-row" data-detail-row="company-@company.Id" hidden><td colspan="6"><div class="tree-grid__detail-host" data-detail-host="company-@company.Id"></div></td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+        else if (Model.Leads.Count == 0)
         {
             <div class="empty-state">
                 <strong>No leads match the current filter.</strong>
@@ -64,6 +120,7 @@
                 <table class="crm-table">
                     <thead>
                         <tr>
+                            <th class="tree-grid__toggle-column"><span class="sr-only">Expand</span></th>
                             <th>Company</th>
                             <th>Status</th>
                             <th>Source</th>
@@ -78,6 +135,7 @@
                         @foreach (var lead in Model.Leads)
                         {
                             <tr>
+                                <td class="tree-grid__toggle-cell"><button type="button" class="tree-grid__toggle" data-detail-expand="lead-@lead.Id" data-detail-url="/Leads/@lead.Id/Details" aria-expanded="false" aria-label="Expand @lead.CompanyName"><span aria-hidden="true"></span></button></td>
                                 <td>@lead.CompanyName</td>
                                 <td>@lead.StatusLabel</td>
                                 <td>@lead.SourceSystem</td>
@@ -89,6 +147,7 @@
                                     <a class="secondary-action" href="/Leads/Edit/@lead.Id">View lead</a>
                                 </td>
                             </tr>
+                            <tr class="tree-grid__detail-row" data-detail-row="lead-@lead.Id" hidden><td colspan="9"><div class="tree-grid__detail-host" data-detail-host="lead-@lead.Id"></div></td></tr>
                         }
                     </tbody>
                 </table>
@@ -197,3 +256,36 @@
         </form>
     </div>
 </dialog>
+
+<script>
+    (() => {
+        const initialiseTabs = (host) => host.querySelectorAll("[data-detail-tab]").forEach((tab) => tab.addEventListener("click", () => {
+            host.querySelectorAll("[data-detail-tab]").forEach((candidate) => {
+                const active = candidate === tab;
+                candidate.classList.toggle("is-active", active);
+                candidate.setAttribute("aria-selected", active ? "true" : "false");
+            });
+            host.querySelectorAll("[data-detail-panel]").forEach((panel) => panel.hidden = panel.dataset.detailPanel !== tab.dataset.detailTab);
+        }));
+
+        document.querySelectorAll("[data-detail-expand]").forEach((button) => button.addEventListener("click", async () => {
+            const key = button.dataset.detailExpand;
+            const row = document.querySelector(`[data-detail-row="${key}"]`);
+            const host = row.querySelector("[data-detail-host]");
+            const opening = row.hidden;
+            row.hidden = !opening;
+            button.setAttribute("aria-expanded", opening ? "true" : "false");
+            if (!opening || host.dataset.loaded === "true") return;
+            host.innerHTML = '<p class="crm-muted">Loading details…</p>';
+            try {
+                const response = await fetch(button.dataset.detailUrl, { headers: { "X-Requested-With": "XMLHttpRequest" } });
+                if (!response.ok) throw new Error();
+                host.innerHTML = await response.text();
+                host.dataset.loaded = "true";
+                initialiseTabs(host);
+            } catch {
+                host.innerHTML = '<div class="empty-state empty-state--compact"><strong>Details could not be loaded.</strong><p>Collapse and try again.</p></div>';
+            }
+        }));
+    })();
+</script>

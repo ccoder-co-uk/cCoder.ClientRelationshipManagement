@@ -14,6 +14,22 @@
             <span>Name</span>
             <input name="Name" value="@Model.Name" required />
         </label>
+        <label class="auth-field auth-field--full auth-field--multiline">
+            <span>Objective</span>
+            <textarea name="Objective" rows="2" placeholder="What is this step trying to establish or achieve?">@Model.Objective</textarea>
+        </label>
+        <label class="auth-field auth-field--full">
+            <span>Required facts</span>
+            <input name="RequiredFacts" value="@Model.RequiredFacts" placeholder="Comma-separated fact keys available before this step" />
+        </label>
+        <label class="auth-field auth-field--full">
+            <span>Produced facts</span>
+            <input name="ProducedFacts" value="@Model.ProducedFacts" placeholder="Comma-separated fact keys recorded by this step" />
+        </label>
+        <label class="auth-field auth-field--full auth-field--multiline">
+            <span>Viability impact</span>
+            <textarea name="ViabilityImpact" rows="2" placeholder="How can this step advance, hold, or stop the company?">@Model.ViabilityImpact</textarea>
+        </label>
         <label class="auth-field">
             <span>Sequence</span>
             <input name="Sequence" type="number" value="@Model.Sequence" />
@@ -57,6 +73,10 @@
         <label class="auth-field auth-field--full auth-field--multiline">
             <span>Task Instructions Template</span>
             <textarea name="TaskInstructionsTemplate">@Model.TaskInstructionsTemplate</textarea>
+        </label>
+        <label class="auth-field auth-field--full">
+            <span>Email Recipient</span>
+            <select name="EmailRecipientTarget" asp-items="Model.EmailRecipientTargetOptions"></select>
         </label>
         <label class="auth-field auth-field--full">
             <span>Email Subject Template</span>

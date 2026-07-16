@@ -23,16 +23,16 @@ public class Program
             options.TimestampFormat = "HH:mm:ss ";
         });
 
-        string crmConnection = ConfigurationValueResolver.GetRequired(
+        string crmConnection = ConfigurationValueResolver.GetRequiredSqlConnection(
             builder.Configuration,
             "ConnectionStrings:CRM");
 
-        string crmAdminConnection = ConfigurationValueResolver.GetOptional(
+        string crmAdminConnection = ConfigurationValueResolver.GetOptionalSqlConnection(
             builder.Configuration,
             "ConnectionStrings:CRMAdmin")
             ?? crmConnection;
 
-        string ssoConnection = ConfigurationValueResolver.GetRequired(
+        string ssoConnection = ConfigurationValueResolver.GetRequiredSqlConnection(
             builder.Configuration,
             "ConnectionStrings:SSO");
 

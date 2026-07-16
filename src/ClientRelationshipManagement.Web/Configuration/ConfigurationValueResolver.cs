@@ -1,3 +1,5 @@
+using Microsoft.Data.SqlClient;
+
 namespace ClientRelationshipManagement.Web.Configuration;
 
 public static class ConfigurationValueResolver
@@ -39,5 +41,35 @@ public static class ConfigurationValueResolver
         }
 
         return null;
+    }
+
+    public static string GetRequiredSqlConnection(IConfiguration configuration, params string[] keys) =>
+        NormalizeLocalSqlConnection(GetRequired(configuration, keys));
+
+    public static string GetOptionalSqlConnection(IConfiguration configuration, params string[] keys)
+    {
+        string connectionString = GetOptional(configuration, keys);
+        return string.IsNullOrWhiteSpace(connectionString)
+            ? null
+            : NormalizeLocalSqlConnection(connectionString);
+    }
+
+    static string NormalizeLocalSqlConnection(string connectionString)
+    {
+        SqlConnectionStringBuilder builder = new(connectionString);
+        string server = builder.DataSource?.Trim() ?? string.Empty;
+        string host = server.Split('\\', ',', StringSplitOptions.TrimEntries)[0];
+        bool isLocal = host is "." or "(local)" or "localhost" or "127.0.0.1"
+            || host.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase);
+
+        if (!isLocal)
+            return connectionString;
+
+        // Local development uses Windows authentication and never crosses the network.
+        // Explicitly opt out of transport encryption because this laptop's local SQL
+        // instance cannot currently negotiate the client encryption requested by SqlClient.
+        builder["Encrypt"] = false;
+        builder.TrustServerCertificate = true;
+        return builder.ConnectionString;
     }
 }

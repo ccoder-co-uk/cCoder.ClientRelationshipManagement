@@ -23,7 +23,6 @@ public partial class ClientRelationshipManagementDbContext
             entity.Property(company => company.ContactEmailAddress).HasMaxLength(320);
             entity.Property(company => company.ContactPhoneNumber).HasMaxLength(64);
             entity.Property(company => company.WebsiteUrl).HasMaxLength(512);
-            entity.Property(company => company.RegisteredOfficeText).HasMaxLength(1024);
             entity.Property(company => company.CreatedBy).HasMaxLength(256);
             entity.Property(company => company.LastUpdatedBy).HasMaxLength(256);
 

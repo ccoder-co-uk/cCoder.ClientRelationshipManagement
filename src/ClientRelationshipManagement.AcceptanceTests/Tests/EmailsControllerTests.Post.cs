@@ -10,13 +10,62 @@ namespace ClientRelationshipManagement.AcceptanceTests.Tests;
 public sealed partial class EmailsControllerTests
 {
     [CRMAcceptanceFact]
+    public async Task Post_Reject_ArchivesEmailAndStartsApprovalConversationWithReason()
+    {
+        (Guid relationshipId, Guid opportunityId, _) = await SeedOpportunityWorkspaceAsync();
+        ProcessTask emailTask = await MoveOpportunityToEmailStepAsync(opportunityId);
+        Email queuedEmail = await QueryInAdminContextAsync(db => db.Emails.FirstAsync(item => item.Id == emailTask.EmailId!.Value));
+
+        using HttpResponseMessage response = await PostFormWithAntiforgeryAsync("/Admin/Emails", "/Admin/Emails/Reject", new Dictionary<string, string>
+        {
+            ["ClientId"] = relationshipId.ToString(),
+            ["EmailId"] = queuedEmail.Id.ToString(),
+            ["Reason"] = "The message makes an unsupported promise about delivery time."
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        Email rejected = await QueryInAdminContextAsync(db => db.Emails.FirstAsync(item => item.Id == queuedEmail.Id));
+        AgentMessage conversation = await QueryInAdminContextAsync(db => db.AgentMessages
+            .Include(item => item.Entries)
+            .FirstAsync(item => item.EmailId == queuedEmail.Id && item.CorrelationKey == $"email-rejection:{queuedEmail.Id}"));
+
+        rejected.State.Should().Be(EmailState.Rejected);
+        conversation.State.Should().Be(AgentMessageState.Pending);
+        conversation.ProcessTaskId.Should().Be(emailTask.Id);
+        conversation.ProcessStepId.Should().Be(emailTask.ProcessStepId);
+        conversation.Entries.Should().Contain(item => item.Role == "User" && item.Body.Contains("unsupported promise"));
+    }
+
+    [CRMAcceptanceFact]
+    public async Task Post_ReviewAndApprove_SavesHumanEditsBeforeApproval()
+    {
+        (Guid relationshipId, Guid opportunityId, _) = await SeedOpportunityWorkspaceAsync();
+        ProcessTask emailTask = await MoveOpportunityToEmailStepAsync(opportunityId);
+        Email queuedEmail = await QueryInAdminContextAsync(db => db.Emails.FirstAsync(item => item.Id == emailTask.EmailId!.Value));
+
+        using HttpResponseMessage response = await PostFormWithAntiforgeryAsync("/Admin/Emails", "/Admin/Emails/ReviewAndApprove", new Dictionary<string, string>
+        {
+            ["ClientId"] = relationshipId.ToString(),
+            ["EmailId"] = queuedEmail.Id.ToString(),
+            ["Subject"] = "Reviewed subject",
+            ["Body"] = "Reviewed and corrected email content."
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        Email approved = await QueryInAdminContextAsync(db => db.Emails.FirstAsync(item => item.Id == queuedEmail.Id));
+        approved.State.Should().Be(EmailState.Approved);
+        approved.Subject.Should().Be("Reviewed subject");
+        approved.BodyText.Should().Be("Reviewed and corrected email content.");
+    }
+
+    [CRMAcceptanceFact]
     public async Task DispatchDueEmailsAsync_ForApprovedDraft_SendsEmail_And_AdvancesWorkflow()
     {
         (Guid relationshipId, Guid opportunityId, _) = await SeedOpportunityWorkspaceAsync();
         ProcessTask emailTask = await MoveOpportunityToEmailStepAsync(opportunityId);
         Email queuedEmail = await QueryInAdminContextAsync(db => db.Emails.FirstAsync(item => item.Id == emailTask.EmailId!.Value));
 
-        using HttpResponseMessage approveQueueResponse = await PostFormWithAntiforgeryAsync("/Emails", "/Emails/Approve", new Dictionary<string, string>
+        using HttpResponseMessage approveQueueResponse = await PostFormWithAntiforgeryAsync("/Admin/Emails", "/Admin/Emails/Approve", new Dictionary<string, string>
         {
             ["ClientId"] = relationshipId.ToString(),
             ["EmailId"] = queuedEmail.Id.ToString()
@@ -49,13 +98,13 @@ public sealed partial class EmailsControllerTests
         ProcessTask emailTask = await MoveOpportunityToEmailStepAsync(opportunityId);
         Email queuedEmail = await QueryInAdminContextAsync(db => db.Emails.FirstAsync(item => item.Id == emailTask.EmailId!.Value));
 
-        using HttpResponseMessage approveQueueResponse = await PostFormWithAntiforgeryAsync("/Emails", "/Emails/Approve", new Dictionary<string, string>
+        using HttpResponseMessage approveQueueResponse = await PostFormWithAntiforgeryAsync("/Admin/Emails", "/Admin/Emails/Approve", new Dictionary<string, string>
         {
             ["ClientId"] = relationshipId.ToString(),
             ["EmailId"] = queuedEmail.Id.ToString()
         });
 
-        using HttpResponseMessage markQueueSentResponse = await PostFormWithAntiforgeryAsync("/Emails", "/Emails/MarkSent", new Dictionary<string, string>
+        using HttpResponseMessage markQueueSentResponse = await PostFormWithAntiforgeryAsync("/Admin/Emails", "/Admin/Emails/MarkSent", new Dictionary<string, string>
         {
             ["ClientId"] = relationshipId.ToString(),
             ["EmailId"] = queuedEmail.Id.ToString()

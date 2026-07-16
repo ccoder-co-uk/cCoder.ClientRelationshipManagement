@@ -180,15 +180,32 @@ public sealed class ImportProcessingService(
             Company company = await FindCompanyAsync(context, import.Source, companyNumber, vatNumber, cancellationToken);
             if (company is null)
             {
-                Address address = CreateAddress(import, row, headerLookup, now);
-                context.Addresses.Add(address);
+                Address address = HasAddressData(row, headerLookup)
+                    ? CreateAddress(import, companyNumber ?? vatNumber, row, headerLookup, now)
+                    : null;
+                if (address is not null)
+                    context.Addresses.Add(address);
 
-                company = CreateCompany(import, address.Id, row, headerLookup, now);
+                company = CreateCompany(import, address?.Id, row, headerLookup, now);
                 context.Companies.Add(company);
             }
             else
             {
                 UpdateCompany(company, import, row, headerLookup, now);
+                Address address = company.RegisteredAddressId.HasValue
+                    ? await context.Addresses.FirstOrDefaultAsync(item => item.Id == company.RegisteredAddressId.Value, cancellationToken)
+                    : null;
+
+                if (address is null && HasAddressData(row, headerLookup))
+                {
+                    address = CreateAddress(import, companyNumber ?? vatNumber, row, headerLookup, now);
+                    context.Addresses.Add(address);
+                    company.RegisteredAddressId = address.Id;
+                }
+                else if (address is not null && (!address.IsVerified || import.Source.IsAuthoritative))
+                {
+                    UpdateAddress(address, import, row, headerLookup, now);
+                }
             }
 
             Lead lead = await context.Leads.FirstOrDefaultAsync(item =>
@@ -249,11 +266,12 @@ public sealed class ImportProcessingService(
         return null;
     }
 
-    static Address CreateAddress(Import import, string[] row, IReadOnlyDictionary<string, int> headers, DateTimeOffset now) =>
+    static Address CreateAddress(Import import, string legacyId, string[] row, IReadOnlyDictionary<string, int> headers, DateTimeOffset now) =>
         new()
         {
             Id = Guid.NewGuid(),
             SourceSystem = import.Source.Name,
+            LegacyId = legacyId,
             IsVerified = import.Source.IsAuthoritative,
             Line1 = Normalize(GetValue(row, headers, "AddressLine1")),
             Line2 = Normalize(GetValue(row, headers, "AddressLine2")),
@@ -268,7 +286,20 @@ public sealed class ImportProcessingService(
             LastUpdated = now
         };
 
-    static Company CreateCompany(Import import, Guid addressId, string[] row, IReadOnlyDictionary<string, int> headers, DateTimeOffset now)
+    static void UpdateAddress(Address address, Import import, string[] row, IReadOnlyDictionary<string, int> headers, DateTimeOffset now)
+    {
+        AssignIfProvided(value => address.Line1 = value, GetValue(row, headers, "AddressLine1"));
+        AssignIfProvided(value => address.Line2 = value, GetValue(row, headers, "AddressLine2"));
+        AssignIfProvided(value => address.TownOrCity = value, GetValue(row, headers, "TownOrCity"));
+        AssignIfProvided(value => address.StateOrProvince = value, GetValue(row, headers, "County"));
+        AssignIfProvided(value => address.ZipOrPostalCode = value, GetValue(row, headers, "Postcode"));
+        AssignIfProvided(value => address.CountryId = value, GetValue(row, headers, "Country"));
+        address.IsVerified = address.IsVerified || import.Source.IsAuthoritative;
+        address.LastUpdatedBy = "hosted-services";
+        address.LastUpdated = now;
+    }
+
+    static Company CreateCompany(Import import, Guid? addressId, string[] row, IReadOnlyDictionary<string, int> headers, DateTimeOffset now)
     {
         string companyNumber = Normalize(GetValue(row, headers, "CompanyNumber"));
         string vatNumber = Normalize(GetValue(row, headers, "VatNumber"));
@@ -289,7 +320,6 @@ public sealed class ImportProcessingService(
             CompanyStatus = Normalize(GetValue(row, headers, "Status")),
             PrimarySicCodes = Normalize(GetValue(row, headers, "SicCodes")),
             WebsiteUrl = Normalize(GetValue(row, headers, "Website")),
-            RegisteredOfficeText = BuildAddressText(row, headers),
             ResearchSummary = "Awaiting automated research.",
             VerificationNotes = import.Source.IsAuthoritative ? $"Imported from authoritative source {import.Source.Name}" : null,
             RankingScore = rankingScore,
@@ -357,7 +387,6 @@ public sealed class ImportProcessingService(
             RawWebsiteUrl = Normalize(GetValue(row, headers, "Website")),
             RawContactEmailAddress = Normalize(GetValue(row, headers, "ContactEmail")),
             RawContactPhoneNumber = Normalize(GetValue(row, headers, "ContactPhone")),
-            RawAddressText = BuildAddressText(row, headers),
             QualificationNotes = import.UserInstructions,
             RankingScore = rankingScore,
             RankingRationale = BuildRankingRationale(rankingScore, row, headers),
@@ -533,16 +562,11 @@ public sealed class ImportProcessingService(
             : value;
     }
 
-    static string BuildAddressText(string[] row, IReadOnlyDictionary<string, int> headers) =>
-        string.Join(", ", new[]
+    static bool HasAddressData(string[] row, IReadOnlyDictionary<string, int> headers) =>
+        new[]
         {
-            GetValue(row, headers, "AddressLine1"),
-            GetValue(row, headers, "AddressLine2"),
-            GetValue(row, headers, "TownOrCity"),
-            GetValue(row, headers, "County"),
-            GetValue(row, headers, "Postcode"),
-            GetValue(row, headers, "Country")
-        }.Where(value => !string.IsNullOrWhiteSpace(value)));
+            "AddressLine1", "AddressLine2", "TownOrCity", "County", "Postcode", "Country"
+        }.Any(column => !string.IsNullOrWhiteSpace(GetValue(row, headers, column)));
 
     static int CalculateRankingScore(string[] row, IReadOnlyDictionary<string, int> headers)
     {

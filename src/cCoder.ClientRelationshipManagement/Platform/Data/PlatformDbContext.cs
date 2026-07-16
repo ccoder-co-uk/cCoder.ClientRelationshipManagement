@@ -21,6 +21,7 @@ public class PlatformDbContext(
     public DbSet<Import> Imports { get; set; }
     public DbSet<ImportLink> ImportLinks { get; set; }
     public DbSet<Company> Companies { get; set; }
+    public DbSet<CompanyHistoryItem> CompanyHistory { get; set; }
     public DbSet<CompanyContact> CompanyContacts { get; set; }
     public DbSet<Lead> Leads { get; set; }
     public DbSet<LeadContact> LeadContacts { get; set; }
@@ -40,6 +41,9 @@ public class PlatformDbContext(
     public DbSet<ProcessTask> ProcessTasks { get; set; }
     public DbSet<AgentRun> AgentRuns { get; set; }
     public DbSet<AgentMessage> AgentMessages { get; set; }
+    public DbSet<AgentMessageEntry> AgentMessageEntries { get; set; }
+    public DbSet<AgentAutomationSetting> AgentAutomationSettings { get; set; }
+    public DbSet<MailboxMessageRecord> MailboxMessageRecords { get; set; }
 
     public string CurrentUserId =>
         string.IsNullOrWhiteSpace(authInfo?.SSOUserId)
@@ -61,6 +65,7 @@ public class PlatformDbContext(
         ConfigureImport(modelBuilder);
         ConfigureImportLink(modelBuilder);
         ConfigureCompany(modelBuilder);
+        ConfigureCompanyHistory(modelBuilder);
         ConfigureCompanyContact(modelBuilder);
         ConfigureLead(modelBuilder);
         ConfigureLeadContact(modelBuilder);
@@ -80,6 +85,9 @@ public class PlatformDbContext(
         ConfigureProcessTask(modelBuilder);
         ConfigureAgentRun(modelBuilder);
         ConfigureAgentMessage(modelBuilder);
+        ConfigureAgentMessageEntry(modelBuilder);
+        ConfigureAgentAutomationSetting(modelBuilder);
+        ConfigureMailboxMessageRecord(modelBuilder);
     }
 
     static void ConfigureAuditable<TEntity>(ModelBuilder modelBuilder)
@@ -104,6 +112,10 @@ public class PlatformDbContext(
         modelBuilder.Entity<Address>().Property(entity => entity.LegacyId).HasMaxLength(128);
         modelBuilder.Entity<Address>().Property(entity => entity.SourceSystem).HasMaxLength(128);
         modelBuilder.Entity<Address>().Property(entity => entity.CountryId).HasMaxLength(64);
+        modelBuilder.Entity<Address>()
+            .HasIndex(entity => new { entity.SourceSystem, entity.LegacyId })
+            .IsUnique()
+            .HasFilter("[SourceSystem] IS NOT NULL AND [LegacyId] IS NOT NULL");
     }
 
     static void ConfigureSource(ModelBuilder modelBuilder)
@@ -190,6 +202,7 @@ public class PlatformDbContext(
         modelBuilder.Entity<Company>().Property(entity => entity.LegacyId).HasMaxLength(128);
         modelBuilder.Entity<Company>().Property(entity => entity.SourceSystem).HasMaxLength(128);
         modelBuilder.Entity<Company>().Property(entity => entity.SourceRecordId).HasMaxLength(128);
+        modelBuilder.Entity<Company>().Property(entity => entity.AuthorityRecordHash).HasMaxLength(64);
         modelBuilder.Entity<Company>().Property(entity => entity.OfficialName).HasMaxLength(512).IsRequired();
         modelBuilder.Entity<Company>().Property(entity => entity.LegalEntityName).HasMaxLength(512);
         modelBuilder.Entity<Company>().Property(entity => entity.TradingName).HasMaxLength(512);
@@ -205,8 +218,16 @@ public class PlatformDbContext(
         modelBuilder.Entity<Company>().Property(entity => entity.ContactPhoneNumber).HasMaxLength(64);
         modelBuilder.Entity<Company>().Property(entity => entity.RevenueCurrency).HasMaxLength(16);
         modelBuilder.Entity<Company>().Property(entity => entity.RankingRationale).HasMaxLength(2048);
+        modelBuilder.Entity<Company>().Property(entity => entity.ProspectingSuppressedReason).HasMaxLength(2048);
         modelBuilder.Entity<Company>().HasIndex(entity => entity.CompanyNumber);
+        modelBuilder.Entity<Company>().HasIndex(entity => entity.OfficialName);
         modelBuilder.Entity<Company>().HasIndex(entity => entity.VatNumber);
+        modelBuilder.Entity<Company>()
+            .HasIndex(entity => new { entity.SourceSystem, entity.SourceRecordId })
+            .IsUnique()
+            .HasFilter("[SourceSystem] IS NOT NULL AND [SourceRecordId] IS NOT NULL");
+        modelBuilder.Entity<Company>()
+            .HasIndex(entity => new { entity.SourceSystem, entity.IsProspectingSuppressed, entity.RankingScore });
 
         modelBuilder.Entity<Company>()
             .HasOne(entity => entity.RegisteredAddress)
@@ -402,6 +423,10 @@ public class PlatformDbContext(
         ConfigureAuditable<Activity>(modelBuilder);
 
         modelBuilder.Entity<Activity>().Property(entity => entity.LegacyId).HasMaxLength(128);
+        modelBuilder.Entity<Activity>()
+            .HasIndex(entity => entity.LegacyId)
+            .IsUnique()
+            .HasFilter("[LegacyId] IS NOT NULL");
 
         modelBuilder.Entity<Activity>()
             .HasOne(entity => entity.TenantCompanyRelationship)
@@ -558,6 +583,10 @@ public class PlatformDbContext(
 
         modelBuilder.Entity<ProcessStep>().Property(entity => entity.Key).HasMaxLength(128).IsRequired();
         modelBuilder.Entity<ProcessStep>().Property(entity => entity.Name).HasMaxLength(256).IsRequired();
+        modelBuilder.Entity<ProcessStep>().Property(entity => entity.Objective).HasMaxLength(1024);
+        modelBuilder.Entity<ProcessStep>().Property(entity => entity.RequiredFacts).HasMaxLength(2048);
+        modelBuilder.Entity<ProcessStep>().Property(entity => entity.ProducedFacts).HasMaxLength(2048);
+        modelBuilder.Entity<ProcessStep>().Property(entity => entity.ViabilityImpact).HasMaxLength(1024);
         modelBuilder.Entity<ProcessStep>().Property(entity => entity.TaskTitleTemplate).HasMaxLength(512).IsRequired();
 
         modelBuilder.Entity<ProcessStep>()
@@ -592,6 +621,9 @@ public class PlatformDbContext(
     {
         modelBuilder.Entity<ProcessInstance>().ToTable("ProcessInstances", ProcessSchema);
         ConfigureAuditable<ProcessInstance>(modelBuilder);
+
+        modelBuilder.Entity<ProcessInstance>()
+            .HasIndex(entity => new { entity.State, entity.ProcessDefinitionId });
 
         modelBuilder.Entity<ProcessInstance>()
             .HasOne(entity => entity.ProcessDefinition)
@@ -642,6 +674,19 @@ public class PlatformDbContext(
         ConfigureAuditable<ProcessTask>(modelBuilder);
 
         modelBuilder.Entity<ProcessTask>().Property(entity => entity.RenderedTitle).HasMaxLength(512).IsRequired();
+        modelBuilder.Entity<ProcessTask>().Property(entity => entity.AgentClaimedBy).HasMaxLength(256);
+        modelBuilder.Entity<ProcessTask>()
+            .HasIndex(entity => new { entity.State, entity.AgentClaimExpiresOn });
+
+        modelBuilder.Entity<ProcessTask>()
+            .HasIndex(entity => new { entity.State, entity.DueOn })
+            .IncludeProperties(entity => new
+            {
+                entity.LeadId,
+                entity.TenantCompanyRelationshipId,
+                entity.ProcessStepId,
+                entity.RenderedTitle
+            });
 
         modelBuilder.Entity<ProcessTask>()
             .HasOne(entity => entity.ProcessInstance)
@@ -697,6 +742,87 @@ public class PlatformDbContext(
         modelBuilder.Entity<AgentRun>().Property(entity => entity.WorkingDirectory).HasMaxLength(1024);
         modelBuilder.Entity<AgentRun>().Property(entity => entity.Summary).HasMaxLength(4096);
         modelBuilder.Entity<AgentRun>().Property(entity => entity.ErrorMessage).HasMaxLength(4096);
+        modelBuilder.Entity<AgentRun>().Property(entity => entity.ProcessStepKey).HasMaxLength(128);
+        modelBuilder.Entity<AgentRun>().HasIndex(entity => new { entity.Kind, entity.WorkLane, entity.CompletedOn });
+        modelBuilder.Entity<AgentRun>().HasIndex(entity => entity.ProcessTaskId);
+        modelBuilder.Entity<AgentRun>().HasIndex(entity => entity.ProcessStepId);
+    }
+
+    static void ConfigureCompanyHistory(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<CompanyHistoryItem>().ToTable("CompanyHistory", MasterdataSchema);
+        ConfigureAuditable<CompanyHistoryItem>(modelBuilder);
+        modelBuilder.Entity<CompanyHistoryItem>().Property(entity => entity.TenantId).HasMaxLength(128).IsRequired();
+        modelBuilder.Entity<CompanyHistoryItem>().Property(entity => entity.Lane).HasMaxLength(64).IsRequired();
+        modelBuilder.Entity<CompanyHistoryItem>().Property(entity => entity.EventType).HasMaxLength(128).IsRequired();
+        modelBuilder.Entity<CompanyHistoryItem>().Property(entity => entity.Summary).HasMaxLength(1024).IsRequired();
+        modelBuilder.Entity<CompanyHistoryItem>().Property(entity => entity.FactKey).HasMaxLength(128);
+        modelBuilder.Entity<CompanyHistoryItem>().Property(entity => entity.Confidence).HasMaxLength(32);
+        modelBuilder.Entity<CompanyHistoryItem>().Property(entity => entity.SourceType).HasMaxLength(128);
+        modelBuilder.Entity<CompanyHistoryItem>()
+            .HasOne(entity => entity.Company)
+            .WithMany(entity => entity.History)
+            .HasForeignKey(entity => entity.CompanyId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<CompanyHistoryItem>()
+            .HasIndex(entity => new { entity.CompanyId, entity.TenantId, entity.OccurredOn });
+        modelBuilder.Entity<CompanyHistoryItem>()
+            .HasIndex(entity => new { entity.CompanyId, entity.FactKey, entity.OccurredOn });
+        modelBuilder.Entity<CompanyHistoryItem>()
+            .HasIndex(entity => entity.ProcessTaskId);
+    }
+
+    static void ConfigureAgentAutomationSetting(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<AgentAutomationSetting>().ToTable("AgentAutomationSettings", CrmSchema);
+        ConfigureAuditable<AgentAutomationSetting>(modelBuilder);
+
+        modelBuilder.Entity<AgentAutomationSetting>()
+            .Property(entity => entity.UserId)
+            .HasMaxLength(256)
+            .IsRequired();
+
+        modelBuilder.Entity<AgentAutomationSetting>()
+            .Property(entity => entity.SelectedAiProfileKey)
+            .HasMaxLength(128);
+        modelBuilder.Entity<AgentAutomationSetting>().Property(entity => entity.SelectedAiModel).HasMaxLength(256);
+        modelBuilder.Entity<AgentAutomationSetting>().Property(entity => entity.ApprovalAgentConcurrency).HasDefaultValue(2);
+
+        modelBuilder.Entity<AgentAutomationSetting>().Property(entity => entity.LeadAiProfileKey).HasMaxLength(128);
+        modelBuilder.Entity<AgentAutomationSetting>().Property(entity => entity.LeadAiModel).HasMaxLength(256);
+        modelBuilder.Entity<AgentAutomationSetting>().Property(entity => entity.OpportunityAiProfileKey).HasMaxLength(128);
+        modelBuilder.Entity<AgentAutomationSetting>().Property(entity => entity.OpportunityAiModel).HasMaxLength(256);
+        modelBuilder.Entity<AgentAutomationSetting>().Property(entity => entity.ClientAiProfileKey).HasMaxLength(128);
+        modelBuilder.Entity<AgentAutomationSetting>().Property(entity => entity.ClientAiModel).HasMaxLength(256);
+        modelBuilder.Entity<AgentAutomationSetting>().Property(entity => entity.LeadAgentConcurrency).HasDefaultValue(1);
+        modelBuilder.Entity<AgentAutomationSetting>().Property(entity => entity.OpportunityAgentConcurrency).HasDefaultValue(1);
+        modelBuilder.Entity<AgentAutomationSetting>().Property(entity => entity.ClientAgentConcurrency).HasDefaultValue(1);
+
+        modelBuilder.Entity<AgentAutomationSetting>()
+            .HasIndex(entity => entity.UserId)
+            .IsUnique();
+    }
+
+    static void ConfigureMailboxMessageRecord(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<MailboxMessageRecord>().ToTable("MailboxMessageRecords", CrmSchema);
+        ConfigureAuditable<MailboxMessageRecord>(modelBuilder);
+
+        modelBuilder.Entity<MailboxMessageRecord>().Property(entity => entity.ExternalId).HasMaxLength(512).IsRequired();
+        modelBuilder.Entity<MailboxMessageRecord>().Property(entity => entity.InternetMessageId).HasMaxLength(512);
+        modelBuilder.Entity<MailboxMessageRecord>().Property(entity => entity.ConversationId).HasMaxLength(512);
+        modelBuilder.Entity<MailboxMessageRecord>().Property(entity => entity.InReplyTo).HasMaxLength(512);
+        modelBuilder.Entity<MailboxMessageRecord>().Property(entity => entity.References);
+        modelBuilder.Entity<MailboxMessageRecord>().Property(entity => entity.FromAddress).HasMaxLength(320);
+        modelBuilder.Entity<MailboxMessageRecord>().Property(entity => entity.ToAddresses).HasMaxLength(2048);
+        modelBuilder.Entity<MailboxMessageRecord>().Property(entity => entity.CcAddresses).HasMaxLength(2048);
+        modelBuilder.Entity<MailboxMessageRecord>().Property(entity => entity.Subject).HasMaxLength(1024);
+
+        modelBuilder.Entity<MailboxMessageRecord>().HasIndex(entity => entity.ExternalId).IsUnique();
+        modelBuilder.Entity<MailboxMessageRecord>().HasIndex(entity => entity.InternetMessageId);
+        modelBuilder.Entity<MailboxMessageRecord>().HasIndex(entity => entity.ConversationId);
+        modelBuilder.Entity<MailboxMessageRecord>().HasIndex(entity => new { entity.FromAddress, entity.ReceivedOn });
+        modelBuilder.Entity<MailboxMessageRecord>().HasIndex(entity => entity.ReceivedOn);
     }
 
     static void ConfigureAgentMessage(ModelBuilder modelBuilder)
@@ -704,11 +830,13 @@ public class PlatformDbContext(
         modelBuilder.Entity<AgentMessage>().ToTable("AgentMessages", CrmSchema);
         ConfigureAuditable<AgentMessage>(modelBuilder);
 
+        modelBuilder.Entity<AgentMessage>().Property(entity => entity.TenantId).HasMaxLength(128).IsRequired();
         modelBuilder.Entity<AgentMessage>().Property(entity => entity.CorrelationKey).HasMaxLength(256);
         modelBuilder.Entity<AgentMessage>().Property(entity => entity.Title).HasMaxLength(512).IsRequired();
         modelBuilder.Entity<AgentMessage>().Property(entity => entity.AgentName).HasMaxLength(256);
         modelBuilder.Entity<AgentMessage>().Property(entity => entity.RespondedBy).HasMaxLength(256);
         modelBuilder.Entity<AgentMessage>().HasIndex(entity => entity.CorrelationKey);
+        modelBuilder.Entity<AgentMessage>().HasIndex(entity => new { entity.TenantId, entity.State });
 
         modelBuilder.Entity<AgentMessage>()
             .HasOne(entity => entity.AgentRun)
@@ -747,6 +875,14 @@ public class PlatformDbContext(
             .OnDelete(DeleteBehavior.Restrict);
 
         modelBuilder.Entity<AgentMessage>()
+            .HasOne(entity => entity.ProcessStep)
+            .WithMany()
+            .HasForeignKey(entity => entity.ProcessStepId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        modelBuilder.Entity<AgentMessage>().HasIndex(entity => entity.ProcessStepId);
+
+        modelBuilder.Entity<AgentMessage>()
             .HasOne(entity => entity.Email)
             .WithMany()
             .HasForeignKey(entity => entity.EmailId)
@@ -763,5 +899,19 @@ public class PlatformDbContext(
             .WithMany(entity => entity.ProposedMessages)
             .HasForeignKey(entity => entity.ProposedProcessDefinitionId)
             .OnDelete(DeleteBehavior.Restrict);
+    }
+
+    static void ConfigureAgentMessageEntry(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<AgentMessageEntry>().ToTable("AgentMessageEntries", CrmSchema);
+        ConfigureAuditable<AgentMessageEntry>(modelBuilder);
+        modelBuilder.Entity<AgentMessageEntry>().Property(entity => entity.Role).HasMaxLength(32).IsRequired();
+        modelBuilder.Entity<AgentMessageEntry>().Property(entity => entity.Body).IsRequired();
+        modelBuilder.Entity<AgentMessageEntry>().HasIndex(entity => new { entity.AgentMessageId, entity.CreatedOn });
+        modelBuilder.Entity<AgentMessageEntry>()
+            .HasOne(entity => entity.AgentMessage)
+            .WithMany(message => message.Entries)
+            .HasForeignKey(entity => entity.AgentMessageId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }

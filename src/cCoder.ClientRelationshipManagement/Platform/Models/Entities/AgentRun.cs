@@ -5,6 +5,10 @@ namespace cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 public class AgentRun : AuditableEntity
 {
     public AgentRunKind Kind { get; set; }
+    public AgentWorkLane? WorkLane { get; set; }
+    public Guid? ProcessTaskId { get; set; }
+    public Guid? ProcessStepId { get; set; }
+    public string ProcessStepKey { get; set; }
     public AgentRunState State { get; set; }
     public string ExecutionUserId { get; set; }
     public string Provider { get; set; }

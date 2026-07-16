@@ -1,6 +1,13 @@
 @model ClientListPageViewModel
 @{
     ViewData["Title"] = "Clients";
+    string taskFilterLabel = Model.TaskFilter switch
+    {
+        "open" => "Open actions",
+        "due-today" => "Actions due today",
+        "overdue" => "Overdue actions",
+        _ => string.Empty
+    };
 }
 
 <main class="page-shell">
@@ -14,7 +21,11 @@
         </div>
 
         <div class="page-hero__actions">
-            <span class="queue-count">@Model.TotalClients active clients</span>
+            <span class="queue-count">@Model.TotalClients matching clients</span>
+            @if (taskFilterLabel.Length > 0)
+            {
+                <span class="queue-count">@taskFilterLabel</span>
+            }
             <a class="primary-action" href="/Leads">New Lead</a>
         </div>
     </section>
@@ -30,12 +41,20 @@
     <section class="data-panel">
         <div class="section-heading">
             <div>
-                <h2>Clients Page</h2>
+                <h2>Client accounts</h2>
             </div>
-            <a class="secondary-action" href="/Documentation/Pages/Clients-Page">Page Notes</a>
+            <a class="secondary-action" href="/Documentation/Pages/Clients">Page Notes</a>
         </div>
 
         <form method="get" class="filter-bar">
+            @if (!string.IsNullOrWhiteSpace(Model.Scope))
+            {
+                <input type="hidden" name="scope" value="@Model.Scope" />
+            }
+            @if (!string.IsNullOrWhiteSpace(Model.TaskFilter))
+            {
+                <input type="hidden" name="tasks" value="@Model.TaskFilter" />
+            }
             <label class="auth-field">
                 <span>Search</span>
                 <input type="text" name="search" value="@Model.Search" placeholder="Client, owner, lead source, next action" />
@@ -61,7 +80,7 @@
         {
             <div class="empty-state">
                 <strong>No clients are visible in this tenant.</strong>
-                <p>Add a lead or qualify an imported record to start building the working list.</p>
+                <p>Companies appear here only after an opportunity becomes a signed client account.</p>
             </div>
         }
         else
@@ -94,7 +113,7 @@
                                 <td>@(string.IsNullOrWhiteSpace(client.NextAction) ? "None set" : client.NextAction)</td>
                                 <td>@client.NextActionDueLabel</td>
                                 <td class="table-actions">
-                                    <a class="secondary-action" href="/Clients/Edit/@client.Id">View details</a>
+                                    <a class="secondary-action" href="/Clients/Edit/@client.Id">Edit</a>
                                 </td>
                             </tr>
                         }

@@ -48,7 +48,7 @@ public sealed partial class LeadsControllerTests
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.Redirect);
-        response.Headers.Location?.OriginalString.Should().Be("/Imports");
+        response.Headers.Location?.OriginalString.Should().Be("/Admin/Imports");
     }
 
     [CRMAcceptanceFact]

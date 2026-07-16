@@ -1,6 +1,7 @@
 using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using ClientRelationshipManagement.Web.Services.Processes;
 using Microsoft.EntityFrameworkCore;
 
 namespace ClientRelationshipManagement.Web.Services.Agents;
@@ -71,6 +72,10 @@ public sealed class ProcessDraftService(IPlatformDbContextFactory dbContextFacto
                 ProcessDefinitionId = draft.Id,
                 Key = sourceStep.Key,
                 Name = string.IsNullOrWhiteSpace(update?.Name) ? sourceStep.Name : update.Name.Trim(),
+                Objective = update?.Objective ?? sourceStep.Objective,
+                RequiredFacts = update?.RequiredFacts ?? sourceStep.RequiredFacts,
+                ProducedFacts = update?.ProducedFacts ?? sourceStep.ProducedFacts,
+                ViabilityImpact = update?.ViabilityImpact ?? sourceStep.ViabilityImpact,
                 Sequence = sourceStep.Sequence,
                 IsEntryPoint = sourceStep.IsEntryPoint,
                 IsActive = sourceStep.IsActive,
@@ -82,6 +87,7 @@ public sealed class ProcessDraftService(IPlatformDbContextFactory dbContextFacto
                 DueAfterHours = sourceStep.DueAfterHours,
                 TaskTitleTemplate = sourceStep.TaskTitleTemplate,
                 TaskInstructionsTemplate = update?.TaskInstructionsTemplate ?? sourceStep.TaskInstructionsTemplate,
+                EmailRecipientTarget = sourceStep.EmailRecipientTarget,
                 EmailSubjectTemplate = update?.EmailSubjectTemplate ?? sourceStep.EmailSubjectTemplate,
                 EmailBodyTemplate = update?.EmailBodyTemplate ?? sourceStep.EmailBodyTemplate,
                 CallScriptTemplate = update?.CallScriptTemplate ?? sourceStep.CallScriptTemplate,
@@ -149,11 +155,20 @@ public sealed class ProcessDraftService(IPlatformDbContextFactory dbContextFacto
             return null;
 
         Guid familyId = draft.FamilyId ?? draft.Id;
-        List<ProcessDefinition> activeDefinitions = await context.ProcessDefinitions
+        List<ProcessDefinition> familyDefinitions = await context.ProcessDefinitions
             .Where(item =>
-                (item.FamilyId == familyId || item.Id == familyId)
-                && item.LifecycleState == ProcessDefinitionLifecycleState.Active)
+                item.FamilyId == familyId || item.Id == familyId)
             .ToListAsync(cancellationToken);
+        List<ProcessDefinition> activeDefinitions = familyDefinitions
+            .Where(item => item.LifecycleState == ProcessDefinitionLifecycleState.Active)
+            .ToList();
+
+        await ProcessVersionMigration.MoveActiveInstancesAsync(
+            context,
+            draft,
+            [.. familyDefinitions.Where(item => item.Id != draft.Id).Select(item => item.Id)],
+            approvedBy,
+            cancellationToken);
 
         DateTimeOffset now = DateTimeOffset.UtcNow;
         bool shouldRemainDefault = draft.SupersedesProcessDefinitionId.HasValue

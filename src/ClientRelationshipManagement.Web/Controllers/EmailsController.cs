@@ -3,6 +3,7 @@ using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.Security.Objects;
 using ClientRelationshipManagement.Web.Models.Emails;
+using ClientRelationshipManagement.Web.Services.Agents;
 using ClientRelationshipManagement.Web.Services.Mail;
 using ClientRelationshipManagement.Web.Services.Processes;
 using ClientRelationshipManagement.Web.Utilities;
@@ -12,15 +13,18 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ClientRelationshipManagement.Web.Controllers;
 
+[Route("Admin/Emails")]
 public sealed class EmailsController(
     IPlatformDbContextFactory dbContextFactory,
     IEmailDraftWorkflowService emailDraftWorkflowService,
+    IAgentMessageService agentMessageService,
     IWorkflowAutomationService workflowAutomationService,
     ICRMAuthInfo authInfo,
     ISSOAuthInfo ssoAuthInfo)
     : Controller
 {
-    public async Task<IActionResult> Index(string search = null, string state = null)
+    [HttpGet("")]
+    public async Task<IActionResult> Index(string search = null, string state = null, Guid? id = null)
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
@@ -44,6 +48,8 @@ public sealed class EmailsController(
                 ClientMaterialId = email.MaterialId,
                 ClientName = CompanyNames.ResolvePreferredName(email.TenantCompanyRelationship.Company),
                 ToAddresses = email.ToAddresses ?? string.Empty,
+                FromDisplayName = email.FromDisplayName ?? string.Empty,
+                FromEmailAddress = email.FromEmailAddress ?? string.Empty,
                 Subject = email.Subject,
                 Preview = !string.IsNullOrWhiteSpace(email.BodyText)
                     ? email.BodyText
@@ -57,6 +63,9 @@ public sealed class EmailsController(
 
         if (parsedState.HasValue)
             query = query.Where(item => item.State == parsedState.Value);
+
+        if (id.HasValue)
+            query = query.Where(item => item.Id == id.Value);
 
         if (!string.IsNullOrWhiteSpace(search))
         {
@@ -94,6 +103,8 @@ public sealed class EmailsController(
                     ClientName = item.ClientName,
                     StateLabel = DisplayText.Humanize(item.State),
                     ToAddresses = item.ToAddresses,
+                    FromDisplayName = item.FromDisplayName,
+                    FromEmailAddress = item.FromEmailAddress,
                     Subject = item.Subject,
                     Preview = item.Preview,
                     ScheduledSendLabel = item.ScheduledSendTimeUtc == null
@@ -108,13 +119,134 @@ public sealed class EmailsController(
                     CreatedOnLabel = item.CreatedOn.LocalDateTime.ToString("dd MMM yyyy HH:mm"),
                     LastError = item.LastError,
                     CanApprove = item.State is EmailState.Draft or EmailState.Failed,
+                    CanReject = item.State is EmailState.Draft or EmailState.Failed,
                     CanMarkSent = item.State != EmailState.Sent
                 })
             ]
         });
     }
 
-    [HttpPost]
+    [HttpPost("ReviewAndApprove")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ReviewAndApprove(ReviewEmailRequest request, CancellationToken cancellationToken)
+    {
+        if (RedirectIfUnauthenticated() is IActionResult redirect)
+            return redirect;
+
+        if (!ModelState.IsValid || request.ClientId == Guid.Empty || request.EmailId == Guid.Empty)
+        {
+            TempData["EmailsNotice"] = "Add both a subject and email content before approving.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        cCoder.ClientRelationshipManagement.Platform.Models.Entities.Email current;
+        using (PlatformDbContext context = dbContextFactory.CreateDbContext())
+        {
+            current = await context.Emails.AsNoTracking().FirstOrDefaultAsync(item =>
+                item.Id == request.EmailId
+                && item.TenantCompanyRelationshipId == request.ClientId
+                && GetReadableTenantIds().Contains(item.TenantCompanyRelationship.TenantId), cancellationToken);
+        }
+
+        if (current is null)
+            return NotFound();
+
+        var saved = await emailDraftWorkflowService.SaveDraftAsync(new EmailDraftUpsertCommand
+        {
+            ClientId = request.ClientId,
+            EmailId = request.EmailId,
+            ClientMaterialId = current.MaterialId,
+            ClientOpportunityId = current.OpportunityId,
+            ClientAccountId = current.ClientAccountId,
+            Subject = request.Subject,
+            Body = request.Body,
+            ToAddresses = current.ToAddresses,
+            CcAddresses = current.CcAddresses,
+            BccAddresses = current.BccAddresses,
+            ScheduledSendTimeUtc = ToDateTimeOffset(request.ScheduledSendOn)
+        }, cancellationToken);
+
+        var approved = saved is null
+            ? null
+            : await emailDraftWorkflowService.ApproveAsync(request.ClientId, request.EmailId, ToDateTimeOffset(request.ScheduledSendOn), cancellationToken);
+        TempData["EmailsNotice"] = approved is null
+            ? "That email could not be saved and approved."
+            : "Your reviewed changes were saved and the email was approved for sending.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    [HttpPost("Reject")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Reject(RejectEmailRequest request, CancellationToken cancellationToken)
+    {
+        if (RedirectIfUnauthenticated() is IActionResult redirect)
+            return redirect;
+
+        if (!ModelState.IsValid || request.ClientId == Guid.Empty || request.EmailId == Guid.Empty)
+        {
+            TempData["EmailsNotice"] = "A clear rejection reason is required so the approval agent can investigate.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
+        var email = await context.Emails
+            .Include(item => item.Material)
+            .Include(item => item.TenantCompanyRelationship).ThenInclude(item => item.Company)
+            .FirstOrDefaultAsync(item => item.Id == request.EmailId && item.TenantCompanyRelationshipId == request.ClientId, cancellationToken);
+        if (email is null || !GetReadableTenantIds().Contains(email.TenantCompanyRelationship.TenantId))
+            return NotFound();
+
+        var task = await context.ProcessTasks
+            .AsNoTracking()
+            .Include(item => item.ProcessStep)
+            .Include(item => item.ProcessInstance).ThenInclude(item => item.ProcessDefinition)
+            .FirstOrDefaultAsync(item => item.EmailId == email.Id, cancellationToken);
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        email.State = EmailState.Rejected;
+        email.LastError = $"Rejected by {CurrentUserId}: {request.Reason.Trim()}";
+        email.LastUpdatedBy = CurrentUserId;
+        email.LastUpdated = now;
+        if (email.Material is not null)
+        {
+            email.Material.Status = MaterialStatus.Archived;
+            email.Material.LastUpdatedBy = CurrentUserId;
+            email.Material.LastUpdated = now;
+        }
+        await context.SaveChangesAsync(cancellationToken);
+
+        string companyName = CompanyNames.ResolvePreferredName(email.TenantCompanyRelationship.Company);
+        string source = task is null
+            ? "No process-task provenance was found."
+            : $"Process: {task.ProcessInstance.ProcessDefinition.Name}; step: {task.ProcessStep.Name} ({task.ProcessStep.Key}); task: {task.RenderedTitle}.";
+        var conversation = await agentMessageService.UpsertAsync(new cCoder.ClientRelationshipManagement.Platform.Models.Entities.AgentMessage
+        {
+            Id = Guid.NewGuid(),
+            TenantId = email.TenantCompanyRelationship.TenantId,
+            TenantCompanyRelationshipId = email.TenantCompanyRelationshipId,
+            OpportunityId = email.OpportunityId,
+            ClientAccountId = email.ClientAccountId,
+            ProcessTaskId = task?.Id,
+            ProcessStepId = task?.ProcessStepId,
+            EmailId = email.Id,
+            ProcessDefinitionId = task?.ProcessInstance.ProcessDefinitionId,
+            Kind = AgentMessageKind.FeedbackRequest,
+            State = AgentMessageState.Pending,
+            CorrelationKey = $"email-rejection:{email.Id}",
+            Title = $"Review rejected email to {companyName}",
+            Body = $"A human rejected this email and the source process may need refinement. {source}",
+            AgentName = "Approval Agent",
+            CreatedBy = CurrentUserId,
+            LastUpdatedBy = CurrentUserId
+        }, cancellationToken);
+        await agentMessageService.AppendEntryAsync(conversation.Id, "System", $"Rejected email evidence\nFrom: {email.FromDisplayName} <{email.FromEmailAddress}>\nTo: {email.ToAddresses}\nSubject: {email.Subject}\n\n{email.BodyText ?? email.BodyHtml}\n\n{source}", CurrentUserId, cancellationToken);
+        await agentMessageService.AppendEntryAsync(conversation.Id, "User", request.Reason, CurrentUserId, cancellationToken);
+
+        TempData["EmailsNotice"] = "Email rejected. An Approval Agent conversation has been opened with the reason and source details attached.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    [HttpPost("Approve")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Approve(ApproveEmailRequest request)
     {
@@ -136,7 +268,7 @@ public sealed class EmailsController(
         return RedirectToAction(nameof(Index));
     }
 
-    [HttpPost]
+    [HttpPost("MarkSent")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> MarkSent(MarkEmailSentRequest request)
     {
@@ -178,6 +310,8 @@ public sealed class EmailsController(
         return ["default"];
     }
 
+    string CurrentUserId => string.IsNullOrWhiteSpace(ssoAuthInfo?.SSOUserId) ? "system" : ssoAuthInfo.SSOUserId;
+
     static IReadOnlyList<SelectListItem> BuildStateOptions(string selectedValue) =>
     [
         new("All states", string.Empty, string.IsNullOrWhiteSpace(selectedValue)),
@@ -204,6 +338,8 @@ public sealed class EmailsController(
         public Guid? ClientMaterialId { get; init; }
         public string ClientName { get; init; }
         public string ToAddresses { get; init; }
+        public string FromDisplayName { get; init; }
+        public string FromEmailAddress { get; init; }
         public string Subject { get; init; }
         public string Preview { get; init; }
         public EmailState State { get; init; }

@@ -1,0 +1,77 @@
+@model ClientRelationshipManagement.Web.Models.Companies.CompanyExplorerDetailsViewModel
+@{
+    string suffix = Model.Id.ToString("N");
+}
+
+<section class="company-detail" aria-label="Details for @Model.Name">
+    <div class="company-detail__heading">
+        <div>
+            <h2 title="@Model.Name">@Model.Name</h2>
+            <p>@Model.CompanyNumber · @(string.IsNullOrWhiteSpace(Model.Status) ? "Status unknown" : Model.Status)</p>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(Model.RegistryUri))
+        {
+            <a class="secondary-action" href="@Model.RegistryUri" target="_blank" rel="noopener">Open registry</a>
+        }
+    </div>
+
+    <div class="tab-strip company-detail__tabs" role="tablist">
+        <button type="button" class="tab-strip__tab is-active" data-company-tab="overview-@suffix" aria-selected="true">Overview</button>
+        <button type="button" class="tab-strip__tab" data-company-tab="contacts-@suffix" aria-selected="false">Contacts <span class="tab-strip__count">@Model.Contacts.Count</span></button>
+        <button type="button" class="tab-strip__tab" data-company-tab="commercial-@suffix" aria-selected="false">Commercial <span class="tab-strip__count">@Model.CommercialItems.Count</span></button>
+        <button type="button" class="tab-strip__tab" data-company-tab="tasks-@suffix" aria-selected="false">Scheduled work <span class="tab-strip__count">@Model.Tasks.Count</span></button>
+        <button type="button" class="tab-strip__tab" data-company-tab="history-@suffix" aria-selected="false">History <span class="tab-strip__count">@Model.History.Count</span></button>
+    </div>
+
+    <section class="tab-panel" data-company-panel="overview-@suffix">
+        <dl class="company-facts">
+            <div><dt>Legal entity</dt><dd>@(string.IsNullOrWhiteSpace(Model.LegalEntityName) ? Model.Name : Model.LegalEntityName)</dd></div>
+            <div><dt>Trading name</dt><dd>@(string.IsNullOrWhiteSpace(Model.TradingName) ? "—" : Model.TradingName)</dd></div>
+            <div><dt>Category</dt><dd>@(string.IsNullOrWhiteSpace(Model.Category) ? "—" : Model.Category)</dd></div>
+            <div><dt>Country</dt><dd>@(string.IsNullOrWhiteSpace(Model.Country) ? "—" : Model.Country)</dd></div>
+            <div><dt>Registered address</dt><dd>@(string.IsNullOrWhiteSpace(Model.Address) ? "—" : Model.Address)</dd></div>
+            <div><dt>SIC codes</dt><dd>@(string.IsNullOrWhiteSpace(Model.SicCodes) ? "—" : Model.SicCodes)</dd></div>
+            <div><dt>Incorporated</dt><dd>@(Model.IncorporatedOn?.ToLocalTime().ToString("dd MMM yyyy") ?? "—")</dd></div>
+            <div><dt>Dissolved</dt><dd>@(Model.DissolvedOn?.ToLocalTime().ToString("dd MMM yyyy") ?? "—")</dd></div>
+            <div><dt>Employees</dt><dd>@(Model.EmployeeCount?.ToString("N0") ?? "Unknown")</dd></div>
+            <div><dt>Annual revenue</dt><dd>@(Model.AnnualRevenue.HasValue ? $"{Model.RevenueCurrency} {Model.AnnualRevenue.Value:N0}" : "Unknown")</dd></div>
+            <div><dt>Ranking</dt><dd>@(Model.RankingScore?.ToString() ?? "Not ranked")</dd></div>
+            <div><dt>Source</dt><dd>@Model.Source · @Model.SourceRecordId</dd></div>
+            <div><dt>Website</dt><dd>@(string.IsNullOrWhiteSpace(Model.WebsiteUrl) ? "—" : Model.WebsiteUrl)</dd></div>
+            <div><dt>General contact</dt><dd>@(string.IsNullOrWhiteSpace(Model.ContactEmail) ? "—" : Model.ContactEmail) @Model.ContactPhone</dd></div>
+        </dl>
+        @if (!string.IsNullOrWhiteSpace(Model.ResearchSummary) || !string.IsNullOrWhiteSpace(Model.RankingRationale))
+        {
+            <div class="company-detail__notes">
+                @if (!string.IsNullOrWhiteSpace(Model.ResearchSummary)) { <p><strong>Research:</strong> @Model.ResearchSummary</p> }
+                @if (!string.IsNullOrWhiteSpace(Model.RankingRationale)) { <p><strong>Ranking:</strong> @Model.RankingRationale</p> }
+            </div>
+        }
+    </section>
+
+    <section class="tab-panel" data-company-panel="contacts-@suffix" hidden>
+        <div class="table-shell"><table class="crm-table"><thead><tr><th>Name</th><th>Position</th><th>Email</th><th>Phone</th><th>Source</th><th>Flags</th></tr></thead><tbody>
+        @if (Model.Contacts.Count == 0) { <tr><td colspan="6">No company contacts are recorded.</td></tr> }
+        else { @foreach (var contact in Model.Contacts) { <tr><td>@contact.Name</td><td>@contact.Position</td><td>@contact.Email</td><td>@contact.Phone</td><td>@contact.Source</td><td>@(contact.IsPrimary ? "Primary" : "") @(contact.IsVerified ? "Verified" : "")</td></tr> } }
+        </tbody></table></div>
+    </section>
+
+    <section class="tab-panel" data-company-panel="commercial-@suffix" hidden>
+        <div class="table-shell"><table class="crm-table"><thead><tr><th>Type</th><th>Tenant</th><th>Status</th><th>Summary</th><th>Created</th><th></th></tr></thead><tbody>
+        @if (Model.CommercialItems.Count == 0) { <tr><td colspan="6">This company has not entered a commercial workflow.</td></tr> }
+        else { @foreach (var item in Model.CommercialItems) { <tr><td>@item.Kind</td><td>@item.TenantId</td><td>@item.Status</td><td>@item.Summary</td><td>@item.CreatedOn.ToLocalTime().ToString("dd MMM yyyy")</td><td><a href="@item.LinkUrl">Open</a></td></tr> } }
+        </tbody></table></div>
+    </section>
+
+    <section class="tab-panel" data-company-panel="tasks-@suffix" hidden>
+        <div class="table-shell"><table class="crm-table"><thead><tr><th>Lane</th><th>Action</th><th>Type</th><th>State</th><th>Due</th></tr></thead><tbody>
+        @if (Model.Tasks.Count == 0) { <tr><td colspan="5">No scheduled process work is recorded.</td></tr> }
+        else { @foreach (var task in Model.Tasks) { <tr><td>@task.Lane</td><td>@task.Title</td><td>@task.ActionType</td><td>@task.State</td><td>@task.DueOn.ToLocalTime().ToString("dd MMM yyyy HH:mm")</td></tr> } }
+        </tbody></table></div>
+    </section>
+
+    <section class="tab-panel" data-company-panel="history-@suffix" hidden>
+        @if (Model.History.Count == 0) { <div class="empty-state empty-state--compact"><strong>No lifecycle history yet.</strong><p>Process evidence and decisions will appear here.</p></div> }
+        else { <div class="company-history company-history--embedded">@foreach (var item in Model.History) { <article class="company-history__item company-history__item--@item.Lane.ToLowerInvariant()"><time>@item.OccurredOn.ToLocalTime().ToString("dd MMM yyyy HH:mm")</time><div><div class="company-history__meta"><span>@item.Lane</span><span>@item.EventType</span></div><h3>@item.Summary</h3><p>@item.Details</p></div></article> }</div> }
+    </section>
+</section>

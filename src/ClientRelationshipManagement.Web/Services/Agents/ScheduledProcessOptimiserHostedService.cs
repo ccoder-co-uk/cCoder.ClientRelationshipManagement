@@ -21,10 +21,19 @@ public sealed class ScheduledProcessOptimiserHostedService(
             "Scheduled process optimiser hosted service started with interval {IntervalMinutes} minute(s).",
             interval.TotalMinutes);
 
+        try
+        {
+            if (!await timer.WaitForNextTickAsync(stoppingToken))
+                return;
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            return;
+        }
+
         while (!stoppingToken.IsCancellationRequested)
         {
             await RunOnceAsync(stoppingToken);
-
             try
             {
                 if (!await timer.WaitForNextTickAsync(stoppingToken))

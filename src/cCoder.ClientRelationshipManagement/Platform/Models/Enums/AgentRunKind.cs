@@ -4,5 +4,6 @@ public enum AgentRunKind
 {
     TaskAgent = 0,
     ProcessOptimiser = 1,
-    Manual = 2
+    Manual = 2,
+    EmailApprovalAgent = 3
 }

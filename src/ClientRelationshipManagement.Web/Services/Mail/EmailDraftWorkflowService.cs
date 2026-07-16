@@ -25,7 +25,9 @@ public sealed class EmailDraftWorkflowService(
 
         string subject = command.Subject?.Trim() ?? string.Empty;
         string body = command.Body?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(subject) || string.IsNullOrWhiteSpace(body))
+        if (string.IsNullOrWhiteSpace(subject)
+            || string.IsNullOrWhiteSpace(body)
+            || RecipientEmailContentValidator.ContainsInternalDraftingGuidance(body))
             return null;
 
         using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);

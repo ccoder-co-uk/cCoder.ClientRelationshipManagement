@@ -7,7 +7,6 @@ using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using ClientRelationshipManagement.Web.Brokers.Loggings;
 using ClientRelationshipManagement.Web.Configuration;
-using ClientRelationshipManagement.Web.Services.Processes;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -19,14 +18,13 @@ public sealed class AuthorityDataImportService(
     IHostEnvironment environment,
     PlatformConfiguration platformConfiguration,
     IPlatformDbContextFactory dbContextFactory,
-    IWorkflowAutomationService workflowAutomationService,
     IOptions<AuthorityDataOptions> options,
     IOptions<AgentWorkflowOptions> agentWorkflowOptions,
     ILoggingBroker<AuthorityDataImportService> loggingBroker)
     : IAuthorityDataImportService
 {
     const string CompaniesHouseSource = "CompaniesHouse";
-    const string ImportedFromAuthorityPrefix = "Imported from Companies House";
+    const string ImportedFromAuthorityPrefix = "Imported from authority";
     static readonly CultureInfo UkCulture = CultureInfo.GetCultureInfo("en-GB");
 
     public async ValueTask<int> RunPendingImportsAsync(CancellationToken cancellationToken = default)
@@ -129,50 +127,6 @@ public sealed class AuthorityDataImportService(
             cancellationToken);
     }
 
-    async ValueTask<LeadProcessSeedData> GetLeadProcessSeedDataAsync(
-        string tenantId,
-        CancellationToken cancellationToken)
-    {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-
-        ProcessDefinition definition = await context.ProcessDefinitions
-            .AsNoTracking()
-            .Where(item =>
-                item.TenantId == tenantId
-                && item.ScopeType == ProcessScopeType.Lead
-                && (item.LifecycleState == ProcessDefinitionLifecycleState.Active || item.IsActive)
-                && item.IsDefault)
-            .OrderByDescending(item => item.VersionNumber)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (definition is null)
-            return null;
-
-        ProcessStep entryStep = await context.ProcessSteps
-            .AsNoTracking()
-            .Where(item => item.ProcessDefinitionId == definition.Id && item.IsEntryPoint && item.IsActive)
-            .OrderBy(item => item.Sequence)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (entryStep is null)
-            return null;
-
-        return new LeadProcessSeedData
-        {
-            ProcessDefinitionId = definition.Id,
-            EntryStepId = entryStep.Id,
-            ActionType = entryStep.ActionType,
-            DueAfterDays = entryStep.DueAfterDays,
-            DueAfterHours = entryStep.DueAfterHours,
-            TitleTemplate = entryStep.TaskTitleTemplate ?? string.Empty,
-            InstructionsTemplate = entryStep.TaskInstructionsTemplate ?? string.Empty,
-            EmailSubjectTemplate = entryStep.EmailSubjectTemplate ?? string.Empty,
-            EmailBodyTemplate = entryStep.EmailBodyTemplate ?? string.Empty,
-            CallScriptTemplate = entryStep.CallScriptTemplate ?? string.Empty,
-            QuestionSetTemplate = entryStep.QuestionSetTemplate ?? string.Empty
-        };
-    }
-
     async ValueTask<int> ResumePendingStagedBatchesAsync(
         AuthorityDataOptions authorityDataOptions,
         string dropPath,
@@ -209,15 +163,6 @@ public sealed class AuthorityDataImportService(
         AuthorityDataOptions authorityDataOptions,
         CancellationToken cancellationToken)
     {
-        await workflowAutomationService.EnsureSeedProcessesAsync(cancellationToken);
-
-        LeadProcessSeedData leadProcessSeedData = await GetLeadProcessSeedDataAsync(
-            authorityDataOptions.DefaultTenantId,
-            cancellationToken);
-
-        if (leadProcessSeedData is null)
-            throw new InvalidOperationException("The default lead process definition could not be resolved.");
-
         string executionUserId = ResolveExecutionUserId();
         LegacyImportProvenance provenance = await EnsureLegacyImportProvenanceAsync(
             stagedBatch,
@@ -229,7 +174,6 @@ public sealed class AuthorityDataImportService(
             stagedBatch.BatchId,
             stagedBatch.SourceFileName,
             authorityDataOptions,
-            leadProcessSeedData,
             provenance,
             executionUserId,
             cancellationToken);
@@ -251,7 +195,8 @@ public sealed class AuthorityDataImportService(
         using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
 
         Source source = await context.Sources.FirstOrDefaultAsync(
-            item => item.Name == authorityDataOptions.SourceSystem && item.CountryCode == "GB",
+            item => item.Name == authorityDataOptions.SourceSystem
+                && item.CountryCode == authorityDataOptions.SourceCountryCode,
             cancellationToken);
 
         if (source is null)
@@ -261,9 +206,9 @@ public sealed class AuthorityDataImportService(
                 Id = Guid.NewGuid(),
                 Name = authorityDataOptions.SourceSystem,
                 SourceType = SourceType.Authority,
-                CountryCode = "GB",
+                CountryCode = authorityDataOptions.SourceCountryCode,
                 IsAuthoritative = true,
-                Notes = "Companies House authoritative company register import.",
+                Notes = authorityDataOptions.SourceNotes,
                 CreatedBy = executionUserId,
                 LastUpdatedBy = executionUserId,
                 CreatedOn = now,
@@ -436,9 +381,13 @@ public sealed class AuthorityDataImportService(
                     CountryOfOrigin NVARCHAR(256) NULL,
                     DissolutionDate DATE NULL,
                     IncorporationDate DATE NULL,
+                    AccountsCategory NVARCHAR(128) NULL,
+                    AccountsLastMadeUpDate DATE NULL,
+                    NumMortOutstanding INT NULL,
                     SicCodes NVARCHAR(2048) NULL,
                     RegistryUri NVARCHAR(512) NULL,
-                    PreviousNamesJson NVARCHAR(MAX) NULL
+                    PreviousNamesJson NVARCHAR(MAX) NULL,
+                    AuthorityRecordHash CHAR(64) NULL
                 );
 
                 CREATE INDEX IX_CompaniesHouseImportStaging_BatchId
@@ -450,6 +399,18 @@ public sealed class AuthorityDataImportService(
                 ALTER TABLE crm.CompaniesHouseImportStaging
                     ADD StagingRowId BIGINT IDENTITY(1,1) NOT NULL;
             END;
+
+            IF COL_LENGTH(N'crm.CompaniesHouseImportStaging', N'AccountsCategory') IS NULL
+                ALTER TABLE crm.CompaniesHouseImportStaging ADD AccountsCategory NVARCHAR(128) NULL;
+
+            IF COL_LENGTH(N'crm.CompaniesHouseImportStaging', N'AccountsLastMadeUpDate') IS NULL
+                ALTER TABLE crm.CompaniesHouseImportStaging ADD AccountsLastMadeUpDate DATE NULL;
+
+            IF COL_LENGTH(N'crm.CompaniesHouseImportStaging', N'NumMortOutstanding') IS NULL
+                ALTER TABLE crm.CompaniesHouseImportStaging ADD NumMortOutstanding INT NULL;
+
+            IF COL_LENGTH(N'crm.CompaniesHouseImportStaging', N'AuthorityRecordHash') IS NULL
+                ALTER TABLE crm.CompaniesHouseImportStaging ADD AuthorityRecordHash CHAR(64) NULL;
 
             IF NOT EXISTS
             (
@@ -481,6 +442,77 @@ public sealed class AuthorityDataImportService(
             (
                 SELECT 1
                 FROM sys.indexes
+                WHERE object_id = OBJECT_ID(N'leads.Leads')
+                    AND name = N'IX_Leads_AgentSelection'
+            )
+            BEGIN
+                CREATE INDEX IX_Leads_AgentSelection
+                    ON leads.Leads(SourceSystem, RankingScore DESC, Status)
+                    INCLUDE (Id, CompanyId, CreatedOn);
+            END;
+
+            IF NOT EXISTS
+            (
+                SELECT 1
+                FROM sys.indexes
+                WHERE object_id = OBJECT_ID(N'leads.Leads')
+                    AND name = N'IX_Leads_AgentCohort'
+            )
+            BEGIN
+                CREATE INDEX IX_Leads_AgentCohort
+                    ON leads.Leads(SourceSystem, RankingScore DESC, Id);
+            END;
+
+            IF NOT EXISTS
+            (
+                SELECT 1
+                FROM sys.indexes
+                WHERE object_id = OBJECT_ID(N'process.ProcessTasks')
+                    AND name = N'IX_ProcessTasks_AgentQueue'
+            )
+            BEGIN
+                CREATE INDEX IX_ProcessTasks_AgentQueue
+                    ON process.ProcessTasks(State, LeadId, DueOn)
+                    INCLUDE
+                    (
+                        ActionType,
+                        OpportunityId,
+                        ClientAccountId,
+                        TenantCompanyRelationshipId,
+                        EmailId,
+                        ProcessStepId,
+                        RenderedTitle
+                    );
+            END;
+
+            UPDATE lead
+            SET
+                lead.RankingScore =
+                    CASE WHEN LOWER(ISNULL(company.CompanyStatus, '')) = 'active' THEN 40 ELSE 0 END
+                    + CASE
+                        WHEN company.IncorporatedOn <= DATEADD(YEAR, -10, SYSUTCDATETIME()) THEN 15
+                        WHEN company.IncorporatedOn <= DATEADD(YEAR, -5, SYSUTCDATETIME()) THEN 10
+                        WHEN company.IncorporatedOn <= DATEADD(YEAR, -2, SYSUTCDATETIME()) THEN 5
+                        ELSE 0
+                      END
+                    + CASE
+                        WHEN ISNULL(company.PrimarySicCodes, '') LIKE '%99999%'
+                            OR LOWER(ISNULL(company.PrimarySicCodes, '')) LIKE '%dormant%'
+                            OR LOWER(ISNULL(company.PrimarySicCodes, '')) LIKE '%non-trading%'
+                        THEN -100 ELSE 0
+                      END,
+                lead.RankingRationale = 'Companies House fast gate: active status, trading SIC and company age; detailed accounts signals will replace this score on the next authority import.',
+                lead.LastUpdatedBy = @ExecutionUserId,
+                lead.LastUpdated = SYSUTCDATETIME()
+            FROM leads.Leads lead
+            INNER JOIN masterdata.Companies company ON company.Id = lead.CompanyId
+            WHERE lead.SourceSystem = @SourceSystem
+                AND lead.RankingScore IS NULL;
+
+            IF NOT EXISTS
+            (
+                SELECT 1
+                FROM sys.indexes
                 WHERE object_id = OBJECT_ID(N'masterdata.Addresses')
                     AND name = N'IX_Addresses_Source_Legacy'
             )
@@ -490,7 +522,19 @@ public sealed class AuthorityDataImportService(
             END;
             """;
 
-        await ExecuteNonQueryAsync(sql, [], cancellationToken);
+        await ExecuteNonQueryAsync(
+            sql,
+            [
+                new SqlParameter("@SourceSystem", SqlDbType.NVarChar, 128)
+                {
+                    Value = options.Value.SourceSystem
+                },
+                new SqlParameter("@ExecutionUserId", SqlDbType.NVarChar, 256)
+                {
+                    Value = ResolveExecutionUserId()
+                }
+            ],
+            cancellationToken);
     }
 
     async ValueTask BulkStageCompaniesHouseFileAsync(
@@ -558,6 +602,9 @@ public sealed class AuthorityDataImportService(
             dataRow["CountryOfOrigin"] = ToDbValue(GetValue(row, headerLookup, "countryoforigin"));
             dataRow["DissolutionDate"] = ToDbValue(ParseNullableDate(GetValue(row, headerLookup, "dissolutiondate")));
             dataRow["IncorporationDate"] = ToDbValue(ParseNullableDate(GetValue(row, headerLookup, "incorporationdate")));
+            dataRow["AccountsCategory"] = ToDbValue(GetValue(row, headerLookup, "accounts.accountscategory"));
+            dataRow["AccountsLastMadeUpDate"] = ToDbValue(ParseNullableDate(GetValue(row, headerLookup, "accounts.lastmadeupdate")));
+            dataRow["NumMortOutstanding"] = ToDbValue(ParseNullableInt(GetValue(row, headerLookup, "mortgages.nummortoutstanding")));
             dataRow["SicCodes"] = ToDbValue(string.Join(" | ", new[]
             {
                 GetValue(row, headerLookup, "siccode.sictext1"),
@@ -567,6 +614,28 @@ public sealed class AuthorityDataImportService(
             }.Where(value => !string.IsNullOrWhiteSpace(value))));
             dataRow["RegistryUri"] = ToDbValue(GetValue(row, headerLookup, "uri"));
             dataRow["PreviousNamesJson"] = ToDbValue(BuildPreviousNamesJson(row, headerLookup));
+            dataRow["AuthorityRecordHash"] = AuthorityRecordFingerprint.ComputeHex(
+                dataRow["CompanyName"],
+                dataRow["CompanyNumber"],
+                dataRow["RegCareOf"],
+                dataRow["RegPoBox"],
+                dataRow["RegAddressLine1"],
+                dataRow["RegAddressLine2"],
+                dataRow["RegPostTown"],
+                dataRow["RegCounty"],
+                dataRow["RegCountry"],
+                dataRow["RegPostCode"],
+                dataRow["CompanyCategory"],
+                dataRow["CompanyStatus"],
+                dataRow["CountryOfOrigin"],
+                dataRow["DissolutionDate"],
+                dataRow["IncorporationDate"],
+                dataRow["AccountsCategory"],
+                dataRow["AccountsLastMadeUpDate"],
+                dataRow["NumMortOutstanding"],
+                dataRow["SicCodes"],
+                dataRow["RegistryUri"],
+                dataRow["PreviousNamesJson"]);
             dataTable.Rows.Add(dataRow);
             stagedRowCount++;
 
@@ -594,7 +663,6 @@ public sealed class AuthorityDataImportService(
         Guid batchId,
         string sourceFileName,
         AuthorityDataOptions authorityDataOptions,
-        LeadProcessSeedData leadProcessSeedData,
         LegacyImportProvenance provenance,
         string executionUserId,
         CancellationToken cancellationToken)
@@ -630,7 +698,6 @@ public sealed class AuthorityDataImportService(
                 batchId,
                 sourceFileName,
                 authorityDataOptions,
-                leadProcessSeedData,
                 provenance,
                 executionUserId,
                 mergeBatchSize,
@@ -699,7 +766,6 @@ public sealed class AuthorityDataImportService(
         Guid batchId,
         string sourceFileName,
         AuthorityDataOptions authorityDataOptions,
-        LeadProcessSeedData leadProcessSeedData,
         LegacyImportProvenance provenance,
         string executionUserId,
         int mergeBatchSize,
@@ -710,11 +776,10 @@ public sealed class AuthorityDataImportService(
             BEGIN TRANSACTION;
 
             DECLARE @Now DATETIMEOFFSET = SYSUTCDATETIME();
+            DECLARE @ProcessedRowCount INT;
 
             SELECT TOP (@MergeBatchSize)
                 stage.StagingRowId,
-                stage.BatchId,
-                stage.SourceFileName,
                 stage.CompanyName,
                 stage.CompanyNumber,
                 stage.RegCareOf,
@@ -730,138 +795,230 @@ public sealed class AuthorityDataImportService(
                 stage.CountryOfOrigin,
                 stage.DissolutionDate,
                 stage.IncorporationDate,
+                stage.AccountsCategory,
+                stage.AccountsLastMadeUpDate,
+                stage.NumMortOutstanding,
                 stage.SicCodes,
                 stage.RegistryUri,
-                stage.PreviousNamesJson
+                stage.PreviousNamesJson,
+                stage.AuthorityRecordHash
             INTO #BatchSlice
             FROM crm.CompaniesHouseImportStaging stage
             WHERE stage.BatchId = @BatchId
             ORDER BY stage.StagingRowId;
 
-            CREATE CLUSTERED INDEX IX_BatchSlice_StagingRowId
+            SET @ProcessedRowCount = @@ROWCOUNT;
+
+            CREATE UNIQUE CLUSTERED INDEX IX_BatchSlice_StagingRowId
                 ON #BatchSlice(StagingRowId);
 
-            CREATE INDEX IX_BatchSlice_CompanyNumber
-                ON #BatchSlice(CompanyNumber);
-
-            ;WITH StagedAddresses AS
-            (
-                SELECT DISTINCT
-                    NULLIF(LTRIM(RTRIM(CompanyNumber)), '') AS CompanyNumber,
-                    NULLIF(LTRIM(RTRIM(RegPoBox)), '') AS RegPoBox,
-                    NULLIF(LTRIM(RTRIM(RegAddressLine1)), '') AS RegAddressLine1,
-                    NULLIF(LTRIM(RTRIM(CONCAT_WS(', ', NULLIF(LTRIM(RTRIM(RegCareOf)), ''), NULLIF(LTRIM(RTRIM(RegAddressLine2)), '')))), '') AS RegAddressLine2,
-                    NULLIF(LTRIM(RTRIM(RegPostTown)), '') AS RegPostTown,
-                    NULLIF(LTRIM(RTRIM(RegCounty)), '') AS RegCounty,
-                    NULLIF(LTRIM(RTRIM(RegPostCode)), '') AS RegPostCode,
-                    NULLIF(LTRIM(RTRIM(RegCountry)), '') AS RegCountry
-                FROM #BatchSlice
-                WHERE NULLIF(LTRIM(RTRIM(CompanyNumber)), '') IS NOT NULL
-            )
-            INSERT INTO masterdata.Addresses
-            (
-                Id,
-                LegacyId,
-                SourceSystem,
-                IsVerified,
-                PoBox,
-                Line1,
-                Line2,
-                TownOrCity,
-                StateOrProvince,
-                ZipOrPostalCode,
-                CountryId,
-                VerificationNotes,
-                CreatedBy,
-                LastUpdatedBy,
-                CreatedOn,
-                LastUpdated
-            )
-            SELECT
-                NEWID(),
-                address.CompanyNumber,
-                @SourceSystem,
-                1,
-                address.RegPoBox,
-                address.RegAddressLine1,
-                address.RegAddressLine2,
-                address.RegPostTown,
-                address.RegCounty,
-                address.RegPostCode,
-                address.RegCountry,
-                CONCAT(@ImportPrefix, ' file ', @SourceFileName),
-                @ExecutionUserId,
-                @ExecutionUserId,
-                @Now,
-                @Now
-            FROM StagedAddresses address
-            WHERE NOT EXISTS
-            (
-                SELECT 1
-                FROM masterdata.Addresses existing
-                WHERE existing.SourceSystem = @SourceSystem
-                    AND existing.LegacyId = address.CompanyNumber
-            );
-
-            ;WITH StagedCompanies AS
+            ;WITH NormalizedRecords AS
             (
                 SELECT
-                    stage.CompanyName,
-                    stage.CompanyNumber,
-                    stage.CompanyCategory,
-                    stage.CompanyStatus,
-                    stage.CountryOfOrigin,
-                    stage.DissolutionDate,
-                    stage.IncorporationDate,
-                    stage.SicCodes,
-                    stage.RegistryUri,
-                    stage.PreviousNamesJson,
-                    NULLIF(LTRIM(RTRIM(CONCAT_WS(', ',
-                        NULLIF(LTRIM(RTRIM(stage.RegAddressLine1)), ''),
-                        NULLIF(LTRIM(RTRIM(stage.RegAddressLine2)), ''),
-                        NULLIF(LTRIM(RTRIM(stage.RegPostTown)), ''),
-                        NULLIF(LTRIM(RTRIM(stage.RegCounty)), ''),
-                        NULLIF(LTRIM(RTRIM(stage.RegPostCode)), ''),
-                        NULLIF(LTRIM(RTRIM(stage.RegCountry)), '')))), '') AS RegisteredOfficeText,
-                    address.Id AS RegisteredAddressId
+                    stage.*,
+                    ROW_NUMBER() OVER
+                    (
+                        PARTITION BY NULLIF(LTRIM(RTRIM(stage.CompanyNumber)), '')
+                        ORDER BY stage.StagingRowId DESC
+                    ) AS AuthorityRecordSequence
                 FROM #BatchSlice stage
-                OUTER APPLY
-                (
-                    SELECT TOP 1 existing.Id
-                    FROM masterdata.Addresses existing
-                    WHERE existing.SourceSystem = @SourceSystem
-                        AND existing.LegacyId = NULLIF(LTRIM(RTRIM(stage.CompanyNumber)), '')
-                ) address
                 WHERE NULLIF(LTRIM(RTRIM(stage.CompanyNumber)), '') IS NOT NULL
             )
-            MERGE masterdata.Companies AS target
-            USING StagedCompanies AS source
-            ON target.CompanyNumber = source.CompanyNumber
-            WHEN MATCHED THEN UPDATE SET
-                target.SourceSystem = @SourceSystem,
-                target.SourceRecordId = source.CompanyNumber,
-                target.IsVerified = 1,
-                target.OfficialName = COALESCE(NULLIF(source.CompanyName, ''), target.OfficialName),
-                target.LegalEntityName = COALESCE(NULLIF(source.CompanyName, ''), target.LegalEntityName),
-                target.CompanyCategory = source.CompanyCategory,
-                target.CompanyStatus = source.CompanyStatus,
-                target.CountryOfOrigin = source.CountryOfOrigin,
-                target.IncorporatedOn = source.IncorporationDate,
-                target.DissolvedOn = source.DissolutionDate,
-                target.PrimarySicCodes = source.SicCodes,
-                target.RegistryUri = source.RegistryUri,
-                target.PreviousNamesJson = source.PreviousNamesJson,
-                target.RegisteredOfficeText = source.RegisteredOfficeText,
-                target.RegisteredAddressId = COALESCE(source.RegisteredAddressId, target.RegisteredAddressId),
-                target.VerificationNotes = CONCAT(@ImportPrefix, ' file ', @SourceFileName),
-                target.LastUpdatedBy = @ExecutionUserId,
-                target.LastUpdated = @Now
-            WHEN NOT MATCHED THEN INSERT
+            SELECT
+                NULLIF(LTRIM(RTRIM(record.CompanyNumber)), '') AS SourceRecordId,
+                record.CompanyName,
+                record.CompanyCategory,
+                record.CompanyStatus,
+                record.CountryOfOrigin,
+                record.DissolutionDate,
+                record.IncorporationDate,
+                record.SicCodes,
+                record.RegistryUri,
+                record.PreviousNamesJson,
+                NULLIF(LTRIM(RTRIM(record.RegPoBox)), '') AS RegPoBox,
+                NULLIF(LTRIM(RTRIM(record.RegAddressLine1)), '') AS RegAddressLine1,
+                NULLIF(LTRIM(RTRIM(CONCAT_WS(', ',
+                    NULLIF(LTRIM(RTRIM(record.RegCareOf)), ''),
+                    NULLIF(LTRIM(RTRIM(record.RegAddressLine2)), '')))), '') AS RegAddressLine2,
+                NULLIF(LTRIM(RTRIM(record.RegPostTown)), '') AS RegPostTown,
+                NULLIF(LTRIM(RTRIM(record.RegCounty)), '') AS RegCounty,
+                NULLIF(LTRIM(RTRIM(record.RegPostCode)), '') AS RegPostCode,
+                NULLIF(LTRIM(RTRIM(record.RegCountry)), '') AS RegCountry,
+                COALESCE(record.AuthorityRecordHash, CONVERT(CHAR(64), HASHBYTES('SHA2_256', CONCAT(
+                    ISNULL(record.CompanyName, ''), NCHAR(31),
+                    ISNULL(record.CompanyNumber, ''), NCHAR(31),
+                    ISNULL(record.RegCareOf, ''), NCHAR(31),
+                    ISNULL(record.RegPoBox, ''), NCHAR(31),
+                    ISNULL(record.RegAddressLine1, ''), NCHAR(31),
+                    ISNULL(record.RegAddressLine2, ''), NCHAR(31),
+                    ISNULL(record.RegPostTown, ''), NCHAR(31),
+                    ISNULL(record.RegCounty, ''), NCHAR(31),
+                    ISNULL(record.RegCountry, ''), NCHAR(31),
+                    ISNULL(record.RegPostCode, ''), NCHAR(31),
+                    ISNULL(record.CompanyCategory, ''), NCHAR(31),
+                    ISNULL(record.CompanyStatus, ''), NCHAR(31),
+                    ISNULL(record.CountryOfOrigin, ''), NCHAR(31),
+                    ISNULL(CONVERT(NVARCHAR(10), record.DissolutionDate, 23), ''), NCHAR(31),
+                    ISNULL(CONVERT(NVARCHAR(10), record.IncorporationDate, 23), ''), NCHAR(31),
+                    ISNULL(record.AccountsCategory, ''), NCHAR(31),
+                    ISNULL(CONVERT(NVARCHAR(10), record.AccountsLastMadeUpDate, 23), ''), NCHAR(31),
+                    ISNULL(CONVERT(NVARCHAR(16), record.NumMortOutstanding), ''), NCHAR(31),
+                    ISNULL(record.SicCodes, ''), NCHAR(31),
+                    ISNULL(record.RegistryUri, ''), NCHAR(31),
+                    ISNULL(record.PreviousNamesJson, '')
+                )), 2)) AS AuthorityRecordHash,
+                CASE WHEN LOWER(ISNULL(record.CompanyStatus, '')) = 'active' THEN 40 ELSE 0 END
+                    + CASE
+                        WHEN LOWER(ISNULL(record.AccountsCategory, '')) LIKE '%group%' THEN 35
+                        WHEN LOWER(ISNULL(record.AccountsCategory, '')) LIKE '%full%' THEN 30
+                        WHEN LOWER(ISNULL(record.AccountsCategory, '')) LIKE '%medium%' THEN 25
+                        WHEN LOWER(ISNULL(record.AccountsCategory, '')) LIKE '%small%' THEN 15
+                        WHEN LOWER(ISNULL(record.AccountsCategory, '')) LIKE '%micro%' THEN 5
+                        WHEN LOWER(ISNULL(record.AccountsCategory, '')) LIKE '%dormant%' THEN -100
+                        ELSE 0
+                      END
+                    + CASE
+                        WHEN record.IncorporationDate <= DATEADD(YEAR, -10, @Now) THEN 15
+                        WHEN record.IncorporationDate <= DATEADD(YEAR, -5, @Now) THEN 10
+                        WHEN record.IncorporationDate <= DATEADD(YEAR, -2, @Now) THEN 5
+                        ELSE 0
+                      END
+                    + CASE WHEN record.AccountsLastMadeUpDate >= DATEADD(MONTH, -18, @Now) THEN 10 ELSE 0 END
+                    + CASE
+                        WHEN record.NumMortOutstanding >= 5 THEN 10
+                        WHEN record.NumMortOutstanding > 0 THEN record.NumMortOutstanding * 2
+                        ELSE 0
+                      END
+                    + CASE
+                        WHEN ISNULL(record.SicCodes, '') LIKE '%99999%'
+                            OR LOWER(ISNULL(record.SicCodes, '')) LIKE '%dormant%'
+                            OR LOWER(ISNULL(record.SicCodes, '')) LIKE '%non-trading%'
+                        THEN -100 ELSE 0
+                      END AS RankingScore,
+                CONCAT(
+                    'Authority fast gate. Status: ', ISNULL(record.CompanyStatus, 'unknown'),
+                    '; accounts category: ', ISNULL(record.AccountsCategory, 'unknown'),
+                    '; last accounts: ', ISNULL(CONVERT(NVARCHAR(10), record.AccountsLastMadeUpDate, 23), 'unknown'),
+                    '; outstanding mortgages: ', ISNULL(CONVERT(NVARCHAR(16), record.NumMortOutstanding), 'unknown'),
+                    '; incorporated: ', ISNULL(CONVERT(NVARCHAR(10), record.IncorporationDate, 23), 'unknown'),
+                    '.') AS RankingRationale
+            INTO #AuthorityRecords
+            FROM NormalizedRecords record
+            WHERE record.AuthorityRecordSequence = 1;
+
+            CREATE UNIQUE CLUSTERED INDEX IX_AuthorityRecords_SourceRecordId
+                ON #AuthorityRecords(SourceRecordId);
+
+            UPDATE address
+            SET
+                address.IsVerified = 1,
+                address.PoBox = record.RegPoBox,
+                address.Line1 = record.RegAddressLine1,
+                address.Line2 = record.RegAddressLine2,
+                address.TownOrCity = record.RegPostTown,
+                address.StateOrProvince = record.RegCounty,
+                address.ZipOrPostalCode = record.RegPostCode,
+                address.CountryId = LEFT(record.RegCountry, 64),
+                address.VerificationNotes = CONCAT(@ImportPrefix, ' file ', @SourceFileName),
+                address.LastUpdatedBy = @ExecutionUserId,
+                address.LastUpdated = @Now
+            FROM masterdata.Addresses address
+            INNER JOIN #AuthorityRecords record
+                ON address.SourceSystem = @SourceSystem
+                AND address.LegacyId = record.SourceRecordId
+            LEFT JOIN masterdata.Companies company
+                ON company.SourceSystem = @SourceSystem
+                AND company.SourceRecordId = record.SourceRecordId
+            WHERE company.Id IS NULL
+                OR company.AuthorityRecordHash IS NULL
+                OR company.AuthorityRecordHash <> record.AuthorityRecordHash;
+
+            INSERT INTO masterdata.Addresses
+            (
+                Id, LegacyId, SourceSystem, IsVerified, PoBox, Line1, Line2,
+                TownOrCity, StateOrProvince, ZipOrPostalCode, CountryId,
+                VerificationNotes, CreatedBy, LastUpdatedBy, CreatedOn, LastUpdated
+            )
+            SELECT
+                NEWID(), record.SourceRecordId, @SourceSystem, 1, record.RegPoBox,
+                record.RegAddressLine1, record.RegAddressLine2, record.RegPostTown,
+                record.RegCounty, record.RegPostCode, LEFT(record.RegCountry, 64),
+                CONCAT(@ImportPrefix, ' file ', @SourceFileName),
+                @ExecutionUserId, @ExecutionUserId, @Now, @Now
+            FROM #AuthorityRecords record
+            WHERE COALESCE(
+                    record.RegPoBox,
+                    record.RegAddressLine1,
+                    record.RegAddressLine2,
+                    record.RegPostTown,
+                    record.RegCounty,
+                    record.RegPostCode,
+                    record.RegCountry) IS NOT NULL
+                AND NOT EXISTS
+                (
+                    SELECT 1
+                    FROM masterdata.Addresses address
+                    WHERE address.SourceSystem = @SourceSystem
+                        AND address.LegacyId = record.SourceRecordId
+                );
+
+            UPDATE company
+            SET
+                company.SourceSystem = @SourceSystem,
+                company.SourceRecordId = record.SourceRecordId,
+                company.LastUpdatedBy = @ExecutionUserId,
+                company.LastUpdated = @Now
+            FROM masterdata.Companies company
+            INNER JOIN #AuthorityRecords record
+                ON record.SourceRecordId = company.CompanyNumber
+            WHERE company.SourceSystem IS NULL
+                AND company.SourceRecordId IS NULL
+                AND NOT EXISTS
+                (
+                    SELECT 1
+                    FROM masterdata.Companies keyed
+                    WHERE keyed.SourceSystem = @SourceSystem
+                        AND keyed.SourceRecordId = record.SourceRecordId
+                );
+
+            UPDATE company
+            SET
+                company.IsVerified = 1,
+                company.OfficialName = COALESCE(NULLIF(record.CompanyName, ''), company.OfficialName),
+                company.LegalEntityName = COALESCE(NULLIF(record.CompanyName, ''), company.LegalEntityName),
+                company.CompanyNumber = record.SourceRecordId,
+                company.CompanyCategory = record.CompanyCategory,
+                company.CompanyStatus = record.CompanyStatus,
+                company.CountryOfOrigin = record.CountryOfOrigin,
+                company.IncorporatedOn = record.IncorporationDate,
+                company.DissolvedOn = record.DissolutionDate,
+                company.PrimarySicCodes = record.SicCodes,
+                company.RegistryUri = record.RegistryUri,
+                company.PreviousNamesJson = record.PreviousNamesJson,
+                company.RegisteredAddressId = COALESCE(address.Id, company.RegisteredAddressId),
+                company.VerificationNotes = CONCAT(@ImportPrefix, ' file ', @SourceFileName),
+                company.RankingScore = record.RankingScore,
+                company.RankingRationale = CONCAT(record.RankingRationale, ' Score: ', record.RankingScore, '.'),
+                company.AuthorityRecordHash = record.AuthorityRecordHash,
+                company.LastUpdatedBy = @ExecutionUserId,
+                company.LastUpdated = @Now
+            FROM masterdata.Companies company
+            INNER JOIN #AuthorityRecords record
+                ON company.SourceSystem = @SourceSystem
+                AND company.SourceRecordId = record.SourceRecordId
+            LEFT JOIN masterdata.Addresses address
+                ON address.SourceSystem = @SourceSystem
+                AND address.LegacyId = record.SourceRecordId
+            WHERE company.AuthorityRecordHash IS NULL
+                OR company.AuthorityRecordHash <> record.AuthorityRecordHash;
+
+            INSERT INTO masterdata.Companies
             (
                 Id,
                 LegacyId,
                 SourceSystem,
                 SourceRecordId,
+                AuthorityRecordHash,
                 IsVerified,
                 OfficialName,
                 LegalEntityName,
@@ -879,344 +1036,89 @@ public sealed class AuthorityDataImportService(
                 WebsiteUrl,
                 ContactEmailAddress,
                 ContactPhoneNumber,
-                RegisteredOfficeText,
                 ResearchSummary,
                 VerificationNotes,
+                AnnualRevenue,
+                RevenueCurrency,
+                EmployeeCount,
+                RankingScore,
+                RankingRationale,
+                IsProspectingSuppressed,
+                ProspectingSuppressedReason,
+                ProspectingSuppressedOn,
                 RegisteredAddressId,
                 CreatedBy,
                 LastUpdatedBy,
                 CreatedOn,
                 LastUpdated
             )
-            VALUES
-            (
+            SELECT
                 NEWID(),
                 NULL,
                 @SourceSystem,
-                source.CompanyNumber,
+                record.SourceRecordId,
+                record.AuthorityRecordHash,
                 1,
-                COALESCE(NULLIF(source.CompanyName, ''), 'Imported company'),
-                source.CompanyName,
+                COALESCE(NULLIF(record.CompanyName, ''), 'Imported company'),
+                record.CompanyName,
                 NULL,
-                source.CompanyNumber,
+                record.SourceRecordId,
                 NULL,
-                source.CompanyCategory,
-                source.CompanyStatus,
-                source.CountryOfOrigin,
-                source.IncorporationDate,
-                source.DissolutionDate,
-                source.SicCodes,
-                source.RegistryUri,
-                source.PreviousNamesJson,
+                record.CompanyCategory,
+                record.CompanyStatus,
+                record.CountryOfOrigin,
+                record.IncorporationDate,
+                record.DissolutionDate,
+                record.SicCodes,
+                record.RegistryUri,
+                record.PreviousNamesJson,
                 NULL,
                 NULL,
                 NULL,
-                source.RegisteredOfficeText,
                 NULL,
                 CONCAT(@ImportPrefix, ' file ', @SourceFileName),
-                source.RegisteredAddressId,
+                NULL,
+                NULL,
+                NULL,
+                record.RankingScore,
+                CONCAT(record.RankingRationale, ' Score: ', record.RankingScore, '.'),
+                0,
+                NULL,
+                NULL,
+                address.Id,
                 @ExecutionUserId,
                 @ExecutionUserId,
                 @Now,
                 @Now
-            );
-
-            INSERT INTO leads.Leads
-            (
-                Id,
-                SourceSystem,
-                SourceId,
-                SourceRecordId,
-                SourceFileName,
-                TenantId,
-                Status,
-                RawCompanyName,
-                RawTradingName,
-                RawCompanyNumber,
-                RawVatNumber,
-                RawWebsiteUrl,
-                RawContactEmailAddress,
-                RawContactPhoneNumber,
-                RawAddressText,
-                QualificationNotes,
-                CompanyId,
-                TenantCompanyRelationshipId,
-                OpportunityId,
-                CreatedBy,
-                LastUpdatedBy,
-                CreatedOn,
-                LastUpdated
-            )
-            SELECT
-                NEWID(),
-                @SourceSystem,
-                @SourceId,
-                company.CompanyNumber,
-                @SourceFileName,
-                @DefaultTenantId,
-                @LeadStatusImported,
-                company.OfficialName,
-                company.TradingName,
-                company.CompanyNumber,
-                company.VatNumber,
-                company.WebsiteUrl,
-                company.ContactEmailAddress,
-                company.ContactPhoneNumber,
-                company.RegisteredOfficeText,
-                CONCAT_WS(CHAR(10),
-                    CONCAT('Authority source status: ', company.CompanyStatus),
-                    CONCAT('Category: ', company.CompanyCategory),
-                    CONCAT('Origin: ', company.CountryOfOrigin),
-                    CONCAT('SIC: ', company.PrimarySicCodes),
-                    company.RegistryUri),
-                company.Id,
-                NULL,
-                NULL,
-                @ExecutionUserId,
-                @ExecutionUserId,
-                @Now,
-                @Now
-            FROM masterdata.Companies company
-            INNER JOIN #BatchSlice stage
-                ON stage.CompanyNumber = company.CompanyNumber
+            FROM #AuthorityRecords record
+            LEFT JOIN masterdata.Addresses address
+                ON address.SourceSystem = @SourceSystem
+                AND address.LegacyId = record.SourceRecordId
             WHERE NOT EXISTS
             (
                 SELECT 1
-                FROM leads.Leads lead
-                WHERE lead.TenantId = @DefaultTenantId
-                    AND lead.SourceSystem = @SourceSystem
-                    AND lead.SourceRecordId = company.CompanyNumber
+                FROM masterdata.Companies company
+                WHERE company.SourceSystem = @SourceSystem
+                    AND company.SourceRecordId = record.SourceRecordId
             );
 
-            INSERT INTO process.ProcessInstances
-            (
-                Id,
-                ProcessDefinitionId,
-                LeadId,
-                TenantCompanyRelationshipId,
-                OpportunityId,
-                ClientAccountId,
-                CurrentProcessStepId,
-                CurrentProcessTaskId,
-                State,
-                CompletionOutcomeKey,
-                StartedOn,
-                CompletedOn,
-                CreatedBy,
-                LastUpdatedBy,
-                CreatedOn,
-                LastUpdated
-            )
-            SELECT
-                NEWID(),
-                @LeadProcessDefinitionId,
-                lead.Id,
-                NULL,
-                NULL,
-                NULL,
-                @LeadEntryStepId,
-                NULL,
-                @ProcessInstanceStateActive,
-                NULL,
-                @Now,
-                NULL,
-                @ExecutionUserId,
-                @ExecutionUserId,
-                @Now,
-                @Now
-            FROM leads.Leads lead
-            INNER JOIN #BatchSlice stage
-                ON stage.CompanyNumber = lead.SourceRecordId
-            WHERE lead.TenantId = @DefaultTenantId
-                AND lead.SourceSystem = @SourceSystem
-                AND lead.SourceFileName = @SourceFileName
-                AND NOT EXISTS
-                (
-                    SELECT 1
-                    FROM process.ProcessInstances processInstance
-                    WHERE processInstance.LeadId = lead.Id
-                        AND processInstance.State = @ProcessInstanceStateActive
-                );
-
-            INSERT INTO process.ProcessTasks
-            (
-                Id,
-                ProcessInstanceId,
-                ProcessStepId,
-                LeadId,
-                TenantCompanyRelationshipId,
-                OpportunityId,
-                ClientAccountId,
-                EmailId,
-                ActionType,
-                State,
-                DueOn,
-                RenderedTitle,
-                RenderedInstructions,
-                RenderedEmailSubject,
-                RenderedEmailBody,
-                RenderedCallScript,
-                RenderedQuestionSet,
-                CompletionOutcomeKey,
-                CompletionNotes,
-                CompletedOn,
-                CompletedBy,
-                CreatedBy,
-                LastUpdatedBy,
-                CreatedOn,
-                LastUpdated
-            )
-            SELECT
-                NEWID(),
-                processInstance.Id,
-                @LeadEntryStepId,
-                lead.Id,
-                NULL,
-                NULL,
-                NULL,
-                NULL,
-                @LeadEntryActionType,
-                @ProcessTaskStatePending,
-                DATEADD(HOUR, @LeadEntryDueAfterHours, DATEADD(DAY, @LeadEntryDueAfterDays, @Now)),
-                REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(@LeadEntryTitleTemplate,
-                    '{{Lead.RawCompanyName}}', ISNULL(lead.RawCompanyName, '')),
-                    '{{Lead.RawTradingName}}', ISNULL(lead.RawTradingName, '')),
-                    '{{Lead.RawCompanyNumber}}', ISNULL(lead.RawCompanyNumber, '')),
-                    '{{Lead.RawWebsiteUrl}}', ISNULL(lead.RawWebsiteUrl, '')),
-                    '{{Lead.QualificationNotes}}', ISNULL(lead.QualificationNotes, '')),
-                REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(@LeadEntryInstructionsTemplate,
-                    '{{Lead.RawCompanyName}}', ISNULL(lead.RawCompanyName, '')),
-                    '{{Lead.RawTradingName}}', ISNULL(lead.RawTradingName, '')),
-                    '{{Lead.RawCompanyNumber}}', ISNULL(lead.RawCompanyNumber, '')),
-                    '{{Lead.RawWebsiteUrl}}', ISNULL(lead.RawWebsiteUrl, '')),
-                    '{{Lead.QualificationNotes}}', ISNULL(lead.QualificationNotes, '')),
-                REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(@LeadEntryEmailSubjectTemplate,
-                    '{{Lead.RawCompanyName}}', ISNULL(lead.RawCompanyName, '')),
-                    '{{Lead.RawTradingName}}', ISNULL(lead.RawTradingName, '')),
-                    '{{Lead.RawCompanyNumber}}', ISNULL(lead.RawCompanyNumber, '')),
-                    '{{Lead.RawWebsiteUrl}}', ISNULL(lead.RawWebsiteUrl, '')),
-                    '{{Lead.QualificationNotes}}', ISNULL(lead.QualificationNotes, '')),
-                REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(@LeadEntryEmailBodyTemplate,
-                    '{{Lead.RawCompanyName}}', ISNULL(lead.RawCompanyName, '')),
-                    '{{Lead.RawTradingName}}', ISNULL(lead.RawTradingName, '')),
-                    '{{Lead.RawCompanyNumber}}', ISNULL(lead.RawCompanyNumber, '')),
-                    '{{Lead.RawWebsiteUrl}}', ISNULL(lead.RawWebsiteUrl, '')),
-                    '{{Lead.QualificationNotes}}', ISNULL(lead.QualificationNotes, '')),
-                REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(@LeadEntryCallScriptTemplate,
-                    '{{Lead.RawCompanyName}}', ISNULL(lead.RawCompanyName, '')),
-                    '{{Lead.RawTradingName}}', ISNULL(lead.RawTradingName, '')),
-                    '{{Lead.RawCompanyNumber}}', ISNULL(lead.RawCompanyNumber, '')),
-                    '{{Lead.RawWebsiteUrl}}', ISNULL(lead.RawWebsiteUrl, '')),
-                    '{{Lead.QualificationNotes}}', ISNULL(lead.QualificationNotes, '')),
-                REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(@LeadEntryQuestionSetTemplate,
-                    '{{Lead.RawCompanyName}}', ISNULL(lead.RawCompanyName, '')),
-                    '{{Lead.RawTradingName}}', ISNULL(lead.RawTradingName, '')),
-                    '{{Lead.RawCompanyNumber}}', ISNULL(lead.RawCompanyNumber, '')),
-                    '{{Lead.RawWebsiteUrl}}', ISNULL(lead.RawWebsiteUrl, '')),
-                    '{{Lead.QualificationNotes}}', ISNULL(lead.QualificationNotes, '')),
-                NULL,
-                NULL,
-                NULL,
-                NULL,
-                @ExecutionUserId,
-                @ExecutionUserId,
-                @Now,
-                @Now
-            FROM process.ProcessInstances processInstance
-            INNER JOIN leads.Leads lead
-                ON lead.Id = processInstance.LeadId
-            INNER JOIN #BatchSlice stage
-                ON stage.CompanyNumber = lead.SourceRecordId
-            WHERE processInstance.ProcessDefinitionId = @LeadProcessDefinitionId
-                AND processInstance.CurrentProcessStepId = @LeadEntryStepId
-                AND processInstance.State = @ProcessInstanceStateActive
-                AND lead.TenantId = @DefaultTenantId
-                AND lead.SourceSystem = @SourceSystem
-                AND lead.SourceFileName = @SourceFileName
-                AND NOT EXISTS
-                (
-                    SELECT 1
-                    FROM process.ProcessTasks processTask
-                    WHERE processTask.ProcessInstanceId = processInstance.Id
-                        AND processTask.State = @ProcessTaskStatePending
-                );
-
-            UPDATE processInstance
+            UPDATE imported
             SET
-                processInstance.CurrentProcessTaskId = processTask.Id,
-                processInstance.LastUpdatedBy = @ExecutionUserId,
-                processInstance.LastUpdated = @Now
-            FROM process.ProcessInstances processInstance
-            INNER JOIN process.ProcessTasks processTask
-                ON processTask.ProcessInstanceId = processInstance.Id
-                AND processTask.State = @ProcessTaskStatePending
-            INNER JOIN leads.Leads lead
-                ON lead.Id = processInstance.LeadId
-            INNER JOIN #BatchSlice stage
-                ON stage.CompanyNumber = lead.SourceRecordId
-            WHERE processInstance.ProcessDefinitionId = @LeadProcessDefinitionId
-                AND processInstance.CurrentProcessStepId = @LeadEntryStepId
-                AND processInstance.State = @ProcessInstanceStateActive
-                AND processInstance.CurrentProcessTaskId IS NULL
-                AND lead.TenantId = @DefaultTenantId
-                AND lead.SourceSystem = @SourceSystem
-                AND lead.SourceFileName = @SourceFileName;
-
-            UPDATE lead
-            SET
-                lead.SourceId = @SourceId,
-                lead.LastUpdatedBy = @ExecutionUserId,
-                lead.LastUpdated = @Now
-            FROM leads.Leads lead
-            INNER JOIN #BatchSlice stage
-                ON stage.CompanyNumber = lead.SourceRecordId
-            WHERE lead.TenantId = @DefaultTenantId
-                AND lead.SourceSystem = @SourceSystem
-                AND lead.SourceId IS NULL;
-
-            INSERT INTO leads.ImportLinks
-            (
-                Id,
-                ImportId,
-                SourceId,
-                CompanyId,
-                LeadId,
-                CompanyContactId,
-                SourceRowKey,
-                SourceRowNumber,
-                CreatedBy,
-                LastUpdatedBy,
-                CreatedOn,
-                LastUpdated
-            )
-            SELECT
-                NEWID(),
-                @ImportId,
-                @SourceId,
-                company.Id,
-                lead.Id,
-                NULL,
-                company.CompanyNumber,
-                NULL,
-                @ExecutionUserId,
-                @ExecutionUserId,
-                @Now,
-                @Now
-            FROM #BatchSlice stage
-            INNER JOIN masterdata.Companies company
-                ON company.CompanyNumber = stage.CompanyNumber
-            INNER JOIN leads.Leads lead
-                ON lead.TenantId = @DefaultTenantId
-                AND lead.SourceSystem = @SourceSystem
-                AND lead.SourceRecordId = company.CompanyNumber
-            WHERE NOT EXISTS
-            (
-                SELECT 1
-                FROM leads.ImportLinks existing
-                WHERE existing.ImportId = @ImportId
-                    AND existing.SourceId = @SourceId
-                    AND existing.SourceRowKey = company.CompanyNumber
-            );
+                imported.ImportedRowCount = CASE
+                    WHEN CONVERT(BIGINT, imported.ImportedRowCount) + @ProcessedRowCount > 2147483647
+                    THEN 2147483647
+                    ELSE imported.ImportedRowCount + @ProcessedRowCount
+                END,
+                imported.TotalRowCount = CASE
+                    WHEN imported.TotalRowCount < imported.ImportedRowCount + @ProcessedRowCount
+                    THEN imported.ImportedRowCount + @ProcessedRowCount
+                    ELSE imported.TotalRowCount
+                END,
+                imported.ProcessingCheckpoint = CONCAT('authority-merge:', imported.ImportedRowCount + @ProcessedRowCount),
+                imported.LastUpdatedBy = @ExecutionUserId,
+                imported.LastUpdated = @Now
+            FROM leads.Imports imported
+            WHERE imported.Id = @ImportId;
 
             DELETE stage
             FROM crm.CompaniesHouseImportStaging stage
@@ -1226,34 +1128,18 @@ public sealed class AuthorityDataImportService(
             COMMIT TRANSACTION;
             """;
 
-        SqlParameter[] parameters =
-        [
-            new("@BatchId", SqlDbType.UniqueIdentifier) { Value = batchId },
-            new("@ImportId", SqlDbType.UniqueIdentifier) { Value = provenance.ImportId },
-            new("@SourceId", SqlDbType.UniqueIdentifier) { Value = provenance.SourceId },
-            new("@MergeBatchSize", SqlDbType.Int) { Value = mergeBatchSize },
-            new("@SourceFileName", SqlDbType.NVarChar, 256) { Value = sourceFileName },
-            new("@SourceSystem", SqlDbType.NVarChar, 128) { Value = authorityDataOptions.SourceSystem },
-            new("@DefaultTenantId", SqlDbType.NVarChar, 128) { Value = authorityDataOptions.DefaultTenantId },
-            new("@ImportPrefix", SqlDbType.NVarChar, 128) { Value = ImportedFromAuthorityPrefix },
-            new("@ExecutionUserId", SqlDbType.NVarChar, 256) { Value = executionUserId },
-            new("@LeadStatusImported", SqlDbType.Int) { Value = (int)LeadStatus.Imported },
-            new("@ProcessInstanceStateActive", SqlDbType.Int) { Value = (int)ProcessInstanceState.Active },
-            new("@ProcessTaskStatePending", SqlDbType.Int) { Value = (int)ProcessTaskState.Pending },
-            new("@LeadProcessDefinitionId", SqlDbType.UniqueIdentifier) { Value = leadProcessSeedData.ProcessDefinitionId },
-            new("@LeadEntryStepId", SqlDbType.UniqueIdentifier) { Value = leadProcessSeedData.EntryStepId },
-            new("@LeadEntryActionType", SqlDbType.Int) { Value = (int)leadProcessSeedData.ActionType },
-            new("@LeadEntryDueAfterDays", SqlDbType.Int) { Value = leadProcessSeedData.DueAfterDays },
-            new("@LeadEntryDueAfterHours", SqlDbType.Int) { Value = leadProcessSeedData.DueAfterHours },
-            new("@LeadEntryTitleTemplate", SqlDbType.NVarChar, 512) { Value = leadProcessSeedData.TitleTemplate },
-            new("@LeadEntryInstructionsTemplate", SqlDbType.NVarChar, -1) { Value = ToSqlString(leadProcessSeedData.InstructionsTemplate) },
-            new("@LeadEntryEmailSubjectTemplate", SqlDbType.NVarChar, -1) { Value = ToSqlString(leadProcessSeedData.EmailSubjectTemplate) },
-            new("@LeadEntryEmailBodyTemplate", SqlDbType.NVarChar, -1) { Value = ToSqlString(leadProcessSeedData.EmailBodyTemplate) },
-            new("@LeadEntryCallScriptTemplate", SqlDbType.NVarChar, -1) { Value = ToSqlString(leadProcessSeedData.CallScriptTemplate) },
-            new("@LeadEntryQuestionSetTemplate", SqlDbType.NVarChar, -1) { Value = ToSqlString(leadProcessSeedData.QuestionSetTemplate) }
-        ];
-
-        await ExecuteNonQueryAsync(sql, parameters, cancellationToken);
+        await ExecuteNonQueryAsync(
+            sql,
+            [
+                new SqlParameter("@BatchId", SqlDbType.UniqueIdentifier) { Value = batchId },
+                new SqlParameter("@ImportId", SqlDbType.UniqueIdentifier) { Value = provenance.ImportId },
+                new SqlParameter("@MergeBatchSize", SqlDbType.Int) { Value = mergeBatchSize },
+                new SqlParameter("@SourceFileName", SqlDbType.NVarChar, 256) { Value = sourceFileName },
+                new SqlParameter("@SourceSystem", SqlDbType.NVarChar, 128) { Value = authorityDataOptions.SourceSystem },
+                new SqlParameter("@ImportPrefix", SqlDbType.NVarChar, 128) { Value = ImportedFromAuthorityPrefix },
+                new SqlParameter("@ExecutionUserId", SqlDbType.NVarChar, 256) { Value = executionUserId }
+            ],
+            cancellationToken);
     }
 
     async ValueTask BackfillLegacyImportProvenanceAsync(
@@ -1323,7 +1209,11 @@ public sealed class AuthorityDataImportService(
 
             UPDATE imported
             SET
-                imported.ImportedRowCount = provenance.ImportedRowCount,
+                imported.ImportedRowCount = CASE
+                    WHEN imported.ImportedRowCount > provenance.ImportedRowCount
+                    THEN imported.ImportedRowCount
+                    ELSE provenance.ImportedRowCount
+                END,
                 imported.TotalRowCount = CASE
                     WHEN provenance.ImportedRowCount > imported.TotalRowCount THEN provenance.ImportedRowCount
                     ELSE imported.TotalRowCount
@@ -1360,24 +1250,16 @@ public sealed class AuthorityDataImportService(
         const string sql = """
             DECLARE @Now DATETIMEOFFSET = SYSUTCDATETIME();
 
-            UPDATE imported
+            UPDATE leads.Imports
             SET
-                imported.ImportedRowCount = provenance.ImportedRowCount,
-                imported.TotalRowCount = provenance.ImportedRowCount,
-                imported.JobStatus = @CompletedJobStatus,
-                imported.ProcessingStatus = @CompletedProcessingStatus,
-                imported.ProcessingCheckpoint = 'completed',
-                imported.ProcessingCompletedOn = @Now,
-                imported.LastUpdatedBy = @ExecutionUserId,
-                imported.LastUpdated = @Now
-            FROM leads.Imports imported
-            CROSS APPLY
-            (
-                SELECT COUNT_BIG(*) AS ImportedRowCount
-                FROM leads.ImportLinks link
-                WHERE link.ImportId = imported.Id
-            ) provenance
-            WHERE imported.Id = @ImportId;
+                TotalRowCount = ImportedRowCount,
+                JobStatus = @CompletedJobStatus,
+                ProcessingStatus = @CompletedProcessingStatus,
+                ProcessingCheckpoint = 'completed',
+                ProcessingCompletedOn = @Now,
+                LastUpdatedBy = @ExecutionUserId,
+                LastUpdated = @Now
+            WHERE Id = @ImportId;
             """;
 
         await ExecuteNonQueryAsync(
@@ -1458,9 +1340,13 @@ public sealed class AuthorityDataImportService(
         table.Columns.Add("CountryOfOrigin", typeof(string));
         table.Columns.Add("DissolutionDate", typeof(DateTime));
         table.Columns.Add("IncorporationDate", typeof(DateTime));
+        table.Columns.Add("AccountsCategory", typeof(string));
+        table.Columns.Add("AccountsLastMadeUpDate", typeof(DateTime));
+        table.Columns.Add("NumMortOutstanding", typeof(int));
         table.Columns.Add("SicCodes", typeof(string));
         table.Columns.Add("RegistryUri", typeof(string));
         table.Columns.Add("PreviousNamesJson", typeof(string));
+        table.Columns.Add("AuthorityRecordHash", typeof(string));
         return table;
     }
 
@@ -1516,6 +1402,16 @@ public sealed class AuthorityDataImportService(
         return null;
     }
 
+    static int? ParseNullableInt(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed)
+            ? parsed
+            : null;
+    }
+
     static string BuildPreviousNamesJson(string[] row, IReadOnlyDictionary<string, int> headers)
     {
         List<object> previousNames = [];
@@ -1544,6 +1440,9 @@ public sealed class AuthorityDataImportService(
         string.IsNullOrWhiteSpace(value) ? DBNull.Value : value;
 
     static object ToDbValue(DateTime? value) =>
+        value.HasValue ? value.Value : DBNull.Value;
+
+    static object ToDbValue(int? value) =>
         value.HasValue ? value.Value : DBNull.Value;
 
     static object ToSqlString(string value) =>
@@ -1595,21 +1494,6 @@ public sealed class AuthorityDataImportService(
                 return;
             }
         }
-    }
-
-    sealed class LeadProcessSeedData
-    {
-        public Guid ProcessDefinitionId { get; init; }
-        public Guid EntryStepId { get; init; }
-        public ProcessActionType ActionType { get; init; }
-        public int DueAfterDays { get; init; }
-        public int DueAfterHours { get; init; }
-        public string TitleTemplate { get; init; } = string.Empty;
-        public string InstructionsTemplate { get; init; } = string.Empty;
-        public string EmailSubjectTemplate { get; init; } = string.Empty;
-        public string EmailBodyTemplate { get; init; } = string.Empty;
-        public string CallScriptTemplate { get; init; } = string.Empty;
-        public string QuestionSetTemplate { get; init; } = string.Empty;
     }
 
     sealed class StagedBatchInfo

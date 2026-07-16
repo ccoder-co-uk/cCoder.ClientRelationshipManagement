@@ -17,11 +17,10 @@ public class Lead : AuditableEntity
     public string RawWebsiteUrl { get; set; }
     public string RawContactEmailAddress { get; set; }
     public string RawContactPhoneNumber { get; set; }
-    public string RawAddressText { get; set; }
     public string QualificationNotes { get; set; }
     public int? RankingScore { get; set; }
     public string RankingRationale { get; set; }
-    public Guid? CompanyId { get; set; }
+    public Guid CompanyId { get; set; }
     public Guid? TenantCompanyRelationshipId { get; set; }
     public Guid? OpportunityId { get; set; }
 

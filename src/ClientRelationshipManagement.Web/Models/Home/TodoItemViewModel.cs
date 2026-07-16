@@ -8,6 +8,7 @@ public class TodoItemViewModel
     public Guid ClientId { get; init; }
     public string SourceType { get; init; }
     public string SourceLabel { get; init; }
+    public string Lane { get; init; }
     public int SourcePriority { get; init; }
     public string Title { get; init; }
     public string Context { get; init; }
@@ -16,6 +17,7 @@ public class TodoItemViewModel
     public DateTimeOffset DueOn { get; init; }
     public string DueLabel { get; init; }
     public bool IsOverdue { get; init; }
+    public bool IsAgentWorking { get; init; }
     public ProcessActionType? ProcessActionType { get; init; }
     public string ProcessInstructions { get; init; }
     public string ProcessCallScript { get; init; }

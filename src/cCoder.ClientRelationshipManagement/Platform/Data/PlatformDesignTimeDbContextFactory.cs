@@ -17,7 +17,7 @@ public class PlatformDesignTimeDbContextFactory : IDesignTimeDbContextFactory<Pl
 
         DbContextOptions<PlatformDbContext> options =
             new DbContextOptionsBuilder<PlatformDbContext>()
-                .UseSqlServer(connectionString)
+                .UseSqlServer(connectionString, sqlServer => sqlServer.CommandTimeout(600))
                 .Options;
 
         return new PlatformDbContext(

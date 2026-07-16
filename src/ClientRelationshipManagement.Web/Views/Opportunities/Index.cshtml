@@ -1,6 +1,13 @@
 @model OpportunitiesPageViewModel
 @{
     ViewData["Title"] = "Opportunities";
+    string taskFilterLabel = Model.TaskFilter switch
+    {
+        "open" => "Open actions",
+        "due-today" => "Actions due today",
+        "overdue" => "Overdue actions",
+        _ => string.Empty
+    };
 }
 
 <main class="page-shell">
@@ -14,7 +21,11 @@
         </div>
 
         <div class="page-hero__actions">
-            <span class="queue-count">@Model.TotalOpportunities active opportunities</span>
+            <span class="queue-count">@Model.TotalOpportunities matching opportunities</span>
+            @if (taskFilterLabel.Length > 0)
+            {
+                <span class="queue-count">@taskFilterLabel</span>
+            }
         </div>
     </section>
 
@@ -29,11 +40,19 @@
     <section class="data-panel">
         <div class="section-heading">
             <div>
-                <h2>Opportunities Page</h2>
+                <h2>Opportunity pipeline</h2>
             </div>
         </div>
 
         <form method="get" class="filter-bar">
+            @if (!string.IsNullOrWhiteSpace(Model.Scope))
+            {
+                <input type="hidden" name="scope" value="@Model.Scope" />
+            }
+            @if (!string.IsNullOrWhiteSpace(Model.TaskFilter))
+            {
+                <input type="hidden" name="tasks" value="@Model.TaskFilter" />
+            }
             <label class="auth-field">
                 <span>Search</span>
                 <input type="search" name="search" value="@Model.Search" placeholder="Company, contact, type, next action" />
@@ -42,6 +61,11 @@
             <label class="auth-field">
                 <span>Stage</span>
                 <select name="stage" asp-items="Model.StageOptions"></select>
+            </label>
+
+            <label class="auth-field">
+                <span>Relationship</span>
+                <select name="status" asp-items="Model.StatusOptions"></select>
             </label>
 
             <label class="auth-field">
@@ -68,6 +92,7 @@
                 <table class="crm-table">
                     <thead>
                         <tr>
+                            <th class="tree-grid__toggle-column"><span class="sr-only">Expand</span></th>
                             <th>Company</th>
                             <th>Relationship</th>
                             <th>Stage</th>
@@ -77,13 +102,13 @@
                             <th>Probability</th>
                             <th>Next Action</th>
                             <th>Due</th>
-                            <th></th>
                         </tr>
                     </thead>
                     <tbody>
                         @foreach (OpportunityListItemViewModel opportunity in Model.Opportunities)
                         {
                             <tr>
+                                <td class="tree-grid__toggle-cell"><button type="button" class="tree-grid__toggle" data-detail-expand="opportunity-@opportunity.Id" data-detail-url="/Opportunities/@opportunity.Id/Details" aria-expanded="false" aria-label="Expand @opportunity.CompanyName"><span aria-hidden="true"></span></button></td>
                                 <td>@opportunity.CompanyName</td>
                                 <td>@opportunity.RelationshipStatusLabel</td>
                                 <td>@opportunity.StageLabel</td>
@@ -93,10 +118,8 @@
                                 <td>@opportunity.ProbabilityLabel</td>
                                 <td>@(string.IsNullOrWhiteSpace(opportunity.NextAction) ? "None set" : opportunity.NextAction)</td>
                                 <td>@opportunity.NextActionDueLabel</td>
-                                <td class="table-actions">
-                                    <a class="secondary-action" href="/Clients/Edit/@opportunity.ClientId">View client</a>
-                                </td>
                             </tr>
+                            <tr class="tree-grid__detail-row" data-detail-row="opportunity-@opportunity.Id" hidden><td colspan="10"><div class="tree-grid__detail-host" data-detail-host="opportunity-@opportunity.Id"></div></td></tr>
                         }
                     </tbody>
                 </table>
@@ -104,3 +127,35 @@
         }
     </section>
 </main>
+
+<script>
+    (() => {
+        const initialiseTabs = (host) => host.querySelectorAll("[data-detail-tab]").forEach((tab) => tab.addEventListener("click", () => {
+            host.querySelectorAll("[data-detail-tab]").forEach((candidate) => {
+                const active = candidate === tab;
+                candidate.classList.toggle("is-active", active);
+                candidate.setAttribute("aria-selected", active ? "true" : "false");
+            });
+            host.querySelectorAll("[data-detail-panel]").forEach((panel) => panel.hidden = panel.dataset.detailPanel !== tab.dataset.detailTab);
+        }));
+        document.querySelectorAll("[data-detail-expand]").forEach((button) => button.addEventListener("click", async () => {
+            const key = button.dataset.detailExpand;
+            const row = document.querySelector(`[data-detail-row="${key}"]`);
+            const host = row.querySelector("[data-detail-host]");
+            const opening = row.hidden;
+            row.hidden = !opening;
+            button.setAttribute("aria-expanded", opening ? "true" : "false");
+            if (!opening || host.dataset.loaded === "true") return;
+            host.innerHTML = '<p class="crm-muted">Loading details…</p>';
+            try {
+                const response = await fetch(button.dataset.detailUrl, { headers: { "X-Requested-With": "XMLHttpRequest" } });
+                if (!response.ok) throw new Error();
+                host.innerHTML = await response.text();
+                host.dataset.loaded = "true";
+                initialiseTabs(host);
+            } catch {
+                host.innerHTML = '<div class="empty-state empty-state--compact"><strong>Details could not be loaded.</strong><p>Collapse and try again.</p></div>';
+            }
+        }));
+    })();
+</script>

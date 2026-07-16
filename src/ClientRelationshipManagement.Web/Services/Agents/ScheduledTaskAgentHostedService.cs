@@ -1,5 +1,6 @@
 using ClientRelationshipManagement.Web.Brokers.Loggings;
 using ClientRelationshipManagement.Web.Configuration;
+using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using Microsoft.Extensions.Options;
 
 namespace ClientRelationshipManagement.Web.Services.Agents;
@@ -53,11 +54,26 @@ public sealed class ScheduledTaskAgentHostedService(
         {
             loggingBroker.LogInformation("Scheduled task agent hosted service tick started.");
             using IServiceScope scope = serviceScopeFactory.CreateScope();
-            IAgentWorkflowRunner runner = scope.ServiceProvider.GetRequiredService<IAgentWorkflowRunner>();
-            Guid? runId = await runner.RunTaskAgentAsync(cancellationToken);
+            AgentWorkflowOptions workflowOptions = options.Value;
+            IReadOnlyList<AiWorkLaneSelection> lanes = await scope.ServiceProvider
+                .GetRequiredService<IAiProviderSelectionService>()
+                .GetWorkLanesAsync(workflowOptions.ExecutionUserId, cancellationToken);
+            Task<Guid?>[] workers =
+            [
+                .. lanes
+                    .Where(lane => lane.IsEnabled)
+                    .SelectMany(lane => Enumerable.Range(
+                            0,
+                            Math.Min(lane.Concurrency, lane.Profile.MaxConcurrency))
+                        .Select(_ => RunLaneWorkerAsync(lane.Lane, cancellationToken)))
+            ];
+            Guid?[] runIds = workers.Length == 0
+                ? []
+                : await Task.WhenAll(workers);
             loggingBroker.LogInformation(
-                "Scheduled task agent hosted service tick completed. RunId: {RunId}.",
-                runId);
+                "Scheduled task agent hosted service tick completed. Worker count: {WorkerCount}. Run count: {RunCount}.",
+                workers.Length,
+                runIds.Count(runId => runId.HasValue));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -70,5 +86,15 @@ public sealed class ScheduledTaskAgentHostedService(
         {
             Interlocked.Exchange(ref isRunning, 0);
         }
+    }
+
+    async Task<Guid?> RunLaneWorkerAsync(
+        AgentWorkLane lane,
+        CancellationToken cancellationToken)
+    {
+        using IServiceScope scope = serviceScopeFactory.CreateScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<IAgentWorkflowRunner>()
+            .RunTaskAgentAsync(lane, cancellationToken);
     }
 }

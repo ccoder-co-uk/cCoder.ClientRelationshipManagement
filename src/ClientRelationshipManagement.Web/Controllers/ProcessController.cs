@@ -12,13 +12,15 @@ using PlatformEntities = cCoder.ClientRelationshipManagement.Platform.Models.Ent
 
 namespace ClientRelationshipManagement.Web.Controllers;
 
+[Route("Admin/Process")]
 public sealed class ProcessController(
     IPlatformDbContextFactory dbContextFactory,
     IWorkflowAutomationService workflowAutomationService,
+    IProcessValidationService processValidationService,
     ICRMAuthInfo authInfo)
     : Controller
 {
-    [HttpGet]
+    [HttpGet("")]
     public async Task<IActionResult> Index()
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
@@ -30,7 +32,654 @@ public sealed class ProcessController(
         return View(await CreateIndexModelAsync(context));
     }
 
-    [HttpGet]
+    [HttpGet("Designer")]
+    public async Task<IActionResult> Designer(CancellationToken cancellationToken)
+    {
+        if (RedirectIfUnauthenticated() is IActionResult redirect)
+            return redirect;
+
+        await workflowAutomationService.EnsureSeedProcessesAsync(cancellationToken);
+        IReadOnlyCollection<string> tenantIds = GetReadableTenantIds();
+        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
+
+        List<PlatformEntities.ProcessDefinition> definitions = await context.ProcessDefinitions
+            .AsNoTracking()
+            .Where(item => tenantIds.Contains(item.TenantId) && item.IsActive)
+            .Include(item => item.Steps.Where(step => step.IsActive))
+                .ThenInclude(step => step.OutgoingTransitions)
+            .OrderBy(item => item.ScopeType)
+            .ThenBy(item => item.Name)
+            .ToListAsync(cancellationToken);
+        List<Guid> stepIds = [.. definitions.SelectMany(item => item.Steps).Select(item => item.Id)];
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        List<ProcessDesignerStepHealthRow> healthRows = stepIds.Count == 0
+            ? []
+            : await context.ProcessTasks
+                .AsNoTracking()
+                .Where(item => stepIds.Contains(item.ProcessStepId))
+                .GroupBy(item => item.ProcessStepId)
+                .Select(group => new ProcessDesignerStepHealthRow
+                {
+                    StepId = group.Key,
+                    Pending = group.Count(item => item.State == ProcessTaskState.Pending),
+                    Overdue = group.Count(item => item.State == ProcessTaskState.Pending && item.DueOn <= now),
+                    Completed = group.Count(item => item.State == ProcessTaskState.Completed),
+                    Cancelled = group.Count(item => item.State == ProcessTaskState.Cancelled),
+                    AverageMinutes = group
+                        .Where(item => item.CompletedOn.HasValue)
+                        .Average(item => (double?)EF.Functions.DateDiffSecond(item.CreatedOn, item.CompletedOn!.Value) / 60.0)
+                })
+                .ToListAsync(cancellationToken);
+        Dictionary<Guid, ProcessDesignerStepHealthRow> health = healthRows.ToDictionary(item => item.StepId);
+        ProcessValidationResult validation = await processValidationService.ValidateAsync(tenantIds, cancellationToken);
+
+        return View(new ProcessDesignerPageViewModel
+        {
+            ValidatedOn = validation.ValidatedOn,
+            IsValid = validation.IsValid,
+            Issues = validation.Issues,
+            Lanes = definitions.Select(definition => new ProcessDesignerLaneViewModel
+            {
+                ProcessDefinitionId = definition.Id,
+                TenantId = definition.TenantId,
+                ScopeType = definition.ScopeType,
+                Name = definition.Name,
+                Description = definition.Description ?? string.Empty,
+                CssClass = definition.ScopeType switch
+                {
+                    ProcessScopeType.Lead => "process-lane--lead",
+                    ProcessScopeType.Opportunity => "process-lane--opportunity",
+                    _ => "process-lane--client"
+                },
+                Steps = definition.Steps
+                    .OrderBy(step => step.Sequence)
+                    .ThenBy(step => step.Name)
+                    .Select(step =>
+                    {
+                        health.TryGetValue(step.Id, out ProcessDesignerStepHealthRow stepHealth);
+                        return new ProcessDesignerStepViewModel
+                        {
+                            Id = step.Id,
+                            ProcessDefinitionId = step.ProcessDefinitionId,
+                            Key = step.Key,
+                            Name = step.Name,
+                            Sequence = step.Sequence,
+                            IsEntryPoint = step.IsEntryPoint,
+                            ActionType = DisplayText.Humanize(step.ActionType),
+                            Objective = step.Objective ?? string.Empty,
+                            RequiredFacts = step.RequiredFacts ?? string.Empty,
+                            ProducedFacts = step.ProducedFacts ?? string.Empty,
+                            ViabilityImpact = step.ViabilityImpact ?? string.Empty,
+                            Health = new ProcessDesignerStepHealthViewModel
+                            {
+                                Pending = stepHealth?.Pending ?? 0,
+                                Overdue = stepHealth?.Overdue ?? 0,
+                                Completed = stepHealth?.Completed ?? 0,
+                                Cancelled = stepHealth?.Cancelled ?? 0,
+                                AverageTurnaroundMinutes = stepHealth?.AverageMinutes
+                            },
+                            Transitions = step.OutgoingTransitions.Select(transition => new ProcessDesignerTransitionViewModel
+                            {
+                                Id = transition.Id,
+                                NextProcessStepId = transition.NextProcessStepId,
+                                OutcomeLabel = transition.OutcomeLabel,
+                                IsDefault = transition.IsDefaultOutcome,
+                                IsTerminal = transition.IsTerminal
+                            }).ToList()
+                        };
+                    }).ToList()
+            }).ToList()
+        });
+    }
+
+    [HttpGet("WorkflowModel")]
+    public async Task<IActionResult> WorkflowModel(CancellationToken cancellationToken)
+    {
+        if (RedirectIfUnauthenticated() is IActionResult redirect)
+            return redirect;
+
+        Response.Headers.CacheControl = "no-store, no-cache, max-age=0";
+        Response.Headers.Pragma = "no-cache";
+        await workflowAutomationService.EnsureSeedProcessesAsync(cancellationToken);
+        IReadOnlyCollection<string> tenantIds = GetReadableTenantIds();
+        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
+
+        List<PlatformEntities.ProcessDefinition> definitions = await context.ProcessDefinitions
+            .AsNoTracking()
+            .Where(item => tenantIds.Contains(item.TenantId)
+                && item.IsActive
+                && item.LifecycleState == ProcessDefinitionLifecycleState.Active)
+            .Include(item => item.Steps.Where(step => step.IsActive))
+                .ThenInclude(step => step.OutgoingTransitions)
+            .OrderBy(item => item.ScopeType)
+            .ThenByDescending(item => item.IsDefault)
+            .ThenBy(item => item.Name)
+            .ToListAsync(cancellationToken);
+
+        List<Guid> definitionIds = [.. definitions.Select(item => item.Id)];
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        List<WorkflowStepIdentityProjection> stepIdentities = await context.ProcessSteps
+            .AsNoTracking()
+            .Where(step => tenantIds.Contains(step.ProcessDefinition.TenantId)
+                && step.ProcessDefinition.LifecycleState != ProcessDefinitionLifecycleState.Draft)
+            .Select(step => new WorkflowStepIdentityProjection
+            {
+                StepId = step.Id,
+                ProcessDefinitionId = step.ProcessDefinitionId,
+                TenantId = step.ProcessDefinition.TenantId,
+                ScopeType = step.ProcessDefinition.ScopeType,
+                StepKey = step.Key
+            })
+            .ToListAsync(cancellationToken);
+        List<Guid> historicalStepIds = [.. stepIdentities.Select(item => item.StepId)];
+        Dictionary<Guid, WorkflowStepIdentityProjection> stepIdentityById = stepIdentities
+            .ToDictionary(item => item.StepId);
+
+        List<WorkflowStepHealthProjection> healthRows = historicalStepIds.Count == 0
+            ? []
+            : await context.ProcessTasks
+                .AsNoTracking()
+                .Where(item => historicalStepIds.Contains(item.ProcessStepId))
+                .GroupBy(item => item.ProcessStepId)
+                .Select(group => new WorkflowStepHealthProjection
+                {
+                    StepId = group.Key,
+                    Pending = group.Count(item => item.State == ProcessTaskState.Pending),
+                    Running = group.Count(item => item.State == ProcessTaskState.Pending
+                        && item.AgentClaimExpiresOn.HasValue
+                        && item.AgentClaimExpiresOn > now),
+                    Overdue = group.Count(item => item.State == ProcessTaskState.Pending && item.DueOn <= now),
+                    Completed = group.Count(item => item.State == ProcessTaskState.Completed),
+                    Failed = group.Count(item => item.State == ProcessTaskState.Cancelled),
+                    AverageMinutes = group
+                        .Where(item => item.CompletedOn.HasValue)
+                        .Average(item => (double?)EF.Functions.DateDiffSecond(item.CreatedOn, item.CompletedOn!.Value) / 60.0)
+                })
+                .ToListAsync(cancellationToken);
+        Dictionary<string, WorkflowStepHealthProjection> health = healthRows
+            .Where(row => stepIdentityById.ContainsKey(row.StepId))
+            .GroupBy(row => LogicalStepKey(stepIdentityById[row.StepId]), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group =>
+                {
+                    List<double> averages = group
+                        .Where(item => item.AverageMinutes.HasValue)
+                        .Select(item => item.AverageMinutes!.Value)
+                        .ToList();
+                    return new WorkflowStepHealthProjection
+                    {
+                        Pending = group.Sum(item => item.Pending),
+                        Running = group.Sum(item => item.Running),
+                        Overdue = group.Sum(item => item.Overdue),
+                        Completed = group.Sum(item => item.Completed),
+                        Failed = group.Sum(item => item.Failed),
+                        AverageMinutes = averages.Count == 0 ? null : averages.Average()
+                    };
+                },
+                StringComparer.OrdinalIgnoreCase);
+
+        List<WorkflowLaneInstanceProjection> instanceRows = await context.ProcessInstances
+            .AsNoTracking()
+            .Where(item => tenantIds.Contains(item.ProcessDefinition.TenantId)
+                && item.ProcessDefinition.LifecycleState != ProcessDefinitionLifecycleState.Draft)
+            .GroupBy(item => new { item.ProcessDefinition.TenantId, item.ProcessDefinition.ScopeType })
+            .Select(group => new WorkflowLaneInstanceProjection
+            {
+                TenantId = group.Key.TenantId,
+                ScopeType = group.Key.ScopeType,
+                Active = group.Count(item => item.State == ProcessInstanceState.Active),
+                Completed = group.Count(item => item.State == ProcessInstanceState.Completed)
+            })
+            .ToListAsync(cancellationToken);
+        Dictionary<string, WorkflowLaneInstanceProjection> instances = instanceRows
+            .ToDictionary(item => LogicalLaneKey(item.TenantId, item.ScopeType), StringComparer.OrdinalIgnoreCase);
+
+        List<WorkflowCurrentStepProjection> currentStepRows = definitionIds.Count == 0
+            ? []
+            : await context.ProcessInstances
+                .AsNoTracking()
+                .Where(item => definitionIds.Contains(item.ProcessDefinitionId)
+                    && item.State == ProcessInstanceState.Active)
+                .GroupBy(item => new { item.ProcessDefinitionId, item.CurrentProcessStepId })
+                .Select(group => new WorkflowCurrentStepProjection
+                {
+                    ProcessDefinitionId = group.Key.ProcessDefinitionId,
+                    CurrentProcessStepId = group.Key.CurrentProcessStepId,
+                    Count = group.Count()
+                })
+                .ToListAsync(cancellationToken);
+        Dictionary<Guid, int> currentInstancesByStep = currentStepRows
+            .Where(item => item.CurrentProcessStepId.HasValue)
+            .GroupBy(item => item.CurrentProcessStepId!.Value)
+            .ToDictionary(group => group.Key, group => group.Sum(item => item.Count));
+        Dictionary<Guid, int> unmappedInstancesByDefinition = currentStepRows
+            .Where(item => !item.CurrentProcessStepId.HasValue)
+            .GroupBy(item => item.ProcessDefinitionId)
+            .ToDictionary(group => group.Key, group => group.Sum(item => item.Count));
+
+        List<WorkflowTransitionOutcomeProjection> outcomeRows = historicalStepIds.Count == 0
+            ? []
+            : await context.ProcessTasks
+                .AsNoTracking()
+                .Where(item => historicalStepIds.Contains(item.ProcessStepId)
+                    && item.State == ProcessTaskState.Completed
+                    && item.CompletionOutcomeKey != null
+                    && item.CompletionOutcomeKey != string.Empty)
+                .GroupBy(item => new { item.ProcessStepId, item.CompletionOutcomeKey })
+                .Select(group => new WorkflowTransitionOutcomeProjection
+                {
+                    StepId = group.Key.ProcessStepId,
+                    OutcomeKey = group.Key.CompletionOutcomeKey,
+                    Count = group.Count()
+                })
+                .ToListAsync(cancellationToken);
+        Dictionary<string, int> historicalOutcomeCounts = outcomeRows
+            .Where(row => stepIdentityById.ContainsKey(row.StepId))
+            .GroupBy(row => LogicalOutcomeKey(stepIdentityById[row.StepId], row.OutcomeKey), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Sum(item => item.Count), StringComparer.OrdinalIgnoreCase);
+
+        List<WorkflowLeadCompanyProjection> leadRows = await context.Leads
+            .AsNoTracking()
+            .Where(lead => tenantIds.Contains(lead.TenantId))
+            .Select(lead => new WorkflowLeadCompanyProjection
+            {
+                CompanyId = lead.CompanyId,
+                Status = lead.Status,
+                LastUpdated = lead.LastUpdated
+            })
+            .ToListAsync(cancellationToken);
+        Dictionary<Guid, WorkflowLeadCompanyProjection> latestLeads = leadRows
+            .GroupBy(item => item.CompanyId)
+            .ToDictionary(group => group.Key, group => group.OrderByDescending(item => item.LastUpdated).First());
+
+        List<WorkflowOpportunityCompanyProjection> opportunityRows = await context.Opportunities
+            .AsNoTracking()
+            .Where(opportunity => tenantIds.Contains(opportunity.TenantCompanyRelationship.TenantId))
+            .Select(opportunity => new WorkflowOpportunityCompanyProjection
+            {
+                CompanyId = opportunity.TenantCompanyRelationship.CompanyId,
+                Stage = opportunity.Stage,
+                LastUpdated = opportunity.LastUpdated
+            })
+            .ToListAsync(cancellationToken);
+        Dictionary<Guid, WorkflowOpportunityCompanyProjection> latestOpportunities = opportunityRows
+            .GroupBy(item => item.CompanyId)
+            .ToDictionary(group => group.Key, group => group.OrderByDescending(item => item.LastUpdated).First());
+
+        List<WorkflowClientCompanyProjection> clientRows = await context.ClientAccounts
+            .AsNoTracking()
+            .Where(client => tenantIds.Contains(client.TenantCompanyRelationship.TenantId))
+            .Select(client => new WorkflowClientCompanyProjection
+            {
+                CompanyId = client.TenantCompanyRelationship.CompanyId,
+                Status = client.Status,
+                LastUpdated = client.LastUpdated
+            })
+            .ToListAsync(cancellationToken);
+        Dictionary<Guid, WorkflowClientCompanyProjection> latestClients = clientRows
+            .GroupBy(item => item.CompanyId)
+            .ToDictionary(group => group.Key, group => group.OrderByDescending(item => item.LastUpdated).First());
+
+        HashSet<Guid> relationshipCompanyIds = await context.TenantCompanyRelationships
+            .AsNoTracking()
+            .Where(relationship => tenantIds.Contains(relationship.TenantId))
+            .Select(relationship => relationship.CompanyId)
+            .ToHashSetAsync(cancellationToken);
+        HashSet<Guid> clientCompanyIds = [.. latestClients.Keys];
+        HashSet<Guid> opportunityCompanyIds = [.. latestOpportunities.Keys.Where(id => !clientCompanyIds.Contains(id))];
+        HashSet<Guid> leadCompanyIds =
+        [
+            .. latestLeads.Keys.Where(id => !clientCompanyIds.Contains(id) && !opportunityCompanyIds.Contains(id))
+        ];
+        HashSet<Guid> manualRelationshipCompanyIds =
+        [
+            .. relationshipCompanyIds.Where(id => !clientCompanyIds.Contains(id)
+                && !opportunityCompanyIds.Contains(id)
+                && !latestLeads.ContainsKey(id))
+        ];
+        HashSet<Guid> visibleLifecycleCompanyIds =
+        [
+            .. latestLeads.Keys,
+            .. relationshipCompanyIds,
+            .. latestOpportunities.Keys,
+            .. latestClients.Keys
+        ];
+
+        long totalCompanies = await context.Companies.AsNoTracking().LongCountAsync(cancellationToken);
+        long candidateCompanies = await context.Companies.AsNoTracking()
+            .LongCountAsync(company => !company.IsProspectingSuppressed
+                && !company.Relationships.Any()
+                && !context.Leads.Any(lead => lead.CompanyId == company.Id), cancellationToken);
+        long excludedCompanies = await context.Companies.AsNoTracking()
+            .LongCountAsync(company => company.IsProspectingSuppressed
+                && !company.Relationships.Any()
+                && !context.Leads.Any(lead => lead.CompanyId == company.Id), cancellationToken);
+        long unclassifiedCompanies = Math.Max(
+            0,
+            totalCompanies - candidateCompanies - excludedCompanies - visibleLifecycleCompanyIds.Count);
+
+        WorkflowCompanyCoverageViewModel companyCoverage = new()
+        {
+            TotalCompanies = totalCompanies,
+            CandidateCompanies = candidateCompanies,
+            LeadCompanies = leadCompanyIds.Count,
+            OpportunityCompanies = opportunityCompanyIds.Count,
+            ClientCompanies = clientCompanyIds.Count,
+            ExcludedCompanies = excludedCompanies,
+            ManualRelationshipCompanies = manualRelationshipCompanyIds.Count,
+            UnclassifiedCompanies = unclassifiedCompanies
+        };
+
+        long CurrentStateCount(ProcessScopeType scopeType, ProcessTransitionEffect effect) =>
+            (scopeType, effect) switch
+            {
+                (ProcessScopeType.Lead, ProcessTransitionEffect.DeferLead) => latestLeads.Values.Count(item => item.Status == LeadStatus.Deferred),
+                (ProcessScopeType.Lead, ProcessTransitionEffect.RejectLead) => latestLeads.Values.Count(item => item.Status == LeadStatus.Rejected),
+                (ProcessScopeType.Lead, ProcessTransitionEffect.QualifyLeadAndCreateOpportunity) => latestLeads.Values.Count(item => item.Status == LeadStatus.Converted),
+                (ProcessScopeType.Opportunity, ProcessTransitionEffect.CloseOpportunityAsLost) => latestOpportunities.Values.Count(item => item.Stage == SalesPipelineStage.Lost),
+                (ProcessScopeType.Opportunity, ProcessTransitionEffect.CreateClientAccount) => latestClients.Count,
+                (ProcessScopeType.Opportunity, ProcessTransitionEffect.CloseOpportunityAsWon) => latestOpportunities.Values.Count(item => item.Stage == SalesPipelineStage.Won),
+                (ProcessScopeType.ClientAccount, ProcessTransitionEffect.CloseClientAccount) => latestClients.Values.Count(item => item.Status == ClientAccountStatus.Closed),
+                _ => 0
+            };
+
+        Dictionary<string, PlatformEntities.ProcessStep> entrySteps = definitions
+            .GroupBy(item => $"{item.TenantId}|{item.ScopeType}", StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.SelectMany(item => item.Steps)
+                    .OrderByDescending(item => item.IsEntryPoint)
+                    .ThenBy(item => item.Sequence)
+                    .FirstOrDefault(),
+                StringComparer.OrdinalIgnoreCase);
+        Dictionary<Guid, PlatformEntities.ProcessStep> allSteps = definitions
+            .SelectMany(item => item.Steps)
+            .ToDictionary(item => item.Id);
+
+        ProcessValidationResult validation = await processValidationService.ValidateAsync(tenantIds, cancellationToken);
+        WorkflowModelPageViewModel model = new()
+        {
+            GeneratedOn = now,
+            IsValid = validation.IsValid,
+            Issues = validation.Issues,
+            CompanyCoverage = companyCoverage,
+            Processes = definitions.Select(definition =>
+            {
+                instances.TryGetValue(
+                    LogicalLaneKey(definition.TenantId, definition.ScopeType),
+                    out WorkflowLaneInstanceProjection processInstances);
+                unmappedInstancesByDefinition.TryGetValue(definition.Id, out int unmappedInstances);
+                return new WorkflowProcessViewModel
+                {
+                    Id = definition.Id,
+                    TenantId = definition.TenantId,
+                    ScopeType = definition.ScopeType,
+                    VersionNumber = definition.VersionNumber,
+                    Name = definition.Name,
+                    Description = definition.Description ?? string.Empty,
+                    LaneKey = definition.ScopeType switch
+                    {
+                        ProcessScopeType.Lead => "lead",
+                        ProcessScopeType.Opportunity => "opportunity",
+                        _ => "client"
+                    },
+                    LaneLabel = definition.ScopeType switch
+                    {
+                        ProcessScopeType.Lead => "Leads",
+                        ProcessScopeType.Opportunity => "Opportunities",
+                        ProcessScopeType.ClientAccount => "Clients",
+                        _ => DisplayText.Humanize(definition.ScopeType)
+                    },
+                    ActiveInstances = processInstances?.Active ?? 0,
+                    CompletedInstances = processInstances?.Completed ?? 0,
+                    UnmappedActiveInstances = unmappedInstances,
+                    PortalCount = definition.ScopeType switch
+                    {
+                        ProcessScopeType.Lead => companyCoverage.CandidateCompanies,
+                        ProcessScopeType.Opportunity => companyCoverage.OpportunityCompanies,
+                        ProcessScopeType.ClientAccount => companyCoverage.ClientCompanies,
+                        _ => 0
+                    },
+                    Steps = definition.Steps
+                        .OrderBy(step => step.Sequence)
+                        .ThenBy(step => step.Name)
+                        .Select(step =>
+                        {
+                            string logicalStepKey = LogicalStepKey(definition.TenantId, definition.ScopeType, step.Key);
+                            health.TryGetValue(logicalStepKey, out WorkflowStepHealthProjection stepHealth);
+                            currentInstancesByStep.TryGetValue(step.Id, out int currentInstances);
+                            return new WorkflowStepViewModel
+                            {
+                                Id = step.Id,
+                                Key = step.Key,
+                                Name = step.Name,
+                                Sequence = step.Sequence,
+                                IsEntryPoint = step.IsEntryPoint,
+                                ActionType = DisplayText.Humanize(step.ActionType),
+                                Objective = step.Objective ?? string.Empty,
+                                RequiredFacts = step.RequiredFacts ?? string.Empty,
+                                ProducedFacts = step.ProducedFacts ?? string.Empty,
+                                ViabilityImpact = step.ViabilityImpact ?? string.Empty,
+                                TaskTitleTemplate = step.TaskTitleTemplate ?? string.Empty,
+                                TaskInstructionsTemplate = step.TaskInstructionsTemplate ?? string.Empty,
+                                QuestionSetTemplate = step.QuestionSetTemplate ?? string.Empty,
+                                DueAfterDays = step.DueAfterDays,
+                                DueAfterHours = step.DueAfterHours,
+                                StateOnActivate = DescribeState(
+                                    step.RelationshipStatusOnActivate,
+                                    step.SalesStageOnActivate,
+                                    step.ClientAccountStatusOnActivate),
+                                CurrentInstances = currentInstances,
+                                Health = new WorkflowStepHealthViewModel
+                                {
+                                    Pending = stepHealth?.Pending ?? 0,
+                                    Running = stepHealth?.Running ?? 0,
+                                    Overdue = stepHealth?.Overdue ?? 0,
+                                    Completed = stepHealth?.Completed ?? 0,
+                                    Failed = stepHealth?.Failed ?? 0,
+                                    AverageTurnaroundMinutes = stepHealth?.AverageMinutes
+                                },
+                                Transitions = step.OutgoingTransitions
+                                    .OrderByDescending(item => item.IsDefaultOutcome)
+                                    .ThenBy(item => item.OutcomeLabel)
+                                    .Select(transition =>
+                                    {
+                                        allSteps.TryGetValue(transition.NextProcessStepId ?? Guid.Empty, out PlatformEntities.ProcessStep nextStep);
+                                        (string graphTargetId, string destinationLabel) = DescribeDestination(
+                                            transition,
+                                            nextStep,
+                                            entrySteps,
+                                            definition.TenantId);
+                                        historicalOutcomeCounts.TryGetValue(
+                                            LogicalOutcomeKey(definition.TenantId, definition.ScopeType, step.Key, transition.OutcomeKey),
+                                            out int historicalOutcomeCount);
+                                        return new WorkflowTransitionViewModel
+                                        {
+                                            Id = transition.Id,
+                                            OutcomeKey = transition.OutcomeKey,
+                                            OutcomeLabel = transition.OutcomeLabel,
+                                            NextProcessStepId = transition.NextProcessStepId,
+                                            NextStepName = nextStep?.Name ?? string.Empty,
+                                            IsDefault = transition.IsDefaultOutcome,
+                                            IsTerminal = transition.IsTerminal,
+                                            Effect = transition.Effect,
+                                            EffectLabel = DisplayText.Humanize(transition.Effect),
+                                            ResultingState = DescribeState(
+                                                transition.ResultingRelationshipStatus,
+                                                transition.ResultingSalesStage,
+                                                transition.ResultingClientAccountStatus),
+                                            GraphTargetId = graphTargetId,
+                                            DestinationLabel = destinationLabel,
+                                            HistoricalCompletedCount = historicalOutcomeCount,
+                                            CurrentStateCount = CurrentStateCount(definition.ScopeType, transition.Effect)
+                                        };
+                                    })
+                                    .ToList()
+                            };
+                        })
+                        .ToList()
+                };
+            }).ToList()
+        };
+
+        return View(model);
+    }
+
+    static string LogicalLaneKey(string tenantId, ProcessScopeType scopeType) =>
+        $"{tenantId}|{(int)scopeType}";
+
+    static string LogicalStepKey(WorkflowStepIdentityProjection step) =>
+        LogicalStepKey(step.TenantId, step.ScopeType, step.StepKey);
+
+    static string LogicalStepKey(string tenantId, ProcessScopeType scopeType, string stepKey) =>
+        $"{LogicalLaneKey(tenantId, scopeType)}|{stepKey}";
+
+    static string LogicalOutcomeKey(WorkflowStepIdentityProjection step, string outcomeKey) =>
+        LogicalOutcomeKey(step.TenantId, step.ScopeType, step.StepKey, outcomeKey);
+
+    static string LogicalOutcomeKey(
+        string tenantId,
+        ProcessScopeType scopeType,
+        string stepKey,
+        string outcomeKey) =>
+        $"{LogicalStepKey(tenantId, scopeType, stepKey)}|{outcomeKey}";
+
+    static (string GraphTargetId, string DestinationLabel) DescribeDestination(
+        PlatformEntities.ProcessTransition transition,
+        PlatformEntities.ProcessStep nextStep,
+        IReadOnlyDictionary<string, PlatformEntities.ProcessStep> entrySteps,
+        string tenantId)
+    {
+        if (nextStep is not null)
+            return ($"step-{nextStep.Id:N}", nextStep.Name);
+
+        ProcessScopeType? handoffScope = transition.Effect switch
+        {
+            ProcessTransitionEffect.QualifyLeadAndCreateOpportunity => ProcessScopeType.Opportunity,
+            ProcessTransitionEffect.CreateClientAccount => ProcessScopeType.ClientAccount,
+            ProcessTransitionEffect.CloseOpportunityAsWon => ProcessScopeType.ClientAccount,
+            _ => null
+        };
+
+        if (handoffScope.HasValue
+            && entrySteps.TryGetValue($"{tenantId}|{handoffScope.Value}", out PlatformEntities.ProcessStep handoffStep)
+            && handoffStep is not null)
+        {
+            string processLabel = handoffScope == ProcessScopeType.Opportunity
+                ? "Opportunity process"
+                : "Client process";
+            string portal = $"portal-{handoffStep.ProcessDefinitionId:N}";
+            return (portal, $"{processLabel} · {handoffStep.Name}");
+        }
+
+        string destination = transition.Effect == ProcessTransitionEffect.None
+            ? "Process ends"
+            : DisplayText.Humanize(transition.Effect);
+        return ($"exit-{transition.Id:N}", destination);
+    }
+
+    static string DescribeState(
+        RelationshipStatus? relationshipStatus,
+        SalesPipelineStage? salesStage,
+        ClientAccountStatus? clientAccountStatus)
+    {
+        List<string> values = [];
+        if (relationshipStatus.HasValue)
+            values.Add($"Relationship: {DisplayText.Humanize(relationshipStatus.Value)}");
+        if (salesStage.HasValue)
+            values.Add($"Sales stage: {DisplayText.Humanize(salesStage.Value)}");
+        if (clientAccountStatus.HasValue)
+            values.Add($"Client: {DisplayText.Humanize(clientAccountStatus.Value)}");
+        return values.Count == 0 ? "No state change" : string.Join(" · ", values);
+    }
+
+    [HttpPost("ReorderSteps")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ReorderSteps([FromBody] ReorderProcessStepsRequest request, CancellationToken cancellationToken)
+    {
+        if (RedirectIfUnauthenticated() is IActionResult redirect)
+            return redirect;
+
+        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
+        PlatformEntities.ProcessDefinition definition = await context.ProcessDefinitions
+            .FirstOrDefaultAsync(item => item.Id == request.ProcessDefinitionId, cancellationToken);
+        if (definition is null || !GetWriteableTenantIds().Contains(definition.TenantId))
+            return NotFound();
+
+        List<PlatformEntities.ProcessStep> steps = await context.ProcessSteps
+            .Where(item => item.ProcessDefinitionId == definition.Id && item.IsActive)
+            .ToListAsync(cancellationToken);
+        if (request.StepIds.Count != steps.Count || request.StepIds.Distinct().Count() != steps.Count
+            || steps.Any(step => !request.StepIds.Contains(step.Id)))
+            return BadRequest("The reordered list must contain every active step exactly once.");
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        for (int index = 0; index < request.StepIds.Count; index++)
+        {
+            PlatformEntities.ProcessStep step = steps.First(item => item.Id == request.StepIds[index]);
+            step.Sequence = (index + 1) * 10;
+            step.LastUpdatedBy = CurrentUserId;
+            step.LastUpdated = now;
+        }
+
+        await context.SaveChangesAsync(cancellationToken);
+        return Ok();
+    }
+
+    [HttpPost("ConnectSteps")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ConnectSteps([FromBody] ConnectProcessStepsRequest request, CancellationToken cancellationToken)
+    {
+        if (RedirectIfUnauthenticated() is IActionResult redirect)
+            return redirect;
+
+        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
+        PlatformEntities.ProcessDefinition definition = await context.ProcessDefinitions
+            .FirstOrDefaultAsync(item => item.Id == request.ProcessDefinitionId, cancellationToken);
+        if (definition is null || !GetWriteableTenantIds().Contains(definition.TenantId))
+            return NotFound();
+
+        List<PlatformEntities.ProcessStep> steps = await context.ProcessSteps
+            .Where(item => item.ProcessDefinitionId == definition.Id
+                && (item.Id == request.FromStepId || item.Id == request.ToStepId)
+                && item.IsActive)
+            .ToListAsync(cancellationToken);
+        if (steps.Count != 2 || request.FromStepId == request.ToStepId)
+            return BadRequest("Both steps must be active steps in the same lane.");
+
+        bool exists = await context.ProcessTransitions.AnyAsync(item =>
+            item.ProcessStepId == request.FromStepId && item.NextProcessStepId == request.ToStepId,
+            cancellationToken);
+        if (exists)
+            return Ok();
+
+        PlatformEntities.ProcessStep from = steps.First(item => item.Id == request.FromStepId);
+        PlatformEntities.ProcessStep to = steps.First(item => item.Id == request.ToStepId);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        bool hasOutgoing = await context.ProcessTransitions.AnyAsync(item => item.ProcessStepId == from.Id, cancellationToken);
+        context.ProcessTransitions.Add(new PlatformEntities.ProcessTransition
+        {
+            Id = Guid.NewGuid(),
+            ProcessStepId = from.Id,
+            NextProcessStepId = to.Id,
+            OutcomeKey = $"continue-to-{to.Key}"[..Math.Min(128, $"continue-to-{to.Key}".Length)],
+            OutcomeLabel = $"Continue to {to.Name}",
+            IsDefaultOutcome = !hasOutgoing,
+            IsTerminal = false,
+            ProcessStep = from,
+            NextProcessStep = to,
+            CreatedBy = CurrentUserId,
+            LastUpdatedBy = CurrentUserId,
+            CreatedOn = now,
+            LastUpdated = now
+        });
+        await context.SaveChangesAsync(cancellationToken);
+        return Ok();
+    }
+
+    [HttpGet("Edit/{id:guid}")]
     public async Task<IActionResult> Edit(Guid id)
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
@@ -43,7 +692,7 @@ public sealed class ProcessController(
         return model is null ? NotFound() : View(model);
     }
 
-    [HttpPost]
+    [HttpPost("SaveDefinition")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> SaveDefinition(SaveProcessDefinitionRequest request)
     {
@@ -56,6 +705,30 @@ public sealed class ProcessController(
         PlatformEntities.ProcessDefinition definition = request.Id.HasValue
             ? await context.ProcessDefinitions.FirstOrDefaultAsync(item => item.Id == request.Id.Value)
             : null;
+
+        if (definition is not null
+            && definition.IsActive
+            && !request.IsActive
+            && await context.ProcessInstances.AnyAsync(item =>
+                item.ProcessDefinitionId == definition.Id && item.State == ProcessInstanceState.Active))
+        {
+            TempData["ProcessNotice"] = "This is the live graph and cannot be deactivated while companies are following it. Publish an approved replacement version instead.";
+            return RedirectToAction(nameof(Edit), new { id = definition.Id });
+        }
+
+        if (request.IsActive
+            && await context.ProcessDefinitions.AnyAsync(item =>
+                item.Id != (request.Id ?? Guid.Empty)
+                && item.TenantId == tenantId
+                && item.ScopeType == request.ScopeType
+                && item.IsActive
+                && item.LifecycleState == ProcessDefinitionLifecycleState.Active))
+        {
+            TempData["ProcessNotice"] = "A live graph already exists for this lane. Create and approve a replacement version so active companies can be migrated safely.";
+            return request.Id.HasValue
+                ? RedirectToAction(nameof(Edit), new { id = request.Id.Value })
+                : RedirectToAction(nameof(Index));
+        }
 
         if (definition is null)
         {
@@ -113,7 +786,7 @@ public sealed class ProcessController(
         return RedirectToAction(nameof(Edit), new { id = definition.Id });
     }
 
-    [HttpPost]
+    [HttpPost("DeleteDefinition")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> DeleteDefinition(Guid id)
     {
@@ -156,7 +829,7 @@ public sealed class ProcessController(
         return RedirectToAction(nameof(Index));
     }
 
-    [HttpPost]
+    [HttpPost("SaveStep")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> SaveStep(SaveProcessStepRequest request)
     {
@@ -173,6 +846,19 @@ public sealed class ProcessController(
         PlatformEntities.ProcessStep step = request.Id.HasValue
             ? await context.ProcessSteps.FirstOrDefaultAsync(item => item.Id == request.Id.Value)
             : null;
+        bool isExistingStep = step is not null;
+        bool dueOffsetChanged = isExistingStep
+            && (step.DueAfterDays != request.DueAfterDays || step.DueAfterHours != request.DueAfterHours);
+
+        if (isExistingStep
+            && step.IsActive
+            && !request.IsActive
+            && await context.ProcessInstances.AnyAsync(item =>
+                item.CurrentProcessStepId == step.Id && item.State == ProcessInstanceState.Active))
+        {
+            TempData["ProcessNotice"] = "This node has active companies and cannot be disabled. Publish a replacement graph with a safe mapping for the active work.";
+            return RedirectToAction(nameof(Edit), new { id = request.ProcessDefinitionId });
+        }
 
         if (step is null)
         {
@@ -189,6 +875,10 @@ public sealed class ProcessController(
         step.ProcessDefinitionId = request.ProcessDefinitionId;
         step.Key = request.Key.Trim();
         step.Name = request.Name.Trim();
+        step.Objective = request.Objective?.Trim();
+        step.RequiredFacts = request.RequiredFacts?.Trim();
+        step.ProducedFacts = request.ProducedFacts?.Trim();
+        step.ViabilityImpact = request.ViabilityImpact?.Trim();
         step.Sequence = request.Sequence;
         step.IsEntryPoint = request.IsEntryPoint;
         step.IsActive = request.IsActive;
@@ -200,6 +890,7 @@ public sealed class ProcessController(
         step.DueAfterHours = request.DueAfterHours;
         step.TaskTitleTemplate = request.TaskTitleTemplate.Trim();
         step.TaskInstructionsTemplate = request.TaskInstructionsTemplate?.Trim();
+        step.EmailRecipientTarget = request.EmailRecipientTarget;
         step.EmailSubjectTemplate = request.EmailSubjectTemplate?.Trim();
         step.EmailBodyTemplate = request.EmailBodyTemplate?.Trim();
         step.CallScriptTemplate = request.CallScriptTemplate?.Trim();
@@ -226,13 +917,26 @@ public sealed class ProcessController(
 
         await context.SaveChangesAsync();
 
+        int rescheduledTaskCount = dueOffsetChanged
+            ? await workflowAutomationService.ReschedulePendingTasksForStepAsync(step.Id)
+            : 0;
+
+        if (definition.ScopeType == ProcessScopeType.Lead
+            && request.Id.HasValue
+            && (step.Key == "qualify-lead" || step.Key == "commercial-fit" || step.Key == "company-scale"))
+        {
+            await workflowAutomationService.ReevaluateDeferredLeadsAsync(definition.TenantId);
+        }
+
         TempData["ProcessNotice"] = request.Id.HasValue
-            ? "Process step updated."
+            ? rescheduledTaskCount == 0
+                ? "Process step updated."
+                : $"Process step updated and {rescheduledTaskCount} pending action{(rescheduledTaskCount == 1 ? "" : "s")} rescheduled."
             : "Process step created.";
         return RedirectToAction(nameof(Edit), new { id = request.ProcessDefinitionId });
     }
 
-    [HttpPost]
+    [HttpPost("DeleteStep")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> DeleteStep(Guid id)
     {
@@ -273,7 +977,7 @@ public sealed class ProcessController(
         return RedirectToAction(nameof(Edit), new { id = step.ProcessDefinitionId });
     }
 
-    [HttpPost]
+    [HttpPost("SaveTransition")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> SaveTransition(SaveProcessTransitionRequest request)
     {
@@ -347,7 +1051,7 @@ public sealed class ProcessController(
         return RedirectToAction(nameof(Edit), new { id = step.ProcessDefinitionId });
     }
 
-    [HttpPost]
+    [HttpPost("DeleteTransition")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> DeleteTransition(Guid id)
     {
@@ -396,7 +1100,8 @@ public sealed class ProcessController(
             .AsNoTracking()
             .Where(item =>
                 GetReadableTenantIds().Contains(item.TenantId)
-                && item.LifecycleState != ProcessDefinitionLifecycleState.Draft)
+                && item.LifecycleState == ProcessDefinitionLifecycleState.Active
+                && item.IsActive)
             .OrderBy(item => item.ScopeType)
             .ThenByDescending(item => item.IsDefault)
             .ThenBy(item => item.Name)
@@ -472,6 +1177,10 @@ public sealed class ProcessController(
                     ProcessDefinitionId = step.ProcessDefinitionId,
                     Key = step.Key,
                     Name = step.Name,
+                    Objective = step.Objective ?? string.Empty,
+                    RequiredFacts = step.RequiredFacts ?? string.Empty,
+                    ProducedFacts = step.ProducedFacts ?? string.Empty,
+                    ViabilityImpact = step.ViabilityImpact ?? string.Empty,
                     Sequence = step.Sequence,
                     IsEntryPoint = step.IsEntryPoint,
                     IsActive = step.IsActive,
@@ -483,11 +1192,13 @@ public sealed class ProcessController(
                     DueAfterHours = step.DueAfterHours,
                     TaskTitleTemplate = step.TaskTitleTemplate,
                     TaskInstructionsTemplate = step.TaskInstructionsTemplate ?? string.Empty,
+                    EmailRecipientTarget = step.EmailRecipientTarget,
                     EmailSubjectTemplate = step.EmailSubjectTemplate ?? string.Empty,
                     EmailBodyTemplate = step.EmailBodyTemplate ?? string.Empty,
                     CallScriptTemplate = step.CallScriptTemplate ?? string.Empty,
                     QuestionSetTemplate = step.QuestionSetTemplate ?? string.Empty,
                     ActionTypeOptions = BuildActionTypeOptions(step.ActionType),
+                    EmailRecipientTargetOptions = BuildEmailRecipientTargetOptions(step.EmailRecipientTarget),
                     RelationshipStatusOptions = BuildRelationshipStatusOptions(step.RelationshipStatusOnActivate),
                     SalesStageOptions = BuildSalesStageOptions(step.SalesStageOnActivate),
                     ClientAccountStatusOptions = BuildClientAccountStatusOptions(step.ClientAccountStatusOnActivate),
@@ -539,6 +1250,8 @@ public sealed class ProcessController(
             IsActive = true,
             ActionType = ProcessActionType.ManualTask,
             ActionTypeOptions = BuildActionTypeOptions(ProcessActionType.ManualTask),
+            EmailRecipientTarget = ProcessEmailRecipientTarget.PrimaryContact,
+            EmailRecipientTargetOptions = BuildEmailRecipientTargetOptions(ProcessEmailRecipientTarget.PrimaryContact),
             RelationshipStatusOptions = BuildRelationshipStatusOptions(null),
             SalesStageOptions = BuildSalesStageOptions(null),
             ClientAccountStatusOptions = BuildClientAccountStatusOptions(null)
@@ -571,6 +1284,14 @@ public sealed class ProcessController(
 
     static IReadOnlyList<SelectListItem> BuildActionTypeOptions(ProcessActionType selectedValue) =>
         Enum.GetValues<ProcessActionType>()
+            .Select(value => new SelectListItem(
+                DisplayText.Humanize(value),
+                value.ToString(),
+                value == selectedValue))
+            .ToList();
+
+    static IReadOnlyList<SelectListItem> BuildEmailRecipientTargetOptions(ProcessEmailRecipientTarget selectedValue) =>
+        Enum.GetValues<ProcessEmailRecipientTarget>()
             .Select(value => new SelectListItem(
                 DisplayText.Humanize(value),
                 value.ToString(),

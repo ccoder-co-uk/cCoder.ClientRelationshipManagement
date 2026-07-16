@@ -2,6 +2,7 @@ using System.Net;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using ClientRelationshipManagement.AcceptanceTests.Infrastructure;
+using ClientRelationshipManagement.Web.Services.Processes;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 
@@ -9,6 +10,59 @@ namespace ClientRelationshipManagement.AcceptanceTests.Tests;
 
 public sealed partial class HomeControllerTests
 {
+    [CRMAcceptanceFact]
+    public async Task Workflow_LowFitLeadIsDeferredWithoutSuppression_AndCanBeReevaluated()
+    {
+        (Guid leadId, _) = await SeedLeadAsync();
+        await ExecuteWorkflowAsync(service => service.EnsureCoverageAsync(leadId: leadId, forceCreate: true).AsTask());
+
+        string[] outcomes = ["identity-checked", "activity-described", "scale-assessed", "quality-assessed", "fit-assessed", "deferred"];
+        foreach (string outcome in outcomes)
+        {
+            Guid taskId = await QueryInAdminContextAsync(db => db.ProcessTasks
+                .Where(item => item.LeadId == leadId && item.State == ProcessTaskState.Pending)
+                .Select(item => item.Id)
+                .SingleAsync());
+            await ExecuteWorkflowAsync(service => service.CompleteTaskAsync(new ProcessTaskCompletionCommand
+            {
+                ProcessTaskId = taskId,
+                OutcomeKey = outcome,
+                CompletionNote = outcome == "fit-assessed" ? "Fit score: 40." : $"Completed {outcome}."
+            }).AsTask());
+        }
+
+        Lead deferred = await QueryInAdminContextAsync(db => db.Leads.Include(item => item.Company).SingleAsync(item => item.Id == leadId));
+        deferred.Status.Should().Be(LeadStatus.Deferred);
+        deferred.Company.IsProspectingSuppressed.Should().BeFalse();
+
+        int requeued = 0;
+        await ExecuteWorkflowAsync(async service =>
+        {
+            requeued = await service.ReevaluateDeferredLeadsAsync(AcceptanceSettings.TenantId);
+        });
+
+        requeued.Should().BeGreaterThan(0);
+        Lead reactivated = await QueryInAdminContextAsync(db => db.Leads.SingleAsync(item => item.Id == leadId));
+        reactivated.Status.Should().Be(LeadStatus.Imported);
+        bool hasPendingTask = await QueryInAdminContextAsync(db => db.ProcessTasks.AnyAsync(item => item.LeadId == leadId && item.State == ProcessTaskState.Pending));
+        hasPendingTask.Should().BeTrue();
+    }
+
+    [CRMAcceptanceFact]
+    public async Task Post_SetAutoApproveProcessEmails_PersistsUserSetting()
+    {
+        using HttpResponseMessage response = await PostFormWithAntiforgeryAsync(
+            "/",
+            "/Home/SetAutoApproveProcessEmails",
+            new Dictionary<string, string> { ["enabled"] = "true" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+
+        AgentAutomationSetting setting = await QueryInAdminContextAsync(db =>
+            db.AgentAutomationSettings.FirstAsync(item => item.UserId == Fixture.Settings.UserId));
+        setting.AutoApproveProcessEmails.Should().BeTrue();
+    }
+
     [CRMAcceptanceFact]
     public async Task Post_SaveDraftEmail_ApproveDraftEmail_And_ConfirmDraftEmailSent_AdvanceWorkflow()
     {
@@ -218,66 +272,64 @@ public sealed partial class HomeControllerTests
         {
             ["Id"] = reviewTask.Id.ToString(),
             ["SourceType"] = "process",
-            ["CompletionNote"] = "Positive reply received.",
-            ["OutcomeKey"] = "positive-reply"
+            ["CompletionNote"] = "Positive reply received and the contact requested a demo.",
+            ["OutcomeKey"] = "demo-interest"
         }));
 
-        ProcessTask proposalTask = await QueryInAdminContextAsync(db =>
-            db.ProcessTasks.Include(item => item.Email)
-                .FirstAsync(item => item.OpportunityId == opportunityId && item.State == ProcessTaskState.Pending && item.RenderedTitle.Contains("proposal")));
-
-        await Client.PostAsync("/Home/ApproveDraftEmail", new FormUrlEncodedContent(new Dictionary<string, string>
-        {
-            ["ClientId"] = relationshipId.ToString(),
-            ["EmailId"] = proposalTask.EmailId!.Value.ToString()
-        }));
-
-        await Client.PostAsync("/Home/ConfirmDraftEmailSent", new FormUrlEncodedContent(new Dictionary<string, string>
-        {
-            ["ClientId"] = relationshipId.ToString(),
-            ["Id"] = proposalTask.Id.ToString(),
-            ["SourceType"] = "process",
-            ["EmailId"] = proposalTask.EmailId!.Value.ToString()
-        }));
-
-        ProcessTask negotiateTask = await QueryInAdminContextAsync(db =>
-            db.ProcessTasks.FirstAsync(item => item.OpportunityId == opportunityId && item.State == ProcessTaskState.Pending && item.RenderedTitle.Contains("Negotiate")));
+        ProcessTask summaryTask = await QueryInAdminContextAsync(db =>
+            db.ProcessTasks.Include(item => item.ProcessStep)
+                .FirstAsync(item => item.OpportunityId == opportunityId
+                    && item.State == ProcessTaskState.Pending
+                    && item.ProcessStep.Key == "opportunity-summary"));
 
         await Client.PostAsync("/Home/CompleteTodo", new FormUrlEncodedContent(new Dictionary<string, string>
         {
-            ["Id"] = negotiateTask.Id.ToString(),
+            ["Id"] = summaryTask.Id.ToString(),
             ["SourceType"] = "process",
-            ["CompletionNote"] = "Commercials agreed.",
-            ["OutcomeKey"] = "contract-ready"
+            ["CompletionNote"] = "Opportunity summary: The contact requested a demo.\nPain or need: Needs a structured outreach path.\nValue hypothesis: A focused programme could accelerate qualified conversations.\nDemo interest evidence: Positive reply requested a demo.\nEstimated annual value: unknown.\nConfidence: high.",
+            ["OutcomeKey"] = "summary-ready"
         }));
 
-        ProcessTask contractTask = await QueryInAdminContextAsync(db =>
+        ProcessTask handoffTask = await QueryInAdminContextAsync(db =>
             db.ProcessTasks.Include(item => item.Email)
-                .FirstAsync(item => item.OpportunityId == opportunityId && item.State == ProcessTaskState.Pending && item.RenderedTitle.Contains("contract")));
+                .FirstAsync(item => item.OpportunityId == opportunityId
+                    && item.State == ProcessTaskState.Pending
+                    && item.ProcessStep.Key == "handoff-account-owner"));
+
+        handoffTask.Email.Should().NotBeNull();
+        handoffTask.Email!.ToAddresses.Should().Be("crm.acceptance@example.com");
+        handoffTask.Email.Subject.Should().Contain("Demo-ready opportunity");
+        handoffTask.Email.BodyText.Should().Contain("Needs a structured outreach path");
+        handoffTask.Email.BodyText.Should().Contain("interested in at least a demo");
 
         await Client.PostAsync("/Home/ApproveDraftEmail", new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["ClientId"] = relationshipId.ToString(),
-            ["EmailId"] = contractTask.EmailId!.Value.ToString()
+            ["EmailId"] = handoffTask.EmailId!.Value.ToString()
         }));
 
         await Client.PostAsync("/Home/ConfirmDraftEmailSent", new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["ClientId"] = relationshipId.ToString(),
-            ["Id"] = contractTask.Id.ToString(),
+            ["Id"] = handoffTask.Id.ToString(),
             ["SourceType"] = "process",
-            ["EmailId"] = contractTask.EmailId!.Value.ToString()
+            ["EmailId"] = handoffTask.EmailId!.Value.ToString()
         }));
 
-        ProcessTask signatureTask = await QueryInAdminContextAsync(db =>
-            db.ProcessTasks.FirstAsync(item => item.OpportunityId == opportunityId && item.State == ProcessTaskState.Pending && item.RenderedTitle.Contains("signed")));
+        ProcessTask accountOwnerDecisionTask = await QueryInAdminContextAsync(db =>
+            db.ProcessTasks.Include(item => item.ProcessStep)
+                .FirstAsync(item => item.OpportunityId == opportunityId
+                    && item.State == ProcessTaskState.Pending
+                    && item.ProcessStep.Key == "account-owner-decision"));
+
+        accountOwnerDecisionTask.ActionType.Should().Be(ProcessActionType.Approval);
 
         using HttpResponseMessage finalResponse = await Client.PostAsync("/Home/CompleteTodo", new FormUrlEncodedContent(new Dictionary<string, string>
         {
-            ["Id"] = signatureTask.Id.ToString(),
+            ["Id"] = accountOwnerDecisionTask.Id.ToString(),
             ["SourceType"] = "process",
-            ["CompletionNote"] = "Contract signed.",
-            ["OutcomeKey"] = "won"
+            ["CompletionNote"] = "Demo completed and contract negotiations agreed by the account owner.",
+            ["OutcomeKey"] = "move-forward"
         }));
 
         finalResponse.StatusCode.Should().Be(HttpStatusCode.Redirect);
@@ -289,7 +341,7 @@ public sealed partial class HomeControllerTests
 
         clientAccount.Status.Should().Be(ClientAccountStatus.Onboarding);
         completedInstance.State.Should().Be(ProcessInstanceState.Completed);
-        completedInstance.CompletionOutcomeKey.Should().Be("won");
+        completedInstance.CompletionOutcomeKey.Should().Be("move-forward");
     }
 
     [CRMAcceptanceFact]
@@ -335,7 +387,7 @@ public sealed partial class HomeControllerTests
             ["Id"] = reviewTask.Id.ToString(),
             ["SourceType"] = "process",
             ["CompletionNote"] = "No fit confirmed after outreach review.",
-            ["OutcomeKey"] = "lost"
+            ["OutcomeKey"] = "not-interested"
         }));
 
         finalResponse.StatusCode.Should().Be(HttpStatusCode.Redirect);
@@ -352,7 +404,7 @@ public sealed partial class HomeControllerTests
         updatedOpportunity.Stage.Should().Be(SalesPipelineStage.Lost);
         updatedRelationship.Status.Should().Be(RelationshipStatus.Disqualified);
         completedInstance.State.Should().Be(ProcessInstanceState.Completed);
-        completedInstance.CompletionOutcomeKey.Should().Be("lost");
+        completedInstance.CompletionOutcomeKey.Should().Be("not-interested");
         maybeClientAccount.Should().BeNull();
     }
 }

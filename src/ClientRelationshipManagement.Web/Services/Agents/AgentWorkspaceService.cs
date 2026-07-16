@@ -27,6 +27,9 @@ public sealed class AgentWorkspaceService(
     public string GetTaskAgentWorkingDirectory() =>
         Path.Combine(RootPath, "Task Agent");
 
+    public string GetTaskAgentSessionHistoryDirectory() =>
+        Path.Combine(GetTaskAgentWorkingDirectory(), "Session History");
+
     public string GetProcessOptimiserWorkingDirectory() =>
         Path.Combine(RootPath, "Process Optimiser");
 

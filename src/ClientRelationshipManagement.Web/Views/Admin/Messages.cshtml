@@ -1,0 +1,36 @@
+@model ClientRelationshipManagement.Web.Models.Admin.AdminAgentMessagesPageViewModel
+@{
+    ViewData["Title"] = "Agent conversations";
+}
+
+<main class="page-shell">
+    <section class="page-hero">
+        <div>
+            <h1>Agent conversations</h1>
+            <p>Persistent discussions about rejected work, process health, and proposed improvements.</p>
+        </div>
+    </section>
+
+    <section class="data-panel">
+        @if (Model.Messages.Count == 0)
+        {
+            <div class="empty-state empty-state--compact"><strong>No conversations yet.</strong><p>Rejections and scheduled health reviews will start conversations here.</p></div>
+        }
+        else
+        {
+            <div class="conversation-list">
+                @foreach (var message in Model.Messages)
+                {
+                    <a class="conversation-list__item" href="/Admin/Messages/@message.Id">
+                        <div class="conversation-list__heading">
+                            <div><span class="crm-pill">@message.Kind</span><h2>@message.Title</h2></div>
+                            <span class="conversation-list__state conversation-list__state--@message.State.ToString().ToLowerInvariant()">@message.State</span>
+                        </div>
+                        <p>@message.Body</p>
+                        <div class="conversation-list__meta"><span>@message.EntryCount message@(message.EntryCount == 1 ? "" : "s")</span><span>Updated @message.LastUpdatedOn</span></div>
+                    </a>
+                }
+            </div>
+        }
+    </section>
+</main>

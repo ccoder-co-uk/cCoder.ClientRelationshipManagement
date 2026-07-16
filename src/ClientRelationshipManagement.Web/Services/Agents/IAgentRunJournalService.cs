@@ -5,13 +5,22 @@ namespace ClientRelationshipManagement.Web.Services.Agents;
 
 public interface IAgentRunJournalService
 {
+    ValueTask<int> FailAbandonedAsync(
+        AgentRunKind kind,
+        DateTimeOffset startedBefore,
+        CancellationToken cancellationToken = default);
+
     ValueTask<AgentRun> StartAsync(
         AgentRunKind kind,
         string executionUserId,
         string provider,
         string model,
         string workingDirectory,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        AgentWorkLane? workLane = null,
+        Guid? processTaskId = null,
+        Guid? processStepId = null,
+        string processStepKey = null);
 
     ValueTask CompleteAsync(
         Guid runId,

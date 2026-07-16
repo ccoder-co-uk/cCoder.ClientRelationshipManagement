@@ -16,4 +16,13 @@ public sealed class MailOptions
     public int RetryLimit { get; set; } = 3;
     public int PollIntervalSeconds { get; set; } = 60;
     public int BatchSize { get; set; } = 10;
+    public bool MailboxSyncEnabled { get; set; }
+    public int MailboxSyncIntervalSeconds { get; set; } = 60;
+    public int MailboxSyncBatchSize { get; set; } = 50;
+    public string MicrosoftGraphTenantId { get; set; }
+    public string MicrosoftGraphClientId { get; set; }
+    public string MicrosoftGraphClientSecret { get; set; }
+    public string MicrosoftGraphMailboxUser { get; set; }
+    public string MicrosoftGraphBaseUrl { get; set; } = "https://graph.microsoft.com/v1.0";
+    public string MicrosoftGraphLoginBaseUrl { get; set; } = "https://login.microsoftonline.com";
 }

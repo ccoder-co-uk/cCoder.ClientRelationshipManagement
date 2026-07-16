@@ -7,5 +7,6 @@ public enum EmailState
     Sending = 20,
     Sent = 30,
     Failed = 40,
-    Cancelled = 50
+    Cancelled = 50,
+    Rejected = 60
 }

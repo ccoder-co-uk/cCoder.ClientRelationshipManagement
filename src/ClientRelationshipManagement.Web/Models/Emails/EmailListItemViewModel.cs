@@ -8,6 +8,8 @@ public sealed class EmailListItemViewModel
     public string ClientName { get; init; } = string.Empty;
     public string StateLabel { get; init; } = string.Empty;
     public string ToAddresses { get; init; } = string.Empty;
+    public string FromDisplayName { get; init; } = string.Empty;
+    public string FromEmailAddress { get; init; } = string.Empty;
     public string Subject { get; init; } = string.Empty;
     public string Preview { get; init; } = string.Empty;
     public string ScheduledSendLabel { get; init; } = string.Empty;
@@ -16,5 +18,6 @@ public sealed class EmailListItemViewModel
     public string CreatedOnLabel { get; init; } = string.Empty;
     public string LastError { get; init; } = string.Empty;
     public bool CanApprove { get; init; }
+    public bool CanReject { get; init; }
     public bool CanMarkSent { get; init; }
 }

@@ -1,0 +1,179 @@
+@model ClientRelationshipManagement.Web.Models.Admin.AdminAgentConversationPageViewModel
+@{
+    ViewData["Title"] = Model.Conversation.Title;
+    var message = Model.Conversation;
+}
+
+<main class="page-shell conversation-page"
+      data-conversation-id="@message.Id"
+      data-conversation-state="@message.State"
+      data-proposed-process-definition-id="@message.ProposedProcessDefinitionId">
+    <section class="page-hero">
+        <div><h1>Agent conversations</h1><p>Persistent discussions with the Approval Agent about operational work and process improvement.</p></div>
+    </section>
+
+    <section class="conversation-workspace">
+        <aside class="data-panel conversation-sidebar" aria-label="Conversations">
+            <div class="conversation-sidebar__heading"><strong>Conversations</strong><span>@Model.Conversations.Count</span></div>
+            <nav class="conversation-sidebar__list">
+                @foreach (var conversation in Model.Conversations)
+                {
+                    <a class="conversation-sidebar__item @(conversation.Id == message.Id ? "conversation-sidebar__item--active" : "")"
+                       href="/Admin/Messages/@conversation.Id"
+                       aria-current="@(conversation.Id == message.Id ? "page" : null)">
+                        <span class="conversation-sidebar__title">@conversation.Title</span>
+                        <span class="conversation-sidebar__meta"><span>@conversation.State</span><span>@conversation.LastUpdatedOn</span></span>
+                    </a>
+                }
+            </nav>
+        </aside>
+
+        <div class="conversation-detail">
+            <section class="data-panel conversation-detail__heading">
+                <div><span class="crm-pill">@message.Kind · @message.State</span><h2>@message.Title</h2><p>@message.Body</p></div>
+                <form asp-action="@(message.State == cCoder.ClientRelationshipManagement.Platform.Models.Enums.AgentMessageState.Pending ? "ResolveMessage" : "ReopenMessage")" method="post">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="id" value="@message.Id" />
+                    <input type="hidden" name="returnUrl" value="/Admin/Messages/@message.Id" />
+                    <button type="submit" class="secondary-action">@(message.State == cCoder.ClientRelationshipManagement.Platform.Models.Enums.AgentMessageState.Pending ? "Resolve" : "Reopen")</button>
+                </form>
+            </section>
+
+            <section class="data-panel conversation-thread">
+                <div class="conversation-entries" data-conversation-entries aria-live="polite">
+                    @foreach (var entry in message.Entries)
+                    {
+                        <article class="agent-conversation__entry agent-conversation__entry--@entry.Role.ToLowerInvariant()" data-entry-id="@entry.Id">
+                            <div><strong>@entry.Role</strong><span>@entry.CreatedOn</span></div>
+                            <p>@entry.Body</p>
+                        </article>
+                    }
+                    <article class="agent-conversation__entry agent-conversation__entry--working" data-agent-working @(message.IsAwaitingAgent ? null : "hidden")>
+                        <div><strong>Approval Agent</strong><span class="conversation-working-indicator" aria-hidden="true"></span></div>
+                        <p>Working on a response…</p>
+                    </article>
+                </div>
+
+                <p class="conversation-live-status" data-conversation-live-status>@(message.IsAwaitingAgent ? "Approval Agent is preparing a response…" : "Watching for agent responses…")</p>
+
+                @if (message.State == cCoder.ClientRelationshipManagement.Platform.Models.Enums.AgentMessageState.Pending)
+                {
+                    <form asp-action="ReplyToMessage" method="post" class="crm-form crm-form--compact conversation-composer">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="id" value="@message.Id" />
+                        <input type="hidden" name="returnUrl" value="/Admin/Messages/@message.Id" />
+                        <label class="auth-field auth-field--full auth-field--multiline"><span>Message the Approval Agent</span><textarea name="responseNotes" required placeholder="Give precise guidance, ask for an opinion, or request a revised proposal."></textarea></label>
+                        <div class="form-actions form-actions--start"><button type="submit" class="primary-action">Send</button></div>
+                    </form>
+                }
+            </section>
+
+            <section class="conversation-actions">
+                @if (!string.IsNullOrWhiteSpace(message.ContextLink))
+                {
+                    <a class="secondary-action" href="@message.ContextLink">@message.ContextLabel</a>
+                }
+                @if (message.ProposedProcessDefinitionId.HasValue && message.State == cCoder.ClientRelationshipManagement.Platform.Models.Enums.AgentMessageState.Pending)
+                {
+                    <form asp-action="ApproveMessage" method="post">@Html.AntiForgeryToken()<input type="hidden" name="id" value="@message.Id" /><input type="hidden" name="proposedProcessDefinitionId" value="@message.ProposedProcessDefinitionId" /><input type="hidden" name="returnUrl" value="/Admin/Messages/@message.Id" /><button type="submit" class="primary-action">Approve and activate change</button></form>
+                }
+            </section>
+        </div>
+    </section>
+</main>
+
+<script>
+        (() => {
+            const page = document.querySelector("[data-conversation-id]");
+            const entriesHost = page?.querySelector("[data-conversation-entries]");
+            const status = page?.querySelector("[data-conversation-live-status]");
+            const working = page?.querySelector("[data-agent-working]");
+            if (!page || !entriesHost || !status) return;
+
+            const updatesUrl = `/Admin/Messages/${page.dataset.conversationId}/Updates`;
+            const knownEntryIds = new Set(
+                [...entriesHost.querySelectorAll("[data-entry-id]")].map(entry => entry.dataset.entryId));
+            let refreshInFlight = false;
+            let refreshTimer;
+            entriesHost.scrollTop = entriesHost.scrollHeight;
+
+            const appendEntry = (entry) => {
+                const role = entry.role || "Agent";
+                const roleClass = role.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+                const article = document.createElement("article");
+                article.className = `agent-conversation__entry agent-conversation__entry--${roleClass}`;
+                article.dataset.entryId = entry.id;
+
+                const heading = document.createElement("div");
+                const author = document.createElement("strong");
+                const created = document.createElement("span");
+                const body = document.createElement("p");
+                author.textContent = role;
+                created.textContent = entry.createdOn || "";
+                body.textContent = entry.body || "";
+                heading.append(author, created);
+                article.append(heading, body);
+                entriesHost.insertBefore(article, working ?? null);
+                return article;
+            };
+
+            const refreshConversation = async () => {
+                if (refreshInFlight || document.visibilityState !== "visible") return;
+                refreshInFlight = true;
+                try {
+                    const response = await fetch(`${updatesUrl}?_=${Date.now()}`, {
+                        cache: "no-store",
+                        credentials: "same-origin",
+                        headers: { "X-Requested-With": "XMLHttpRequest" }
+                    });
+                    if (response.redirected || !response.ok || !response.headers.get("content-type")?.includes("application/json"))
+                        throw new Error(response.redirected ? "session" : "request");
+
+                    const update = await response.json();
+                    if (working) working.hidden = !update.awaitingAgent;
+                    const wasNearBottom = entriesHost.scrollHeight - (entriesHost.scrollTop + entriesHost.clientHeight) < 120;
+                    let newestEntry = null;
+                    for (const entry of update.entries ?? []) {
+                        if (!entry.id || knownEntryIds.has(entry.id)) continue;
+                        knownEntryIds.add(entry.id);
+                        newestEntry = appendEntry(entry);
+                    }
+
+                    if (newestEntry) {
+                        status.textContent = "New agent response received.";
+                        if (wasNearBottom) {
+                            window.requestAnimationFrame(() => entriesHost.scrollTo({
+                                top: entriesHost.scrollHeight,
+                                behavior: "smooth"
+                            }));
+                        }
+                    } else {
+                        status.textContent = update.awaitingAgent
+                            ? "Approval Agent is preparing a response…"
+                            : "Conversation is up to date.";
+                    }
+
+                    const controlsChanged = update.state !== page.dataset.conversationState
+                        || (update.proposedProcessDefinitionId ?? "") !== (page.dataset.proposedProcessDefinitionId ?? "");
+                    const draft = page.querySelector("textarea[name='responseNotes']");
+                    if (controlsChanged && !draft?.value.trim()) {
+                        window.location.reload();
+                    } else if (controlsChanged) {
+                        status.textContent = "Conversation controls changed; your draft has been preserved.";
+                    }
+                } catch (error) {
+                    status.textContent = error.message === "session"
+                        ? "Session expired — refresh to sign in."
+                        : "Live update delayed — retrying.";
+                } finally {
+                    refreshInFlight = false;
+                }
+            };
+
+            refreshTimer = window.setInterval(refreshConversation, 5_000);
+            refreshConversation();
+            window.addEventListener("focus", refreshConversation);
+            document.addEventListener("visibilitychange", refreshConversation);
+            window.addEventListener("pagehide", () => window.clearInterval(refreshTimer), { once: true });
+        })();
+</script>

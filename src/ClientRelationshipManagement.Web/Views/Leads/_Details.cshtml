@@ -1,0 +1,48 @@
+@model ClientRelationshipManagement.Web.Models.Leads.LeadDetailsViewModel
+@{
+    string suffix = Model.Id.ToString("N");
+}
+
+<section class="company-detail" aria-label="Lead details for @Model.CompanyName">
+    <div class="company-detail__heading">
+        <div><h2>@Model.CompanyName</h2><p>@Model.CompanyNumber · @Model.Status · @Model.Source</p></div>
+        <a class="secondary-action" href="/Leads/Edit/@Model.Id">Open full lead</a>
+    </div>
+    <div class="tab-strip company-detail__tabs" role="tablist">
+        <button type="button" class="tab-strip__tab is-active" data-detail-tab="decision-@suffix" aria-selected="true">Decision &amp; evidence</button>
+        <button type="button" class="tab-strip__tab" data-detail-tab="contacts-@suffix" aria-selected="false">Contacts <span class="tab-strip__count">@Model.Contacts.Count</span></button>
+        <button type="button" class="tab-strip__tab" data-detail-tab="tasks-@suffix" aria-selected="false">Process steps <span class="tab-strip__count">@Model.Tasks.Count</span></button>
+        <button type="button" class="tab-strip__tab" data-detail-tab="artifacts-@suffix" aria-selected="false">Artifact feed <span class="tab-strip__count">@Model.Artifacts.Count</span></button>
+    </div>
+    <section class="tab-panel" data-detail-panel="decision-@suffix">
+        <dl class="detail-summary-grid">
+            <div><dt>Status</dt><dd>@Model.Status</dd></div>
+            <div><dt>Qualification score</dt><dd>@(Model.RankingScore?.ToString() ?? "Not scored")</dd></div>
+            <div><dt>Suppression reason</dt><dd>@(string.IsNullOrWhiteSpace(Model.SuppressionReason) ? "Not suppressed" : Model.SuppressionReason)</dd></div>
+        </dl>
+        @if (!string.IsNullOrWhiteSpace(Model.QualificationNotes))
+        {
+            <div class="company-detail__notes detail-evidence"><strong>Lead qualification evidence</strong><p>@Model.QualificationNotes</p></div>
+        }
+        @if (!string.IsNullOrWhiteSpace(Model.RankingRationale))
+        {
+            <div class="company-detail__notes detail-evidence"><strong>Initial ranking rationale</strong><p>@Model.RankingRationale</p></div>
+        }
+    </section>
+    <section class="tab-panel" data-detail-panel="contacts-@suffix" hidden>
+        <div class="table-shell"><table class="crm-table"><thead><tr><th>Name</th><th>Position</th><th>Email</th><th>Role</th></tr></thead><tbody>
+        @if (Model.Contacts.Count == 0) { <tr><td colspan="4">No contacts were captured for this lead.</td></tr> }
+        else { @foreach (var contact in Model.Contacts) { <tr><td>@contact.Name</td><td>@contact.Position</td><td>@contact.Email</td><td>@(contact.IsPrimary ? "Primary" : "Additional")</td></tr> } }
+        </tbody></table></div>
+    </section>
+    <section class="tab-panel" data-detail-panel="tasks-@suffix" hidden>
+        <div class="table-shell"><table class="crm-table"><thead><tr><th>Step</th><th>Task</th><th>State</th><th>Outcome</th><th>Due / completed</th><th>Evidence</th></tr></thead><tbody>
+        @if (Model.Tasks.Count == 0) { <tr><td colspan="6">No process steps are recorded.</td></tr> }
+        else { @foreach (var task in Model.Tasks) { <tr><td>@task.Step</td><td>@task.Title</td><td>@task.State</td><td>@task.Outcome</td><td>@task.DueOn.ToLocalTime().ToString("dd MMM HH:mm")<small class="table-secondary">@(task.CompletedOn?.ToLocalTime().ToString("dd MMM HH:mm") ?? "Not completed")</small></td><td class="detail-evidence">@task.Notes</td></tr> } }
+        </tbody></table></div>
+    </section>
+    <section class="tab-panel" data-detail-panel="artifacts-@suffix" hidden>
+        @if (Model.Artifacts.Count == 0) { <div class="empty-state empty-state--compact"><strong>No company-history artifacts yet.</strong><p>The qualification notes and completed process steps above contain the evidence captured for older leads.</p></div> }
+        else { <div class="company-history company-history--embedded">@foreach (var item in Model.Artifacts) { <article class="company-history__item company-history__item--lead"><time>@item.OccurredOn.ToLocalTime().ToString("dd MMM yyyy HH:mm")</time><div><div class="company-history__meta"><span>@item.EventType</span><span>@item.Confidence</span></div><h3>@item.Summary</h3><p class="detail-evidence">@item.Details</p></div></article> }</div> }
+    </section>
+</section>

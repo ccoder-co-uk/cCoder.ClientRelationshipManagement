@@ -8,6 +8,8 @@ public sealed class ClientListPageViewModel
     public int TotalClients { get; init; }
     public string Search { get; init; } = string.Empty;
     public string StatusFilter { get; init; } = string.Empty;
+    public string Scope { get; init; } = string.Empty;
+    public string TaskFilter { get; init; } = string.Empty;
     public string Sort { get; init; } = string.Empty;
     public IReadOnlyList<SelectListItem> StatusOptions { get; init; } =
         Array.Empty<SelectListItem>();

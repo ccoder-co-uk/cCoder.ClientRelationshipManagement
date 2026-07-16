@@ -19,8 +19,17 @@ public sealed partial class ClientsControllerTests
         string indexHtml = await GetStringAsync("/Clients");
         string editHtml = await GetStringAsync($"/Clients/Edit/{relationshipId}");
 
-        indexHtml.Should().Contain("Clients Page");
+        indexHtml.Should().Contain("Client accounts");
         editHtml.Should().Contain("Client Details");
+    }
+
+    [CRMAcceptanceFact]
+    public async Task Get_Index_AcceptsClientAccountAndTaskFilters()
+    {
+        string html = await GetStringAsync("/Clients?scope=accounts&tasks=overdue");
+
+        html.Should().Contain("name=\"scope\" value=\"accounts\"");
+        html.Should().Contain("name=\"tasks\" value=\"overdue\"");
     }
 
     [CRMAcceptanceFact]
@@ -31,10 +40,16 @@ public sealed partial class ClientsControllerTests
 
         await ExecuteWorkflowAsync(service => service.EnsureCoverageAsync(opportunityId: opportunityId, forceCreate: true).AsTask());
 
-        string indexHtml = await GetStringAsync("/Clients");
+        string opportunityHtml = await GetStringAsync("/Opportunities");
+        string clientsHtml = await GetStringAsync("/Clients");
+        string companyName = await QueryInAdminContextAsync(db => db.Opportunities
+            .Where(item => item.Id == opportunityId)
+            .Select(item => item.TenantCompanyRelationship.Company.OfficialName)
+            .SingleAsync());
 
-        indexHtml.Should().Contain("Review the response");
-        indexHtml.Should().Contain("Outreach Sent");
+        opportunityHtml.Should().Contain("Review the response");
+        opportunityHtml.Should().Contain("Outreach Sent");
+        clientsHtml.Should().NotContain(companyName);
     }
 
     [CRMAcceptanceFact]

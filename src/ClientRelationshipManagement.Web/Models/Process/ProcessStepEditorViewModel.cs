@@ -9,6 +9,10 @@ public sealed class ProcessStepEditorViewModel
     public Guid ProcessDefinitionId { get; init; }
     public string Key { get; init; } = string.Empty;
     public string Name { get; init; } = string.Empty;
+    public string Objective { get; init; } = string.Empty;
+    public string RequiredFacts { get; init; } = string.Empty;
+    public string ProducedFacts { get; init; } = string.Empty;
+    public string ViabilityImpact { get; init; } = string.Empty;
     public int Sequence { get; init; }
     public bool IsEntryPoint { get; init; }
     public bool IsActive { get; init; }
@@ -20,11 +24,13 @@ public sealed class ProcessStepEditorViewModel
     public int DueAfterHours { get; init; }
     public string TaskTitleTemplate { get; init; } = string.Empty;
     public string TaskInstructionsTemplate { get; init; } = string.Empty;
+    public ProcessEmailRecipientTarget EmailRecipientTarget { get; init; }
     public string EmailSubjectTemplate { get; init; } = string.Empty;
     public string EmailBodyTemplate { get; init; } = string.Empty;
     public string CallScriptTemplate { get; init; } = string.Empty;
     public string QuestionSetTemplate { get; init; } = string.Empty;
     public IReadOnlyList<SelectListItem> ActionTypeOptions { get; init; } = Array.Empty<SelectListItem>();
+    public IReadOnlyList<SelectListItem> EmailRecipientTargetOptions { get; init; } = Array.Empty<SelectListItem>();
     public IReadOnlyList<SelectListItem> RelationshipStatusOptions { get; init; } = Array.Empty<SelectListItem>();
     public IReadOnlyList<SelectListItem> SalesStageOptions { get; init; } = Array.Empty<SelectListItem>();
     public IReadOnlyList<SelectListItem> ClientAccountStatusOptions { get; init; } = Array.Empty<SelectListItem>();
