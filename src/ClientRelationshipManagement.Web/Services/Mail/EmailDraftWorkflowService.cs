@@ -181,6 +181,15 @@ public sealed class EmailDraftWorkflowService(
         if (email is null)
             return null;
 
+        string recipientBody = FirstNonEmpty(email.BodyText, email.BodyHtml);
+        if (RecipientEmailContentValidator.ContainsInternalDraftingGuidance(recipientBody))
+        {
+            loggingBroker.LogWarning(
+                "Refused to approve email {EmailId} because its recipient content contains internal drafting guidance.",
+                email.Id);
+            return null;
+        }
+
         DateTimeOffset now = DateTimeOffset.UtcNow;
         string currentUser = CurrentUserId;
         MailSenderProfile senderProfile = await currentUserMailProfileProvider.GetCurrentAsync(cancellationToken);

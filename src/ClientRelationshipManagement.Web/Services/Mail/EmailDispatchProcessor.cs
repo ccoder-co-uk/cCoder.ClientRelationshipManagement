@@ -90,6 +90,19 @@ public sealed class EmailDispatchProcessor(
     {
         MailSenderProfile senderProfile = await ResolveSenderProfileAsync(email, cancellationToken);
         string toAddresses = ResolveToAddresses(email);
+        string recipientBody = !string.IsNullOrWhiteSpace(email.BodyText)
+            ? email.BodyText
+            : email.BodyHtml;
+
+        if (RecipientEmailContentValidator.ContainsInternalDraftingGuidance(recipientBody))
+        {
+            await MarkFailedAsync(
+                email,
+                now,
+                "Recipient content contains internal drafting guidance and must be edited before sending.",
+                cancellationToken);
+            return 0;
+        }
 
         if (string.IsNullOrWhiteSpace(senderProfile?.EmailAddress))
         {
