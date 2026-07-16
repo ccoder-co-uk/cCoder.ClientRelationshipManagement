@@ -42,6 +42,8 @@ public sealed class EmailsPageTests(CRMAcceptanceFixture fixture)
         response.Should().Contain("Queue draft");
         response.Should().Contain("Approve");
         response.Should().Contain("Mark Sent");
+        response.Should().Contain("Showing 1–1 of 1 emails");
+        response.Should().Contain("Email result pages");
     }
 
     [CRMAcceptanceFact]
@@ -87,9 +89,12 @@ public sealed class EmailsPageTests(CRMAcceptanceFixture fixture)
                 ["ClientId"] = client.Id.ToString(),
                 ["EmailId"] = email.Id.ToString(),
                 ["ScheduledSendOn"] = "2026-06-18T08:45",
+                ["ReturnUrl"] = "/Admin/Emails?search=Queue&state=Draft&page=2&pageSize=25",
             });
 
         response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        response.Headers.Location.Should().Be(
+            new Uri("/Admin/Emails?search=Queue&state=Draft&page=2&pageSize=25", UriKind.Relative));
 
         Email? approvedEmail = await QueryInAdminContextAsync(dbContext =>
             dbContext.Emails.IgnoreQueryFilters().FirstOrDefaultAsync(item => item.Id == email.Id));

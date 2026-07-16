@@ -1,9 +1,16 @@
 @model ClientRelationshipManagement.Web.Models.Emails.EmailsPageViewModel
 @{
     ViewData["Title"] = "Emails";
+    string gridUrl = Url.Action("Index", new
+    {
+        Model.Search,
+        state = Model.StateFilter,
+        Model.Page,
+        Model.PageSize
+    })!;
 }
 
-<main class="page-shell">
+<main class="page-shell email-page">
     <section class="page-hero">
         <div>
             <h1>Emails</h1>
@@ -52,6 +59,16 @@
                 <select name="state" asp-items="Model.StateOptions"></select>
             </label>
 
+            <label class="auth-field">
+                <span>Rows</span>
+                <select name="pageSize">
+                    @foreach (int size in new[] { 25, 50, 100 })
+                    {
+                        <option value="@size" selected="@(Model.PageSize == size)">@size</option>
+                    }
+                </select>
+            </label>
+
             <div class="filter-bar__actions">
                 <button type="submit" class="primary-action">Filter</button>
                 <a class="secondary-action" href="/Admin/Emails">Reset</a>
@@ -67,8 +84,13 @@
         }
         else
         {
-            <div class="table-shell">
-                <table class="crm-table">
+            <div class="company-results-toolbar email-results-toolbar">
+                <p>Showing @Model.FirstItem.ToString("N0")–@Model.LastItem.ToString("N0") of @Model.TotalCount.ToString("N0") emails</p>
+                <span>Page @Model.Page.ToString("N0") of @Model.TotalPages.ToString("N0")</span>
+            </div>
+
+            <div class="table-shell email-table-shell">
+                <table class="crm-table email-table">
                     <thead>
                         <tr>
                             <th>Client</th>
@@ -102,6 +124,7 @@
                                                 @Html.AntiForgeryToken()
                                                 <input type="hidden" name="ClientId" value="@email.ClientId" />
                                                 <input type="hidden" name="EmailId" value="@email.Id" />
+                                                <input type="hidden" name="ReturnUrl" value="@gridUrl" />
                                                 <button type="submit" class="secondary-action">Mark Sent</button>
                                             </form>
                                         }
@@ -136,6 +159,7 @@
                                             @Html.AntiForgeryToken()
                                             <input type="hidden" name="ClientId" value="@email.ClientId" />
                                             <input type="hidden" name="EmailId" value="@email.Id" />
+                                            <input type="hidden" name="ReturnUrl" value="@gridUrl" />
                                             <div class="form-grid">
                                                 <label class="auth-field auth-field--full">
                                                     <span>Subject</span>
@@ -184,6 +208,7 @@
                                             @Html.AntiForgeryToken()
                                             <input type="hidden" name="ClientId" value="@email.ClientId" />
                                             <input type="hidden" name="EmailId" value="@email.Id" />
+                                            <input type="hidden" name="ReturnUrl" value="@gridUrl" />
                                             <div class="form-grid">
                                                 <label class="auth-field auth-field--full auth-field--multiline">
                                                     <span>Reason for rejection</span>
@@ -201,6 +226,16 @@
                     </tbody>
                 </table>
             </div>
+
+            <nav class="company-pager email-pager" aria-label="Email result pages">
+                <a class="secondary-action @(Model.HasPreviousPage ? "" : "is-disabled")"
+                   aria-disabled="@(!Model.HasPreviousPage)"
+                   href="@(Model.HasPreviousPage ? Url.Action("Index", new { Model.Search, state = Model.StateFilter, page = Model.Page - 1, Model.PageSize }) : null)">Previous</a>
+                <span>Page @Model.Page.ToString("N0")</span>
+                <a class="secondary-action @(Model.HasNextPage ? "" : "is-disabled")"
+                   aria-disabled="@(!Model.HasNextPage)"
+                   href="@(Model.HasNextPage ? Url.Action("Index", new { Model.Search, state = Model.StateFilter, page = Model.Page + 1, Model.PageSize }) : null)">Next</a>
+            </nav>
         }
     </section>
 </main>

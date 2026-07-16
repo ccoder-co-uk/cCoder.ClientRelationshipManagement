@@ -27,7 +27,12 @@ public sealed class EmailsController(
     : Controller
 {
     [HttpGet("")]
-    public async Task<IActionResult> Index(string search = null, string state = null, Guid? id = null)
+    public async Task<IActionResult> Index(
+        string search = null,
+        string state = null,
+        Guid? id = null,
+        int page = 1,
+        int pageSize = 25)
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
@@ -87,11 +92,24 @@ public sealed class EmailsController(
                 || item.ToAddresses.Contains(trimmedSearch));
         }
 
+        pageSize = pageSize is 25 or 50 or 100 ? pageSize : 25;
+        int totalCount = await query.CountAsync();
+        int totalPages = Math.Max(1, (int)Math.Ceiling(totalCount / (double)pageSize));
+        page = Math.Clamp(page, 1, totalPages);
+
+        int draftEmails = await query.CountAsync(item =>
+            item.State == EmailState.Draft || item.State == EmailState.Failed);
+        int approvedEmails = await query.CountAsync(item =>
+            item.State == EmailState.Approved || item.State == EmailState.Sending);
+        int sentEmails = await query.CountAsync(item => item.State == EmailState.Sent);
+
         List<EmailRowProjection> rows = await query
             .OrderBy(item => item.State == EmailState.Sent)
             .ThenBy(item => item.ScheduledSendTimeUtc == null)
             .ThenBy(item => item.ScheduledSendTimeUtc)
             .ThenByDescending(item => item.CreatedOn)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .ToListAsync();
 
         return View(new EmailsPageViewModel
@@ -99,11 +117,15 @@ public sealed class EmailsController(
             Notice = TempData["EmailsNotice"]?.ToString() ?? string.Empty,
             Search = search ?? string.Empty,
             StateFilter = parsedState?.ToString() ?? string.Empty,
+            Page = page,
+            PageSize = pageSize,
+            TotalPages = totalPages,
+            TotalCount = totalCount,
             StateOptions = BuildStateOptions(parsedState?.ToString()),
-            TotalEmails = rows.Count,
-            DraftEmails = rows.Count(item => item.State is EmailState.Draft or EmailState.Failed),
-            ApprovedEmails = rows.Count(item => item.State is EmailState.Approved or EmailState.Sending),
-            SentEmails = rows.Count(item => item.State == EmailState.Sent),
+            TotalEmails = totalCount,
+            DraftEmails = draftEmails,
+            ApprovedEmails = approvedEmails,
+            SentEmails = sentEmails,
             Emails =
             [
                 .. rows.Select(item => new EmailListItemViewModel
@@ -153,7 +175,7 @@ public sealed class EmailsController(
         if (!ModelState.IsValid || request.ClientId == Guid.Empty || request.EmailId == Guid.Empty)
         {
             TempData["EmailsNotice"] = "Add both a subject and email content before approving.";
-            return RedirectToAction(nameof(Index));
+            return ReturnToIndex(request.ReturnUrl);
         }
 
         cCoder.ClientRelationshipManagement.Platform.Models.Entities.Email current =
@@ -167,7 +189,7 @@ public sealed class EmailsController(
         if (!await IsEmailActionableAsync(request.EmailId, cancellationToken))
         {
             TempData["EmailsNotice"] = "That email belongs to completed or cancelled workflow work and cannot be approved.";
-            return RedirectToAction(nameof(Index));
+            return ReturnToIndex(request.ReturnUrl);
         }
 
         var saved = await emailDraftWorkflowService.SaveDraftAsync(new EmailDraftUpsertCommand
@@ -191,7 +213,7 @@ public sealed class EmailsController(
         TempData["EmailsNotice"] = approved is null
             ? "That email could not be saved and approved."
             : "Your reviewed changes were saved and the email was approved for sending.";
-        return RedirectToAction(nameof(Index));
+        return ReturnToIndex(request.ReturnUrl);
     }
 
     [HttpPost("Reject")]
@@ -204,7 +226,7 @@ public sealed class EmailsController(
         if (!ModelState.IsValid || request.ClientId == Guid.Empty || request.EmailId == Guid.Empty)
         {
             TempData["EmailsNotice"] = "A clear rejection reason is required so the approval agent can investigate.";
-            return RedirectToAction(nameof(Index));
+            return ReturnToIndex(request.ReturnUrl);
         }
 
         var email = await emailDraftWorkflowService.RejectAsync(
@@ -236,7 +258,7 @@ public sealed class EmailsController(
         await agentMessageService.AppendEntryAsync(conversation.Id, "User", request.Reason, CurrentUserId, cancellationToken);
 
         TempData["EmailsNotice"] = "Email rejected. An Approval Agent conversation has been opened with the reason and source details attached.";
-        return RedirectToAction(nameof(Index));
+        return ReturnToIndex(request.ReturnUrl);
     }
 
     [HttpPost("Approve")]
@@ -247,12 +269,12 @@ public sealed class EmailsController(
             return redirect;
 
         if (request.ClientId == Guid.Empty || request.EmailId == Guid.Empty)
-            return RedirectToAction(nameof(Index));
+            return ReturnToIndex(request.ReturnUrl);
 
         if (!await IsEmailActionableAsync(request.EmailId, cancellationToken))
         {
             TempData["EmailsNotice"] = "That email belongs to completed or cancelled workflow work and cannot be approved.";
-            return RedirectToAction(nameof(Index));
+            return ReturnToIndex(request.ReturnUrl);
         }
 
         var email = await emailDraftWorkflowService.ApproveAsync(
@@ -264,7 +286,7 @@ public sealed class EmailsController(
             ? "That email could not be approved."
             : "Email approved for sending.";
 
-        return RedirectToAction(nameof(Index));
+        return ReturnToIndex(request.ReturnUrl);
     }
 
     async ValueTask<bool> IsEmailActionableAsync(Guid emailId, CancellationToken cancellationToken)
@@ -283,7 +305,7 @@ public sealed class EmailsController(
             return redirect;
 
         if (request.ClientId == Guid.Empty || request.EmailId == Guid.Empty)
-            return RedirectToAction(nameof(Index));
+            return ReturnToIndex(request.ReturnUrl);
 
         var email = await emailDraftWorkflowService.MarkSentAsync(request.ClientId, request.EmailId);
         if (email is not null)
@@ -293,8 +315,13 @@ public sealed class EmailsController(
             ? "That email could not be marked as sent."
             : "Email marked as sent.";
 
-        return RedirectToAction(nameof(Index));
+        return ReturnToIndex(request.ReturnUrl);
     }
+
+    IActionResult ReturnToIndex(string returnUrl) =>
+        Url.IsLocalUrl(returnUrl)
+            ? LocalRedirect(returnUrl)
+            : RedirectToAction(nameof(Index));
 
     IActionResult RedirectIfUnauthenticated()
     {
