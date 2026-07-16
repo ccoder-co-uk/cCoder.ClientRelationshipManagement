@@ -61,7 +61,7 @@ body {
 }
 
 .product-header__inner {
-    width: min(1600px, calc(100% - 100px));
+    width: min(1840px, calc(100% - 48px));
     margin: 0 auto;
     display: flex;
     align-items: center;
@@ -585,7 +585,7 @@ body {
 
 .page-shell,
 .docs-shell {
-    width: min(1600px, calc(100% - 100px));
+    width: min(1840px, calc(100% - 48px));
     margin: 0 auto;
     padding: 34px 0 52px;
 }
@@ -2350,7 +2350,37 @@ h1 {
 }
 
 .email-table {
-    min-width: 1180px;
+    min-width: 1280px;
+}
+
+.email-table th,
+.email-table td {
+    padding: 10px 12px;
+    vertical-align: middle;
+}
+
+.email-table td:nth-child(1),
+.email-table td:nth-child(2),
+.email-table td:nth-child(3),
+.email-table td:nth-child(5),
+.email-table td:nth-child(6),
+.email-table td:nth-child(7) {
+    white-space: nowrap;
+}
+
+.email-table td:nth-child(4) {
+    max-width: 34rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.email-table .inline-actions {
+    flex-wrap: nowrap;
+}
+
+.email-table .secondary-action {
+    padding: 8px 11px;
 }
 
 .email-table thead {
