@@ -110,7 +110,7 @@
                             <tr>
                                 <td><a href="/Clients/Edit/@email.ClientId">@email.ClientName</a></td>
                                 <td>@email.StateLabel</td>
-                                <td>@(string.IsNullOrWhiteSpace(email.ToAddresses) ? "Recipient pending" : email.ToAddresses)</td>
+                                <td>@(string.IsNullOrWhiteSpace(email.ToAddresses) ? "Recipient unavailable" : email.ToAddresses)</td>
                                 <td>@email.Subject</td>
                                 <td>@email.ScheduledSendLabel</td>
                                 <td>@(string.IsNullOrWhiteSpace(email.SentOnLabel) ? "Not sent" : email.SentOnLabel)</td>
@@ -143,7 +143,7 @@
                                 <div class="crm-dialog__body">
                                     <div class="crm-dialog__meta">
                                         <span class="queue-count">From: @(string.IsNullOrWhiteSpace(email.FromEmailAddress) ? "Sender pending" : $"{email.FromDisplayName} <{email.FromEmailAddress}>")</span>
-                                        <span class="queue-count">To: @(string.IsNullOrWhiteSpace(email.ToAddresses) ? "Recipient pending" : email.ToAddresses)</span>
+                                        <span class="queue-count">To: @(string.IsNullOrWhiteSpace(email.ToAddresses) ? "Recipient unavailable" : email.ToAddresses)</span>
                                         <span class="queue-count">@email.ScheduledSendLabel</span>
                                     </div>
                                     @if (!string.IsNullOrWhiteSpace(email.LastError))

@@ -47,6 +47,35 @@ public sealed class EmailsPageTests(CRMAcceptanceFixture fixture)
     }
 
     [CRMAcceptanceFact]
+    public async Task Get_Index_DoesNotOfferApprovalWithoutRecipient()
+    {
+        Client client = NewClient();
+        Company company = NewCompany(client.Id);
+        company.Name = "Missing Recipient Co";
+        ClientMaterial material = NewClientMaterial(client.Id);
+        Email email = NewEmail(client.Id, clientMaterialId: material.Id);
+        email.ToAddresses = null;
+        email.Subject = "Recipient-less draft";
+        email.State = EmailState.Draft;
+
+        await ExecuteInAdminContextAsync(async dbContext =>
+        {
+            dbContext.Clients.Add(client);
+            dbContext.Companies.Add(company);
+            dbContext.ClientMaterials.Add(material);
+            dbContext.Emails.Add(email);
+            await dbContext.SaveChangesAsync();
+        });
+
+        string response = await GetStringAsync($"/Admin/Emails?id={email.Id}");
+
+        response.Should().Contain("Recipient unavailable");
+        response.Should().Contain("cannot be approved or sent");
+        response.Should().NotContain("Approve Send");
+        response.Should().NotContain("Mark Sent");
+    }
+
+    [CRMAcceptanceFact]
     public async Task Post_Approve_UpdatesEmailState()
     {
         Client client = NewClient();
