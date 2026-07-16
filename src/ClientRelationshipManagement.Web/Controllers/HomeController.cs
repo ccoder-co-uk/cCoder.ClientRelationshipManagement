@@ -1,5 +1,5 @@
 using cCoder.ClientRelationshipManagement.Models.Security;
-using cCoder.ClientRelationshipManagement.Platform.Data;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.Security.Objects;
 using ClientRelationshipManagement.Web.Documentation;
@@ -18,7 +18,8 @@ using PlatformEntities = cCoder.ClientRelationshipManagement.Platform.Models.Ent
 namespace ClientRelationshipManagement.Web.Controllers;
 
 public class HomeController(
-    IPlatformDbContextFactory dbContextFactory,
+    ISalesCoordinationService salesWorkspaceService,
+    IOperationsCoordinationService operationsService,
     IEmailDraftWorkflowService emailDraftWorkflowService,
     IWorkflowAutomationService workflowAutomationService,
     IAgentAutomationSettingsService automationSettingsService,
@@ -48,13 +49,12 @@ public class HomeController(
             return redirect;
 
         SetNoStoreHeaders();
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
         string[] readableTenantIds = GetReadableTenantIds();
         DateTimeOffset today = new(DateTime.UtcNow.Date, TimeSpan.Zero);
         DateTimeOffset tomorrow = today.AddDays(1);
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
-        IQueryable<PlatformEntities.ProcessTask> pendingTasks = context.ProcessTasks
+        IQueryable<PlatformEntities.ProcessTask> pendingTasks = salesWorkspaceService.RetrieveProcessTasks()
             .AsNoTracking()
             .Where(task => task.State == ProcessTaskState.Pending)
             .Where(task =>
@@ -70,40 +70,39 @@ public class HomeController(
         LaneActionStatsViewModel opportunityActions = GetLaneActions(laneTaskSummaries, OpportunityLane);
         LaneActionStatsViewModel clientActions = GetLaneActions(laneTaskSummaries, ClientLane);
         Dictionary<AgentWorkLane, LaneAgentHealthViewModel> agentHealth = await BuildAgentHealthAsync(
-            context,
             cancellationToken);
         List<Guid> activeTaskIds = await pendingTasks
             .Where(task => task.AgentClaimId.HasValue && task.AgentClaimExpiresOn > now)
             .Select(task => task.Id)
             .ToListAsync(cancellationToken);
 
-        Dictionary<RelationshipStatus, int> clientStateCounts = await context.TenantCompanyRelationships
+        Dictionary<RelationshipStatus, int> clientStateCounts = await salesWorkspaceService.RetrieveRelationships()
             .AsNoTracking()
             .Where(relationship => !relationship.IsArchived && readableTenantIds.Contains(relationship.TenantId))
             .GroupBy(relationship => relationship.Status)
             .Select(group => new { Status = group.Key, Count = group.Count() })
             .ToDictionaryAsync(item => item.Status, item => item.Count, cancellationToken);
 
-        int totalClients = await context.ClientAccounts.AsNoTracking()
+        int totalClients = await salesWorkspaceService.RetrieveClientAccounts().AsNoTracking()
             .CountAsync(account => account.Status != ClientAccountStatus.Closed
                 && readableTenantIds.Contains(account.TenantCompanyRelationship.TenantId), cancellationToken);
-        int activeOpportunities = await context.Opportunities.AsNoTracking()
+        int activeOpportunities = await salesWorkspaceService.RetrieveOpportunities().AsNoTracking()
             .CountAsync(opportunity => opportunity.Stage != SalesPipelineStage.Won
                 && opportunity.Stage != SalesPipelineStage.Lost
                 && readableTenantIds.Contains(opportunity.TenantCompanyRelationship.TenantId), cancellationToken);
-        int activeLeads = await context.Leads.AsNoTracking()
+        int activeLeads = await salesWorkspaceService.RetrieveLeads().AsNoTracking()
             .CountAsync(lead => lead.Status != LeadStatus.Rejected
                 && lead.Status != LeadStatus.Converted
                 && readableTenantIds.Contains(lead.TenantId), cancellationToken);
-        int suppressedCompanies = await context.Companies.AsNoTracking()
+        int suppressedCompanies = await salesWorkspaceService.RetrieveCompanies().AsNoTracking()
             .CountAsync(company => company.SourceSystem == "CompaniesHouse" && company.IsProspectingSuppressed, cancellationToken);
-        int candidateCompanies = await context.Companies.AsNoTracking()
+        int candidateCompanies = await salesWorkspaceService.RetrieveCompanies().AsNoTracking()
             .CountAsync(company => company.SourceSystem == "CompaniesHouse"
                 && !company.IsProspectingSuppressed
                 && !company.Relationships.Any()
-                && !context.Leads.Any(lead => lead.CompanyId == company.Id), cancellationToken);
+                && !salesWorkspaceService.RetrieveLeads().Any(lead => lead.CompanyId == company.Id), cancellationToken);
 
-        long dashboardVersion = await GetDashboardVersionAsync(context, readableTenantIds, cancellationToken);
+        long dashboardVersion = await GetDashboardVersionAsync(cancellationToken);
         int totalOpenActions = laneTaskSummaries.Sum(item => item.Total);
         return Json(new HomeDashboardStatsViewModel
         {
@@ -286,21 +285,15 @@ public class HomeController(
         Response.Headers.Expires = "0";
     }
 
-    static async ValueTask<long> GetDashboardVersionAsync(
-        PlatformDbContext context,
-        string[] readableTenantIds,
+    async ValueTask<long> GetDashboardVersionAsync(
         CancellationToken cancellationToken = default)
     {
-        DateTimeOffset? taskVersion = await context.ProcessTasks
+        DateTimeOffset? taskVersion = await salesWorkspaceService.RetrieveProcessTasks()
             .AsNoTracking()
-            .Where(task =>
-                (task.LeadId.HasValue && readableTenantIds.Contains(task.Lead!.TenantId))
-                || (task.TenantCompanyRelationshipId.HasValue && readableTenantIds.Contains(task.TenantCompanyRelationship!.TenantId)))
             .MaxAsync(task => (DateTimeOffset?)task.LastUpdated, cancellationToken);
 
-        DateTimeOffset? emailVersion = await context.Emails
+        DateTimeOffset? emailVersion = await operationsService.RetrieveAllEmails()
             .AsNoTracking()
-            .Where(email => readableTenantIds.Contains(email.TenantCompanyRelationship.TenantId))
             .MaxAsync(email => (DateTimeOffset?)email.LastUpdated, cancellationToken);
 
         DateTimeOffset latest = new[] { taskVersion, emailVersion }
@@ -315,12 +308,11 @@ public class HomeController(
     {
         PlatformEntities.AgentAutomationSetting automationSetting =
             await automationSettingsService.GetAsync(ssoAuthInfo.SSOUserId);
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
         string[] readableTenantIds = GetReadableTenantIds();
         DateTimeOffset today = new(DateTime.UtcNow.Date, TimeSpan.Zero);
         DateTimeOffset tomorrow = today.AddDays(1);
 
-        IQueryable<PlatformEntities.ProcessTask> pendingTasks = context.ProcessTasks
+        IQueryable<PlatformEntities.ProcessTask> pendingTasks = salesWorkspaceService.RetrieveProcessTasks()
             .AsNoTracking()
             .Where(task => task.State == ProcessTaskState.Pending)
             .Where(task =>
@@ -336,12 +328,10 @@ public class HomeController(
         LaneActionStatsViewModel opportunityActions = GetLaneActions(laneTaskSummaries, OpportunityLane);
         LaneActionStatsViewModel clientActions = GetLaneActions(laneTaskSummaries, ClientLane);
         Dictionary<AgentWorkLane, LaneAgentHealthViewModel> agentHealth = await BuildAgentHealthAsync(
-            context,
             CancellationToken.None);
 
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        IQueryable<PlatformEntities.ProcessTask> runnableTasks =
-            WorkflowTaskQueue.BuildRunnableQuery(context, now);
+        IQueryable<PlatformEntities.ProcessTask> runnableTasks = salesWorkspaceService.RetrieveRunnableProcessTasks(now);
         runnableTasks = runnableTasks.Where(task =>
             (task.LeadId.HasValue && readableTenantIds.Contains(task.Lead!.TenantId))
             || (task.TenantCompanyRelationshipId.HasValue && readableTenantIds.Contains(task.TenantCompanyRelationship!.TenantId)));
@@ -382,7 +372,7 @@ public class HomeController(
 
         Dictionary<Guid, List<TodoOutcomeOptionViewModel>> outcomeLookup = stepIds.Count == 0
             ? new Dictionary<Guid, List<TodoOutcomeOptionViewModel>>()
-            : await context.ProcessTransitions
+            : await salesWorkspaceService.RetrieveProcessTransitions()
                 .AsNoTracking()
                 .Where(transition => stepIds.Contains(transition.ProcessStepId))
                 .GroupBy(transition => transition.ProcessStepId)
@@ -403,7 +393,7 @@ public class HomeController(
             .. tasks.Select(task => ToTodoItem(task, outcomeLookup.GetValueOrDefault(task.ProcessStepId) ?? []))
         ];
 
-        List<ClientStateSummaryViewModel> stateSummaries = await context.TenantCompanyRelationships
+        List<ClientStateSummaryViewModel> stateSummaries = await salesWorkspaceService.RetrieveRelationships()
             .AsNoTracking()
             .Where(relationship => !relationship.IsArchived && readableTenantIds.Contains(relationship.TenantId))
             .GroupBy(relationship => relationship.Status)
@@ -431,26 +421,26 @@ public class HomeController(
                     .ToList();
             });
 
-        int totalClients = await context.ClientAccounts.AsNoTracking()
+        int totalClients = await salesWorkspaceService.RetrieveClientAccounts().AsNoTracking()
             .CountAsync(account => account.Status != ClientAccountStatus.Closed
                 && readableTenantIds.Contains(account.TenantCompanyRelationship.TenantId));
-        int activeOpportunities = await context.Opportunities.AsNoTracking()
+        int activeOpportunities = await salesWorkspaceService.RetrieveOpportunities().AsNoTracking()
             .CountAsync(opportunity => opportunity.Stage != SalesPipelineStage.Won
                 && opportunity.Stage != SalesPipelineStage.Lost
                 && readableTenantIds.Contains(opportunity.TenantCompanyRelationship.TenantId));
-        int activeLeads = await context.Leads.AsNoTracking()
+        int activeLeads = await salesWorkspaceService.RetrieveLeads().AsNoTracking()
             .CountAsync(lead => lead.Status != LeadStatus.Rejected
                 && lead.Status != LeadStatus.Converted
                 && readableTenantIds.Contains(lead.TenantId));
-        int suppressedCompanies = await context.Companies.AsNoTracking()
+        int suppressedCompanies = await salesWorkspaceService.RetrieveCompanies().AsNoTracking()
             .CountAsync(company => company.SourceSystem == "CompaniesHouse" && company.IsProspectingSuppressed);
-        int candidateCompanies = await context.Companies.AsNoTracking()
+        int candidateCompanies = await salesWorkspaceService.RetrieveCompanies().AsNoTracking()
             .CountAsync(company => company.SourceSystem == "CompaniesHouse"
                 && !company.IsProspectingSuppressed
                 && !company.Relationships.Any()
-                && !context.Leads.Any(lead => lead.CompanyId == company.Id));
+                && !salesWorkspaceService.RetrieveLeads().Any(lead => lead.CompanyId == company.Id));
 
-        long dashboardVersion = await GetDashboardVersionAsync(context, readableTenantIds);
+        long dashboardVersion = await GetDashboardVersionAsync();
         return new HomeDashboardViewModel
         {
             Notice = TempData["DashboardNotice"]?.ToString(),
@@ -478,16 +468,14 @@ public class HomeController(
         };
     }
 
-    async Task<Dictionary<AgentWorkLane, LaneAgentHealthViewModel>> BuildAgentHealthAsync(
-        PlatformDbContext context,
-        CancellationToken cancellationToken)
+    async Task<Dictionary<AgentWorkLane, LaneAgentHealthViewModel>> BuildAgentHealthAsync(CancellationToken cancellationToken)
     {
         const int sampleLimit = 10;
         Dictionary<AgentWorkLane, LaneAgentHealthViewModel> result = [];
 
         foreach (AgentWorkLane lane in Enum.GetValues<AgentWorkLane>())
         {
-            List<AgentRunState> states = await context.AgentRuns
+            List<AgentRunState> states = await operationsService.RetrieveAllAgentRuns()
                 .AsNoTracking()
                 .Where(run => run.Kind == AgentRunKind.TaskAgent
                     && run.WorkLane == lane

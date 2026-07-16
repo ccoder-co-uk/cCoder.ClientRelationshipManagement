@@ -1,18 +1,76 @@
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using cCoder.Security.Objects;
 using Microsoft.EntityFrameworkCore;
 using PlatformEntities = cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using ClientRelationshipManagement.Web.Services.Processes;
+using cCoder.ClientRelationshipManagement.Models.Security;
 
 namespace ClientRelationshipManagement.Web.Services.Leads;
 
 public sealed class LeadIngestionService(
-    IPlatformDbContextFactory dbContextFactory,
+    ISalesCoordinationService sales,
     IWorkflowAutomationService workflowAutomationService,
-    ISSOAuthInfo authInfo)
+    ISSOAuthInfo authInfo,
+    ICRMAuthInfo crmAuthInfo)
     : ILeadIngestionService
 {
+    public async ValueTask<PlatformEntities.Lead> UpdateLeadAsync(
+        UpdateLeadCommand command, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        PlatformEntities.Lead lead = await sales.RetrieveLeads().Include(item => item.Company)
+            .ThenInclude(company => company.RegisteredAddress)
+            .FirstOrDefaultAsync(item => item.Id == command.Id, cancellationToken);
+        if (lead is null || !crmAuthInfo.WriteableTenants.Contains(lead.TenantId)
+            || !crmAuthInfo.WriteableTenants.Contains(command.TenantId)) return null;
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        lead.TenantId = command.TenantId.Trim();
+        lead.SourceSystem = Normalize(command.SourceSystem);
+        lead.SourceRecordId = Normalize(command.SourceRecordId);
+        lead.SourceFileName = Normalize(command.SourceFileName);
+        lead.Status = command.Status;
+        lead.RawCompanyName = command.RawCompanyName.Trim();
+        lead.RawTradingName = Normalize(command.RawTradingName);
+        lead.RawCompanyNumber = Normalize(command.RawCompanyNumber);
+        lead.RawVatNumber = Normalize(command.RawVatNumber);
+        lead.RawWebsiteUrl = Normalize(command.RawWebsiteUrl);
+        lead.RawContactEmailAddress = Normalize(command.RawContactEmailAddress);
+        lead.RawContactPhoneNumber = Normalize(command.RawContactPhoneNumber);
+        await UpdateCompanyAddressAsync(lead.Company, command.RawAddressText, lead.SourceSystem, now, cancellationToken);
+        lead.QualificationNotes = Normalize(command.QualificationNotes);
+        lead.LastUpdatedBy = CurrentUserId;
+        lead.LastUpdated = now;
+
+        PlatformEntities.LeadContact contact = await sales.RetrieveLeadContacts()
+            .FirstOrDefaultAsync(item => item.LeadId == lead.Id, cancellationToken);
+        bool hasContact = !string.IsNullOrWhiteSpace(command.ContactName)
+            || !string.IsNullOrWhiteSpace(command.ContactEmailAddress)
+            || !string.IsNullOrWhiteSpace(command.ContactPhoneNumber);
+        if (contact is null && hasContact)
+        {
+            contact = new PlatformEntities.LeadContact
+            {
+                Id = Guid.NewGuid(), LeadId = lead.Id, IsPrimary = true,
+                CreatedBy = CurrentUserId, CreatedOn = now
+            };
+            sales.Add(contact);
+        }
+        if (contact is not null)
+        {
+            contact.Name = Normalize(command.ContactName);
+            contact.Position = Normalize(command.ContactPosition);
+            contact.EmailAddress = Normalize(command.ContactEmailAddress);
+            contact.PhoneNumber = Normalize(command.ContactPhoneNumber);
+            contact.LinkedInUrl = Normalize(command.ContactLinkedInUrl);
+            contact.LastUpdatedBy = CurrentUserId;
+            contact.LastUpdated = now;
+        }
+        await sales.SaveAsync(cancellationToken);
+        await workflowAutomationService.EnsureCoverageAsync(leadId: lead.Id, forceCreate: true, cancellationToken: cancellationToken);
+        return lead;
+    }
     public async ValueTask<PlatformEntities.Lead> CreateLeadAsync(
         CreateLeadCommand command,
         CancellationToken cancellationToken = default)
@@ -21,8 +79,8 @@ public sealed class LeadIngestionService(
 
         if (string.IsNullOrWhiteSpace(command.RawCompanyName))
             throw new InvalidOperationException("A lead requires at least a raw company name.");
-
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
+        if (!crmAuthInfo.WriteableTenants.Contains(ResolveTenantId(command.TenantId)))
+            throw new UnauthorizedAccessException("The requesting user cannot create a lead in that tenant.");
 
         DateTimeOffset now = DateTimeOffset.UtcNow;
         string sourceSystem = FirstNonEmpty(command.SourceSystem, "manual");
@@ -30,7 +88,7 @@ public sealed class LeadIngestionService(
         string companyNumber = Normalize(command.RawCompanyNumber);
         string vatNumber = Normalize(command.RawVatNumber);
         PlatformEntities.Company company = await FindCompanyAsync(
-            context,
+            sales,
             sourceSystem,
             sourceRecordId,
             companyNumber,
@@ -45,7 +103,7 @@ public sealed class LeadIngestionService(
                 CurrentUserId,
                 now);
             if (address is not null)
-                context.Addresses.Add(address);
+                sales.Add(address);
 
             company = new PlatformEntities.Company
             {
@@ -66,11 +124,11 @@ public sealed class LeadIngestionService(
                 CreatedOn = now,
                 LastUpdated = now
             };
-            context.Companies.Add(company);
+            sales.Add(company);
         }
         else
         {
-            await UpdateCompanyAddressAsync(context, company, command.RawAddressText, sourceSystem, now, cancellationToken);
+            await UpdateCompanyAddressAsync(company, command.RawAddressText, sourceSystem, now, cancellationToken);
         }
 
         PlatformEntities.Lead lead = new()
@@ -96,13 +154,13 @@ public sealed class LeadIngestionService(
             LastUpdated = now
         };
 
-        context.Leads.Add(lead);
+        sales.Add(lead);
 
         if (!string.IsNullOrWhiteSpace(command.ContactName)
             || !string.IsNullOrWhiteSpace(command.ContactEmailAddress)
             || !string.IsNullOrWhiteSpace(command.ContactPhoneNumber))
         {
-            context.LeadContacts.Add(new PlatformEntities.LeadContact
+            sales.Add(new PlatformEntities.LeadContact
             {
                 Id = Guid.NewGuid(),
                 LeadId = lead.Id,
@@ -119,13 +177,13 @@ public sealed class LeadIngestionService(
             });
         }
 
-        await context.SaveChangesAsync(cancellationToken);
+        await sales.SaveAsync(cancellationToken);
         await workflowAutomationService.EnsureCoverageAsync(leadId: lead.Id, forceCreate: true, cancellationToken: cancellationToken);
         return lead;
     }
 
     static async ValueTask<PlatformEntities.Company> FindCompanyAsync(
-        PlatformDbContext context,
+        ISalesCoordinationService sales,
         string sourceSystem,
         string sourceRecordId,
         string companyNumber,
@@ -134,7 +192,7 @@ public sealed class LeadIngestionService(
     {
         if (!string.IsNullOrWhiteSpace(sourceRecordId))
         {
-            PlatformEntities.Company bySource = await context.Companies
+            PlatformEntities.Company bySource = await sales.RetrieveCompanies()
                 .FirstOrDefaultAsync(item => item.SourceSystem == sourceSystem
                     && item.SourceRecordId == sourceRecordId, cancellationToken);
             if (bySource is not null)
@@ -143,7 +201,7 @@ public sealed class LeadIngestionService(
 
         if (!string.IsNullOrWhiteSpace(companyNumber))
         {
-            PlatformEntities.Company byNumber = await context.Companies
+            PlatformEntities.Company byNumber = await sales.RetrieveCompanies()
                 .FirstOrDefaultAsync(item => item.CompanyNumber == companyNumber, cancellationToken);
             if (byNumber is not null)
                 return byNumber;
@@ -151,11 +209,10 @@ public sealed class LeadIngestionService(
 
         return string.IsNullOrWhiteSpace(vatNumber)
             ? null
-            : await context.Companies.FirstOrDefaultAsync(item => item.VatNumber == vatNumber, cancellationToken);
+            : await sales.RetrieveCompanies().FirstOrDefaultAsync(item => item.VatNumber == vatNumber, cancellationToken);
     }
 
     async ValueTask UpdateCompanyAddressAsync(
-        PlatformDbContext context,
         PlatformEntities.Company company,
         string addressText,
         string sourceSystem,
@@ -166,12 +223,12 @@ public sealed class LeadIngestionService(
             return;
 
         PlatformEntities.Address address = company.RegisteredAddressId.HasValue
-            ? await context.Addresses.FirstOrDefaultAsync(item => item.Id == company.RegisteredAddressId.Value, cancellationToken)
+            ? await sales.RetrieveAddresses().FirstOrDefaultAsync(item => item.Id == company.RegisteredAddressId.Value, cancellationToken)
             : null;
         if (address is null)
         {
             address = AddressRecordMapper.CreateFromText(addressText, sourceSystem, CurrentUserId, now);
-            context.Addresses.Add(address);
+            sales.Add(address);
             company.RegisteredAddressId = address.Id;
         }
         else

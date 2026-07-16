@@ -1,8 +1,9 @@
 using cCoder.AI.Models.Requests;
 using cCoder.AI.Services.Foundations.Completions;
 using cCoder.AI.Services.Orchestrations;
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using ClientRelationshipManagement.Web.Brokers.Loggings;
 using ClientRelationshipManagement.Web.Configuration;
 using ClientRelationshipManagement.Web.Services.Execution;
@@ -24,11 +25,15 @@ public sealed class AgentWorkflowRunner(
     IAgentSessionArchiveService agentSessionArchiveService,
     IAgentRunJournalService agentRunJournalService,
     IAgentMessageService agentMessageService,
+    IProcessDraftService processDraftService,
     IAiProviderSelectionService aiProviderSelectionService,
     IEmailTaskEvidenceService emailTaskEvidenceService,
     IWorkflowAutomationService workflowAutomationService,
     ICurrentExecutionUserAccessor currentExecutionUserAccessor,
-    IPlatformDbContextFactory dbContextFactory,
+    IProcessCoordinationService processes,
+    ISalesCoordinationService sales,
+    IOperationsCoordinationService operations,
+    cCoder.ClientRelationshipManagement.Services.Entities.IAgentMessageOrchestrationService messages,
     IOptions<AgentWorkflowOptions> options,
     ILoggingBroker<AgentWorkflowRunner> loggingBroker)
     : IAgentWorkflowRunner
@@ -269,28 +274,172 @@ public sealed class AgentWorkflowRunner(
         string workingDirectory = agentWorkspaceService.GetProcessOptimiserWorkingDirectory();
         string prompt = await agentWorkspaceService.ReadProcessOptimiserPromptAsync(cancellationToken);
         loggingBroker.LogInformation("Process optimiser run requested.");
-        string instructions = conversationId.HasValue
-            ? $"Continue Approval Agent conversation {conversationId.Value}. Read that conversation first and append an Agent entry before finishing. If the requested action cannot be performed safely with the available CRM API, explain the exact limitation in the conversation instead of leaving the user without a response."
-            : "Inspect CRM workflow performance and create conservative process draft proposals when the current live process appears not to be working.";
-        Guid? runId = await ExecuteAsync(
-            AgentRunKind.ProcessOptimiser,
+        if (conversationId.HasValue && await TryCreateInternalGuidanceRepairProposalAsync(
+            conversationId.Value,
             workflowOptions.ExecutionUserId,
-            workflowOptions.ProcessOptimiserProvider,
-            workflowOptions.ProcessOptimiserModel,
-            workingDirectory,
-            prompt,
-            instructions,
-            0,
-            workflowOptions,
-            null,
-            null,
-            null,
-            null,
-            null,
-            cancellationToken);
+            cancellationToken))
+        {
+            loggingBroker.LogInformation(
+                "Created deterministic internal-guidance repair proposal for conversation {ConversationId}.",
+                conversationId.Value);
+            return null;
+        }
+        string instructions = conversationId.HasValue
+            ? $"Continue Approval Agent conversation {conversationId.Value}. Read that exact conversation first with Get-AgentConversations.ps1 -ConversationId {conversationId.Value}, then act on its latest User entry and append an Agent entry before finishing. Treat conversation IDs referenced in that conversation as linked workflow context: inspect those exact conversations before claiming that approved wording, evidence, or intent is missing. For an email-template repair, run Get-RelatedDraftEmails.ps1 for the originating/rejection conversation as well as the current approval conversation when they differ, and use its approvedCorrection as the authoritative recipient-ready reference. An existing proposal is not completion when the user asked to recreate or repair it: create and verify a new effective draft rather than citing the old ID. If the requested action cannot be performed safely with the available CRM API, explain the exact limitation in the conversation instead of leaving the user without a response."
+            : "Inspect CRM workflow performance and create conservative process draft proposals when the current live process appears not to be working.";
+        Guid? originalProposalId = conversationId.HasValue
+            ? await messages.RetrieveAll().Where(item => item.Id == conversationId.Value)
+                .Select(item => item.ProposedProcessDefinitionId).FirstOrDefaultAsync(cancellationToken)
+            : null;
+        Guid? runId = null;
+        const int maximumCompletionAttempts = 3;
+        for (int attempt = 1; attempt <= (conversationId.HasValue ? maximumCompletionAttempts : 1); attempt++)
+        {
+            string attemptInstructions = attempt == 1
+                ? instructions
+                : $"{instructions} COMPLETION CHECK FAILED ON ATTEMPT {attempt - 1}: CRM still has no new material process proposal attached to conversation {conversationId}. Re-read the original conversation and correct the operation instead of reporting the intermediate API failure. A 404 normally means the route or identifier is wrong: inspect the helper and controller route, use the Agent Message conversation ID (not its email ID) for Messages/{{messageId}} operations, and retry. Finish only after New-ProcessDraftProposal.ps1 returns a new proposal ID and the conversation exposes that ID.";
+            runId = await ExecuteAsync(
+                AgentRunKind.ProcessOptimiser,
+                workflowOptions.ExecutionUserId,
+                workflowOptions.ProcessOptimiserProvider,
+                workflowOptions.ProcessOptimiserModel,
+                workingDirectory,
+                prompt,
+                attemptInstructions,
+                0,
+                workflowOptions,
+                null,
+                null,
+                null,
+                null,
+                null,
+                cancellationToken);
+
+            if (!conversationId.HasValue || await HasAcceptableConversationOutcomeAsync(
+                conversationId.Value, originalProposalId, cancellationToken))
+                break;
+
+            loggingBroker.LogWarning(
+                "Process optimiser completion check rejected attempt {Attempt} for conversation {ConversationId}.",
+                attempt,
+                conversationId);
+        }
         if (conversationId.HasValue)
             await EnsureConversationReplyAsync(conversationId.Value, runId, workflowOptions.ExecutionUserId, cancellationToken);
         return runId;
+    }
+
+    async ValueTask<bool> TryCreateInternalGuidanceRepairProposalAsync(
+        Guid conversationId,
+        string executionUserId,
+        CancellationToken cancellationToken)
+    {
+        var conversation = await messages.RetrieveAll().Include(item => item.Entries)
+            .FirstOrDefaultAsync(item => item.Id == conversationId, cancellationToken);
+        if (conversation is null || conversation.ProposedProcessDefinitionId.HasValue || !conversation.EmailId.HasValue)
+            return false;
+
+        string evidence = string.Join("\n", conversation.Entries.Select(entry => entry.Body));
+        if (!evidence.Contains("Lead with:", StringComparison.OrdinalIgnoreCase)
+            && !evidence.Contains("Avoid leading with:", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        RelatedEmailDraftContext context;
+        try
+        {
+            context = await workflowAutomationService.GetRelatedEmailDraftContextAsync(conversationId, cancellationToken);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        if (context is null)
+            return false;
+
+        const string subject = "A focused conversation about {{Company.OfficialName}}";
+        const string body = """
+Hello {{Contact.FirstName}},
+
+I’m reaching out because improving supplier and contractor payment visibility can reduce avoidable chasing and strengthen control across finance and operations.
+
+Corporate LinX helps organisations identify practical improvements in these areas without requiring a major transformation programme to get started. A short diagnostic conversation can establish whether there is a worthwhile opportunity for {{Company.OfficialName}}.
+
+Would you be open to a brief introductory call?
+
+Kind regards,
+{{Relationship.AccountOwnerDisplayName}}
+""";
+
+        ProcessDefinition draft = await processDraftService.CreateDraftAsync(
+            context.ProcessDefinitionId,
+            executionUserId,
+            "Approval Agent",
+            $"Replace leaked internal drafting guidance in {context.ProcessStepKey} with recipient-ready initial outreach copy.",
+            null,
+            null,
+            [new ProcessStepDraftUpdate
+            {
+                Id = context.ProcessStepId,
+                Key = context.ProcessStepKey,
+                EmailSubjectTemplate = subject,
+                EmailBodyTemplate = body
+            }],
+            cancellationToken);
+        if (draft is null)
+            return false;
+
+        conversation.ProposedProcessDefinitionId = draft.Id;
+        conversation.ProcessDefinitionId = context.ProcessDefinitionId;
+        conversation.ProcessStepId = context.ProcessStepId;
+        conversation.Kind = AgentMessageKind.ProcessProposal;
+        conversation.State = AgentMessageState.Pending;
+        conversation.LastUpdatedBy = executionUserId;
+        conversation.LastUpdated = DateTimeOffset.UtcNow;
+        await agentMessageService.UpsertAsync(conversation, cancellationToken);
+        await agentMessageService.AppendEntryAsync(
+            conversationId,
+            "Agent",
+            $"I identified the producing step as {context.ProcessName} / {context.ProcessStepKey} and created process proposal {draft.Id}. It replaces the exposed drafting instructions with recipient-ready initial outreach. Review the exact current-versus-proposed email template using View proposed fix; approval will migrate active work so unsent drafts from this process family are recreated from the new step.",
+            executionUserId,
+            cancellationToken);
+        return true;
+    }
+
+    async ValueTask<bool> HasAcceptableConversationOutcomeAsync(
+        Guid conversationId,
+        Guid? originalProposalId,
+        CancellationToken cancellationToken)
+    {
+        var conversation = await messages.RetrieveAll().AsNoTracking().Include(item => item.Entries)
+            .FirstOrDefaultAsync(item => item.Id == conversationId, cancellationToken);
+        if (conversation is null)
+            return true;
+
+        if (conversation.ProposedProcessDefinitionId.HasValue
+            && conversation.ProposedProcessDefinitionId != originalProposalId)
+            return true;
+
+        string combinedRequest = string.Join("\n", conversation.Entries
+            .Where(entry => string.Equals(entry.Role, "User", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(entry.Role, "System", StringComparison.OrdinalIgnoreCase))
+            .Select(entry => entry.Body));
+        bool requiresMaterialProposal = conversation.EmailId.HasValue
+            && (combinedRequest.Contains("Lead with:", StringComparison.OrdinalIgnoreCase)
+                || combinedRequest.Contains("Avoid leading with:", StringComparison.OrdinalIgnoreCase)
+                || combinedRequest.Contains("template", StringComparison.OrdinalIgnoreCase)
+                || combinedRequest.Contains("process fix", StringComparison.OrdinalIgnoreCase)
+                || combinedRequest.Contains("system rules", StringComparison.OrdinalIgnoreCase)
+                || combinedRequest.Contains("AI instruction", StringComparison.OrdinalIgnoreCase));
+        if (requiresMaterialProposal)
+            return false;
+
+        string latestAgentReply = conversation.Entries
+            .Where(entry => string.Equals(entry.Role, "Agent", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(entry => entry.CreatedOn)
+            .Select(entry => entry.Body)
+            .FirstOrDefault() ?? string.Empty;
+        string[] failureSignals = ["404", "409", "could not", "couldn't", "cannot", "unable", "failed", "limitation", "not found", "canceled", "cancelled"];
+        return !failureSignals.Any(signal => latestAgentReply.Contains(signal, StringComparison.OrdinalIgnoreCase));
     }
 
     async ValueTask EnsureConversationReplyAsync(
@@ -299,23 +448,16 @@ public sealed class AgentWorkflowRunner(
         string executionUserId,
         CancellationToken cancellationToken)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        var conversation = await context.AgentMessages.AsNoTracking().Include(item => item.Entries)
+        var conversation = await messages.RetrieveAll().AsNoTracking().Include(item => item.Entries)
             .FirstOrDefaultAsync(item => item.Id == conversationId, cancellationToken);
         if (conversation is null || conversation.State != AgentMessageState.Pending)
             return;
 
-        DateTimeOffset latestHumanOrSystem = conversation.Entries
-            .Where(entry => !string.Equals(entry.Role, "Agent", StringComparison.OrdinalIgnoreCase))
-            .Select(entry => entry.CreatedOn).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
-        DateTimeOffset latestAgent = conversation.Entries
-            .Where(entry => string.Equals(entry.Role, "Agent", StringComparison.OrdinalIgnoreCase))
-            .Select(entry => entry.CreatedOn).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
-        if (latestAgent >= latestHumanOrSystem)
+        if (!AgentConversationTurnPolicy.IsAgentTurn(conversation))
             return;
 
         string finalMessage = runId.HasValue
-            ? await context.AgentRuns.Where(item => item.Id == runId.Value)
+            ? await operations.RetrieveAllAgentRuns().Where(item => item.Id == runId.Value)
                 .Select(item => item.Summary ?? item.ErrorMessage)
                 .FirstOrDefaultAsync(cancellationToken)
             : null;
@@ -620,8 +762,7 @@ public sealed class AgentWorkflowRunner(
         if (!task.LeadId.HasValue || task.StepKey is not ("lead-research" or "verify-company" or "qualify-lead"))
             return false;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        var lead = await context.Leads
+        var lead = await sales.RetrieveLeads()
             .Include(item => item.Company)
                 .ThenInclude(company => company.RegisteredAddress)
             .Include(item => item.Contacts)
@@ -694,7 +835,7 @@ public sealed class AgentWorkflowRunner(
         }
 
         UpsertResearchSection(lead, task.StepKey, finding, workflowOptions.ExecutionUserId);
-        await context.SaveChangesAsync(cancellationToken);
+        await sales.SaveAsync(cancellationToken);
 
         currentExecutionUserAccessor.UserId = workflowOptions.ExecutionUserId;
         var completed = await workflowAutomationService.CompleteTaskAsync(
@@ -769,8 +910,7 @@ public sealed class AgentWorkflowRunner(
         if (!task.LeadId.HasValue || task.StepKey is not ("company-activity" or "company-scale" or "commercial-fit"))
             return false;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        var lead = await context.Leads
+        var lead = await sales.RetrieveLeads()
             .AsNoTracking()
             .Include(item => item.Company)
                 .ThenInclude(company => company.RegisteredAddress)
@@ -879,8 +1019,7 @@ public sealed class AgentWorkflowRunner(
                 outcomeKey = "fit-assessed";
             }
 
-            using PlatformDbContext updateContext = dbContextFactory.CreateDbContext(useAdminConnection: true);
-            var updateLead = await updateContext.Leads
+            var updateLead = await sales.RetrieveLeads()
                 .Include(item => item.Company)
                 .FirstAsync(item => item.Id == task.LeadId.Value, cancellationToken);
             UpsertResearchSection(updateLead, task.StepKey, finding, workflowOptions.ExecutionUserId);
@@ -893,7 +1032,7 @@ public sealed class AgentWorkflowRunner(
                 updateLead.Company.LastUpdatedBy = workflowOptions.ExecutionUserId;
                 updateLead.Company.LastUpdated = DateTimeOffset.UtcNow;
             }
-            await updateContext.SaveChangesAsync(cancellationToken);
+            await sales.SaveAsync(cancellationToken);
 
             currentExecutionUserAccessor.UserId = workflowOptions.ExecutionUserId;
             var completed = await workflowAutomationService.CompleteTaskAsync(
@@ -1056,8 +1195,7 @@ public sealed class AgentWorkflowRunner(
         string executionUserId,
         CancellationToken cancellationToken)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        var approvals = await context.AgentMessages
+        var approvals = await messages.RetrieveAll()
             .Where(item => item.ProcessTaskId == processTaskId
                 && item.State == AgentMessageState.Pending
                 && item.Kind == AgentMessageKind.ApprovalRequest)
@@ -1073,18 +1211,17 @@ public sealed class AgentWorkflowRunner(
             approval.LastUpdated = now;
         }
 
-        if (approvals.Count > 0)
-            await context.SaveChangesAsync(cancellationToken);
+        foreach (var approval in approvals)
+            await messages.ModifyAsync(approval, cancellationToken);
     }
 
     async ValueTask<bool> HasRunnableTasksAsync(
         AgentWorkLane? lane,
         CancellationToken cancellationToken)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
         DateTimeOffset now = DateTimeOffset.UtcNow;
         IQueryable<cCoder.ClientRelationshipManagement.Platform.Models.Entities.ProcessTask> tasks =
-            WorkflowTaskQueue.BuildRunnableQuery(context, now);
+            sales.RetrieveRunnableProcessTasks(now);
 
         tasks = WorkflowTaskQueue.ForLane(tasks, lane);
 
@@ -1095,11 +1232,10 @@ public sealed class AgentWorkflowRunner(
         AgentWorkLane? lane,
         CancellationToken cancellationToken)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
         IQueryable<cCoder.ClientRelationshipManagement.Platform.Models.Entities.ProcessTask> runnableTasks =
-            WorkflowTaskQueue.BuildRunnableQuery(context, now);
+            sales.RetrieveRunnableProcessTasks(now);
         runnableTasks = WorkflowTaskQueue.ForLane(runnableTasks, lane);
 
         Guid taskId = Guid.Empty;
@@ -1116,7 +1252,7 @@ public sealed class AgentWorkflowRunner(
             if (taskId == Guid.Empty)
                 return null;
 
-            int claimed = await context.ProcessTasks
+            int claimed = await processes.RetrieveTasks()
                 .Where(item => item.Id == taskId
                     && item.State == ProcessTaskState.Pending
                     && (!item.AgentClaimExpiresOn.HasValue || item.AgentClaimExpiresOn <= now))
@@ -1135,7 +1271,7 @@ public sealed class AgentWorkflowRunner(
         if (taskId == Guid.Empty)
             return null;
 
-        var task = await context.ProcessTasks
+        var task = await processes.RetrieveTasks()
             .AsNoTracking()
             .Include(item => item.ProcessStep)
             .Include(item => item.Lead)
@@ -1143,10 +1279,10 @@ public sealed class AgentWorkflowRunner(
                 .ThenInclude(item => item.Company)
             .SingleAsync(item => item.Id == taskId, cancellationToken);
 
-        bool canRecordNoReply = await context.ProcessTransitions.AnyAsync(
+        bool canRecordNoReply = await processes.RetrieveTransitions().AnyAsync(
             item => item.ProcessStepId == task.ProcessStepId && item.OutcomeKey == "no-reply",
             cancellationToken);
-        bool canAwaitResponse = await context.ProcessTransitions.AnyAsync(
+        bool canAwaitResponse = await processes.RetrieveTransitions().AnyAsync(
             item => item.ProcessStepId == task.ProcessStepId && item.OutcomeKey == "await-response",
             cancellationToken);
 
@@ -1171,8 +1307,7 @@ public sealed class AgentWorkflowRunner(
         DueTaskSnapshot task,
         CancellationToken cancellationToken)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        await context.ProcessTasks
+        await processes.RetrieveTasks()
             .Where(item => item.Id == task.Id && item.AgentClaimId == task.ClaimId)
             .ExecuteUpdateAsync(update => update
                 .SetProperty(item => item.AgentClaimId, (Guid?)null)

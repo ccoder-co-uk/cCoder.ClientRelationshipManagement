@@ -1,5 +1,5 @@
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using ClientRelationshipManagement.Web.Brokers.Loggings;
 using Microsoft.EntityFrameworkCore;
 
@@ -41,24 +41,17 @@ public sealed class ScheduledApprovalConversationHostedService(
         try
         {
             using IServiceScope scope = serviceScopeFactory.CreateScope();
-            IPlatformDbContextFactory factory = scope.ServiceProvider.GetRequiredService<IPlatformDbContextFactory>();
-            using PlatformDbContext context = factory.CreateDbContext(useAdminConnection: true);
-            var candidates = await context.AgentMessages.AsNoTracking().Include(item => item.Entries)
-                .Where(item => item.State == AgentMessageState.Pending && item.Kind != AgentMessageKind.ApprovalRequest)
+            cCoder.ClientRelationshipManagement.Services.Entities.IAgentMessageOrchestrationService messages =
+                scope.ServiceProvider.GetRequiredService<cCoder.ClientRelationshipManagement.Services.Entities.IAgentMessageOrchestrationService>();
+            var candidates = await messages.RetrieveAll().AsNoTracking().Include(item => item.Entries)
+                .Where(item => item.State == AgentMessageState.Pending)
                 .OrderBy(item => item.LastUpdated).Take(25).ToListAsync(cancellationToken);
             DateTimeOffset now = DateTimeOffset.UtcNow;
             var waitingMessages = candidates.Where(message =>
             {
-                DateTimeOffset latestHumanOrSystem = message.Entries
-                    .Where(entry => !string.Equals(entry.Role, "Agent", StringComparison.OrdinalIgnoreCase))
-                    .Select(entry => entry.CreatedOn).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
-                DateTimeOffset latestAgent = message.Entries
-                    .Where(entry => string.Equals(entry.Role, "Agent", StringComparison.OrdinalIgnoreCase))
-                    .Select(entry => entry.CreatedOn).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
-                bool awaitingAgent = latestHumanOrSystem > latestAgent;
                 bool retryDue = !lastAttempts.TryGetValue(message.Id, out DateTimeOffset attemptedOn)
                     || now - attemptedOn >= FailedTurnRetryDelay;
-                return awaitingAgent && retryDue;
+                return AgentConversationTurnPolicy.IsAgentTurn(message) && retryDue;
             }).ToList();
             if (waitingMessages.Count == 0)
                 return;

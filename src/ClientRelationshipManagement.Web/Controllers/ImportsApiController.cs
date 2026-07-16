@@ -1,5 +1,5 @@
 using cCoder.ClientRelationshipManagement.Models.Security;
-using cCoder.ClientRelationshipManagement.Platform.Data;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using ClientRelationshipManagement.Web.Models.Imports;
@@ -12,7 +12,7 @@ namespace ClientRelationshipManagement.Web.Controllers;
 [ApiController]
 [Route("Api/Imports")]
 public sealed class ImportsApiController(
-    IPlatformDbContextFactory dbContextFactory,
+    IImportCoordinationService importService,
     IHostedImportClient hostedImportClient,
     ICRMAuthInfo authInfo)
     : ControllerBase
@@ -23,8 +23,7 @@ public sealed class ImportsApiController(
         if (!IsAuthenticated())
             return Unauthorized();
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
-        List<ImportStatusResponse> imports = await context.Imports
+        List<ImportStatusResponse> imports = await importService.RetrieveAllImports()
             .AsNoTracking()
             .OrderByDescending(item => item.CreatedOn)
             .Take(100)
@@ -40,8 +39,7 @@ public sealed class ImportsApiController(
         if (!IsAuthenticated())
             return Unauthorized();
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
-        Import import = await context.Imports.AsNoTracking().FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
+        Import import = await importService.RetrieveAllImports().AsNoTracking().FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
         return import is null ? NotFound() : Ok(ToStatus(import));
     }
 
@@ -54,28 +52,10 @@ public sealed class ImportsApiController(
         if (string.IsNullOrWhiteSpace(request.FileName))
             return BadRequest("A file name is required.");
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        Source source = await ResolveSourceAsync(context, request, now, cancellationToken);
-        Import import = new()
-        {
-            Id = Guid.NewGuid(),
-            SourceId = source.Id,
-            OriginalFileName = request.FileName,
-            ContentType = request.ContentType,
-            SizeBytes = request.SizeBytes,
-            JobStatus = ImportJobStatus.Draft,
-            UploadStatus = ImportUploadStatus.NotStarted,
-            ProcessingStatus = ImportProcessingStatus.NotReady,
-            UserInstructions = Normalize(request.UserInstructions),
-            CreatedBy = CurrentUserId,
-            LastUpdatedBy = CurrentUserId,
-            CreatedOn = now,
-            LastUpdated = now
-        };
-
-        context.Imports.Add(import);
-        await context.SaveChangesAsync(cancellationToken);
+        Import import = await importService.CreateAsync(new CreateImportCommand(
+            request.SourceId, request.SourceName, request.SourceType, request.CountryCode,
+            request.IsAuthoritative, request.SourceNotes, request.FileName, request.ContentType,
+            request.SizeBytes, request.UserInstructions), cancellationToken);
 
         return Created($"/Api/Imports/{import.Id}", ToStatus(import));
     }
@@ -86,8 +66,7 @@ public sealed class ImportsApiController(
         if (!IsAuthenticated())
             return Unauthorized();
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
-        Import import = await context.Imports.AsNoTracking().FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
+        Import import = await importService.RetrieveAllImports().AsNoTracking().FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
         if (import is null)
             return NotFound();
 
@@ -123,16 +102,10 @@ public sealed class ImportsApiController(
         if (!IsAuthenticated())
             return Unauthorized();
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        Import import = await context.Imports.FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
+        Import import = await importService.SaveMappingAsync(id, request.MappingSnapshotJson, request.UserInstructions, cancellationToken);
         if (import is null)
             return NotFound();
 
-        import.MappingSnapshotJson = request.MappingSnapshotJson;
-        import.UserInstructions = Normalize(request.UserInstructions);
-        import.LastUpdated = DateTimeOffset.UtcNow;
-        import.LastUpdatedBy = CurrentUserId;
-        await context.SaveChangesAsync(cancellationToken);
         return Ok(ToStatus(import));
     }
 
@@ -142,24 +115,8 @@ public sealed class ImportsApiController(
         if (!IsAuthenticated())
             return Unauthorized();
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        Import import = await context.Imports.FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
-        if (import is null)
-            return NotFound();
-
-        if (import.UploadStatus != ImportUploadStatus.Uploaded)
-            return BadRequest("Upload must be completed before the import can be marked ready.");
-
-        if (string.IsNullOrWhiteSpace(import.MappingSnapshotJson))
-            return BadRequest("Mapping must be reviewed before the import can be marked ready.");
-
-        import.JobStatus = ImportJobStatus.Ready;
-        import.ProcessingStatus = ImportProcessingStatus.Ready;
-        import.MarkedReadyOn = DateTimeOffset.UtcNow;
-        import.LastUpdated = DateTimeOffset.UtcNow;
-        import.LastUpdatedBy = CurrentUserId;
-        await context.SaveChangesAsync(cancellationToken);
-        return Ok(ToStatus(import));
+        try { Import import = await importService.MarkReadyAsync(id, cancellationToken); return import is null ? NotFound() : Ok(ToStatus(import)); }
+        catch (InvalidOperationException exception) { return BadRequest(exception.Message); }
     }
 
     [HttpPost("{id:guid}/cancel")]
@@ -168,20 +125,8 @@ public sealed class ImportsApiController(
         if (!IsAuthenticated())
             return Unauthorized();
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        Import import = await context.Imports.FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
-        if (import is null)
-            return NotFound();
-
-        if (import.JobStatus == ImportJobStatus.Processing)
-            return BadRequest("An active import cannot be cancelled.");
-
-        import.JobStatus = ImportJobStatus.Cancelled;
-        import.ProcessingStatus = ImportProcessingStatus.Cancelled;
-        import.LastUpdated = DateTimeOffset.UtcNow;
-        import.LastUpdatedBy = CurrentUserId;
-        await context.SaveChangesAsync(cancellationToken);
-        return Ok(ToStatus(import));
+        try { Import import = await importService.CancelAsync(id, cancellationToken); return import is null ? NotFound() : Ok(ToStatus(import)); }
+        catch (InvalidOperationException exception) { return BadRequest(exception.Message); }
     }
 
     [HttpDelete("{id:guid}")]
@@ -190,81 +135,23 @@ public sealed class ImportsApiController(
         if (!IsAuthenticated())
             return Unauthorized();
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        Import import = await context.Imports.FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
+        Import import = await importService.RetrieveAllImports().FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
         if (import is null)
             return NotFound();
-
         if (import.JobStatus == ImportJobStatus.Processing)
             return BadRequest("An active import cannot be deleted.");
 
-        await hostedImportClient.DeleteFilesAsync(id, cancellationToken);
-
-        ImportLink[] links = await context.ImportLinks.Where(item => item.ImportId == id).ToArrayAsync(cancellationToken);
-        context.ImportLinks.RemoveRange(links);
-        context.Imports.Remove(import);
-        await context.SaveChangesAsync(cancellationToken);
-
-        return NoContent();
-    }
-
-    async ValueTask<Source> ResolveSourceAsync(
-        PlatformDbContext context,
-        CreateImportRequest request,
-        DateTimeOffset now,
-        CancellationToken cancellationToken)
-    {
-        if (request.SourceId.HasValue)
+        try
         {
-            Source existing = await context.Sources.FirstOrDefaultAsync(item => item.Id == request.SourceId.Value, cancellationToken);
-            if (existing is not null)
-                return existing;
+            await hostedImportClient.DeleteFilesAsync(id, cancellationToken);
+            return await importService.DeleteAsync(id, cancellationToken) ? NoContent() : NotFound();
         }
-
-        string sourceName = string.IsNullOrWhiteSpace(request.SourceName)
-            ? "Unspecified source"
-            : request.SourceName.Trim();
-
-        string countryCode = string.IsNullOrWhiteSpace(request.CountryCode)
-            ? "GB"
-            : request.CountryCode.Trim().ToUpperInvariant();
-
-        Source source = await context.Sources.FirstOrDefaultAsync(item =>
-            item.Name == sourceName && item.CountryCode == countryCode,
-            cancellationToken);
-
-        if (source is not null)
-            return source;
-
-        source = new Source
-        {
-            Id = Guid.NewGuid(),
-            Name = sourceName,
-            SourceType = request.SourceType,
-            CountryCode = countryCode,
-            IsAuthoritative = request.IsAuthoritative || request.SourceType == SourceType.Authority,
-            Notes = Normalize(request.SourceNotes),
-            CreatedBy = CurrentUserId,
-            LastUpdatedBy = CurrentUserId,
-            CreatedOn = now,
-            LastUpdated = now
-        };
-
-        context.Sources.Add(source);
-        return source;
+        catch (InvalidOperationException exception) { return BadRequest(exception.Message); }
     }
 
     bool IsAuthenticated() =>
         !string.IsNullOrWhiteSpace(authInfo?.SSOUserId)
         && !string.Equals(authInfo.SSOUserId, "Guest", StringComparison.OrdinalIgnoreCase);
-
-    string CurrentUserId =>
-        string.IsNullOrWhiteSpace(authInfo?.SSOUserId)
-            ? "system"
-            : authInfo.SSOUserId;
-
-    static string Normalize(string value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     static ImportStatusResponse ToStatus(Import import) =>
         new()

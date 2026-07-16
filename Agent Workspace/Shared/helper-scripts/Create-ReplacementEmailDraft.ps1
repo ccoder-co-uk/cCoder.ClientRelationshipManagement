@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)]
-    [Guid]$MessageId,
+    [Alias("MessageId")]
+    [Guid]$ConversationId,
 
     [Parameter(Mandatory = $true)]
     [string]$Subject,
@@ -22,4 +23,4 @@ $payload = @{
 } | ConvertTo-Json -Depth 6
 
 $scriptPath = Join-Path $PSScriptRoot "Invoke-CrmApi.ps1"
-& $scriptPath -Method POST -Path "/Api/AgentWorkflow/Messages/$MessageId/ReplacementEmailDraft" -BodyJson $payload | ConvertTo-Json -Depth 8
+& $scriptPath -Method POST -Path "/Api/AgentWorkflow/Messages/$ConversationId/ReplacementEmailDraft" -BodyJson $payload | ConvertTo-Json -Depth 8

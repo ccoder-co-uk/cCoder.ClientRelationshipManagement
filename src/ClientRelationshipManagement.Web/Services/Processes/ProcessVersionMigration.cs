@@ -1,6 +1,6 @@
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using Microsoft.EntityFrameworkCore;
 
 namespace ClientRelationshipManagement.Web.Services.Processes;
@@ -8,7 +8,7 @@ namespace ClientRelationshipManagement.Web.Services.Processes;
 internal static class ProcessVersionMigration
 {
     public static async ValueTask<int> MoveActiveInstancesAsync(
-        PlatformDbContext context,
+        IProcessCoordinationService processes,
         ProcessDefinition liveDefinition,
         IReadOnlyCollection<Guid> obsoleteDefinitionIds,
         string changedBy,
@@ -17,7 +17,7 @@ internal static class ProcessVersionMigration
         if (obsoleteDefinitionIds.Count == 0)
             return 0;
 
-        List<ProcessInstance> instances = await context.ProcessInstances
+        List<ProcessInstance> instances = await processes.RetrieveInstances()
             .Include(instance => instance.CurrentProcessStep)
             .Where(instance => obsoleteDefinitionIds.Contains(instance.ProcessDefinitionId)
                 && instance.State == ProcessInstanceState.Active)
@@ -26,7 +26,7 @@ internal static class ProcessVersionMigration
         if (instances.Count == 0)
             return 0;
 
-        Dictionary<string, ProcessStep> liveSteps = await context.ProcessSteps
+        Dictionary<string, ProcessStep> liveSteps = await processes.RetrieveSteps()
             .Where(step => step.ProcessDefinitionId == liveDefinition.Id && step.IsActive)
             .ToDictionaryAsync(step => step.Key, StringComparer.OrdinalIgnoreCase, cancellationToken);
 
@@ -46,7 +46,7 @@ internal static class ProcessVersionMigration
         }
 
         Guid[] instanceIds = [.. instances.Select(instance => instance.Id)];
-        List<ProcessTask> pendingTasks = await context.ProcessTasks
+        List<ProcessTask> pendingTasks = await processes.RetrieveTasks()
             .Include(task => task.Email)
             .Where(task => instanceIds.Contains(task.ProcessInstanceId)
                 && task.State == ProcessTaskState.Pending)

@@ -1,8 +1,8 @@
 using System.Globalization;
 using System.Text.Json;
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using ClientRelationshipManagement.Web.Configuration;
 using ClientRelationshipManagement.Web.Models.Imports;
 using Microsoft.EntityFrameworkCore;
@@ -13,7 +13,7 @@ namespace ClientRelationshipManagement.Web.Services.Imports;
 
 public sealed class ImportFileWorkspaceService(
     IHostEnvironment environment,
-    IPlatformDbContextFactory dbContextFactory,
+    IImportCoordinationService imports,
     IOptions<ImportWorkflowOptions> options)
     : IImportFileWorkspaceService
 {
@@ -21,8 +21,7 @@ public sealed class ImportFileWorkspaceService(
         HostedImportUploadSessionRequest request,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        Import import = await context.Imports.FirstOrDefaultAsync(item => item.Id == request.ImportId, cancellationToken)
+        Import import = await imports.RetrieveAllImports().FirstOrDefaultAsync(item => item.Id == request.ImportId, cancellationToken)
             ?? throw new InvalidOperationException("Import could not be found.");
 
         DateTimeOffset now = DateTimeOffset.UtcNow;
@@ -45,7 +44,7 @@ public sealed class ImportFileWorkspaceService(
         import.LastUpdated = now;
         import.LastUpdatedBy = "hosted-services";
 
-        await context.SaveChangesAsync(cancellationToken);
+        await imports.SaveAsync(cancellationToken);
 
         string baseUrl = options.Value.HostedServicesBaseUrl.TrimEnd('/');
         return new ImportUploadSessionResponse
@@ -67,8 +66,7 @@ public sealed class ImportFileWorkspaceService(
         Stream content,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        Import import = await GetValidSessionImportAsync(context, importId, uploadSessionId, cancellationToken);
+        Import import = await GetValidSessionImportAsync(importId, uploadSessionId, cancellationToken);
 
         Directory.CreateDirectory(GetChunkDirectory(importId));
         string chunkPath = GetChunkPath(importId, chunkIndex);
@@ -81,7 +79,7 @@ public sealed class ImportFileWorkspaceService(
         import.UploadedBytes = GetUploadedBytes(importId);
         import.LastUpdated = DateTimeOffset.UtcNow;
         import.LastUpdatedBy = "hosted-services";
-        await context.SaveChangesAsync(cancellationToken);
+        await imports.SaveAsync(cancellationToken);
 
         return ToStatus(import);
     }
@@ -91,8 +89,7 @@ public sealed class ImportFileWorkspaceService(
         HostedImportCompleteUploadRequest request,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        Import import = await GetValidSessionImportAsync(context, importId, request.UploadSessionId, cancellationToken);
+        Import import = await GetValidSessionImportAsync(importId, request.UploadSessionId, cancellationToken);
 
         if (string.IsNullOrWhiteSpace(import.StoredFilePath))
             throw new InvalidOperationException("Import has no stored file path.");
@@ -116,14 +113,13 @@ public sealed class ImportFileWorkspaceService(
         import.UploadedOn = DateTimeOffset.UtcNow;
         import.LastUpdated = DateTimeOffset.UtcNow;
         import.LastUpdatedBy = "hosted-services";
-        await context.SaveChangesAsync(cancellationToken);
+        await imports.SaveAsync(cancellationToken);
         return ToStatus(import);
     }
 
     public async ValueTask<ImportStatusResponse> AnalyseAsync(Guid importId, CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        Import import = await context.Imports.FirstOrDefaultAsync(item => item.Id == importId, cancellationToken)
+        Import import = await imports.RetrieveAllImports().FirstOrDefaultAsync(item => item.Id == importId, cancellationToken)
             ?? throw new InvalidOperationException("Import could not be found.");
 
         if (string.IsNullOrWhiteSpace(import.StoredFilePath) || !File.Exists(import.StoredFilePath))
@@ -142,15 +138,14 @@ public sealed class ImportFileWorkspaceService(
         import.ProcessingStatus = ImportProcessingStatus.WaitingForReady;
         import.LastUpdated = DateTimeOffset.UtcNow;
         import.LastUpdatedBy = "hosted-services";
-        await context.SaveChangesAsync(cancellationToken);
+        await imports.SaveAsync(cancellationToken);
 
         return ToStatus(import);
     }
 
     public async ValueTask<ImportStatusResponse> GetStatusAsync(Guid importId, CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        Import import = await context.Imports.AsNoTracking().FirstOrDefaultAsync(item => item.Id == importId, cancellationToken)
+        Import import = await imports.RetrieveAllImports().AsNoTracking().FirstOrDefaultAsync(item => item.Id == importId, cancellationToken)
             ?? throw new InvalidOperationException("Import could not be found.");
 
         return ToStatus(import);
@@ -168,12 +163,11 @@ public sealed class ImportFileWorkspaceService(
     }
 
     async ValueTask<Import> GetValidSessionImportAsync(
-        PlatformDbContext context,
         Guid importId,
         string uploadSessionId,
         CancellationToken cancellationToken)
     {
-        Import import = await context.Imports.FirstOrDefaultAsync(item => item.Id == importId, cancellationToken)
+        Import import = await imports.RetrieveAllImports().FirstOrDefaultAsync(item => item.Id == importId, cancellationToken)
             ?? throw new InvalidOperationException("Import could not be found.");
 
         if (!string.Equals(import.UploadSessionId, uploadSessionId, StringComparison.Ordinal))

@@ -1,5 +1,5 @@
 using cCoder.ClientRelationshipManagement.Models.Security;
-using cCoder.ClientRelationshipManagement.Platform.Data;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.Security.Objects;
 using ClientRelationshipManagement.Web.Models.Emails;
@@ -10,14 +10,16 @@ using ClientRelationshipManagement.Web.Utilities;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.EntityFrameworkCore;
+using WebAgentMessageService = ClientRelationshipManagement.Web.Services.Agents.IAgentMessageService;
 
 namespace ClientRelationshipManagement.Web.Controllers;
 
 [Route("Admin/Emails")]
 public sealed class EmailsController(
-    IPlatformDbContextFactory dbContextFactory,
+    IOperationsCoordinationService operationsService,
+    ISalesCoordinationService salesWorkspaceService,
     IEmailDraftWorkflowService emailDraftWorkflowService,
-    IAgentMessageService agentMessageService,
+    WebAgentMessageService agentMessageService,
     IWorkflowAutomationService workflowAutomationService,
     ICRMAuthInfo authInfo,
     ISSOAuthInfo ssoAuthInfo)
@@ -29,14 +31,13 @@ public sealed class EmailsController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
         string[] readableTenantIds = GetReadableTenantIds();
 
         EmailState? parsedState = Enum.TryParse<EmailState>(state, true, out EmailState stateValue)
             ? stateValue
             : null;
 
-        IQueryable<EmailRowProjection> query = context.Emails
+        IQueryable<EmailRowProjection> query = operationsService.RetrieveAllEmails()
             .AsNoTracking()
             .Include(email => email.TenantCompanyRelationship)
                 .ThenInclude(relationship => relationship.Company)
@@ -139,14 +140,10 @@ public sealed class EmailsController(
             return RedirectToAction(nameof(Index));
         }
 
-        cCoder.ClientRelationshipManagement.Platform.Models.Entities.Email current;
-        using (PlatformDbContext context = dbContextFactory.CreateDbContext())
-        {
-            current = await context.Emails.AsNoTracking().FirstOrDefaultAsync(item =>
+        cCoder.ClientRelationshipManagement.Platform.Models.Entities.Email current =
+            await operationsService.RetrieveAllEmails().AsNoTracking().FirstOrDefaultAsync(item =>
                 item.Id == request.EmailId
-                && item.TenantCompanyRelationshipId == request.ClientId
-                && GetReadableTenantIds().Contains(item.TenantCompanyRelationship.TenantId), cancellationToken);
-        }
+                && item.TenantCompanyRelationshipId == request.ClientId, cancellationToken);
 
         if (current is null)
             return NotFound();
@@ -188,56 +185,30 @@ public sealed class EmailsController(
             return RedirectToAction(nameof(Index));
         }
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        var email = await context.Emails
-            .Include(item => item.Material)
-            .Include(item => item.TenantCompanyRelationship).ThenInclude(item => item.Company)
-            .FirstOrDefaultAsync(item => item.Id == request.EmailId && item.TenantCompanyRelationshipId == request.ClientId, cancellationToken);
-        if (email is null || !GetReadableTenantIds().Contains(email.TenantCompanyRelationship.TenantId))
+        var email = await emailDraftWorkflowService.RejectAsync(
+            request.ClientId, request.EmailId, request.Reason, cancellationToken);
+        if (email is null)
             return NotFound();
 
-        var task = await context.ProcessTasks
+        var task = await salesWorkspaceService.RetrieveProcessTasks()
             .AsNoTracking()
             .Include(item => item.ProcessStep)
             .Include(item => item.ProcessInstance).ThenInclude(item => item.ProcessDefinition)
             .FirstOrDefaultAsync(item => item.EmailId == email.Id, cancellationToken);
-
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        email.State = EmailState.Rejected;
-        email.LastError = $"Rejected by {CurrentUserId}: {request.Reason.Trim()}";
-        email.LastUpdatedBy = CurrentUserId;
-        email.LastUpdated = now;
-        if (email.Material is not null)
-        {
-            email.Material.Status = MaterialStatus.Archived;
-            email.Material.LastUpdatedBy = CurrentUserId;
-            email.Material.LastUpdated = now;
-        }
-        await context.SaveChangesAsync(cancellationToken);
-
         string companyName = CompanyNames.ResolvePreferredName(email.TenantCompanyRelationship.Company);
         string source = task is null
             ? "No process-task provenance was found."
             : $"Process: {task.ProcessInstance.ProcessDefinition.Name}; step: {task.ProcessStep.Name} ({task.ProcessStep.Key}); task: {task.RenderedTitle}.";
         var conversation = await agentMessageService.UpsertAsync(new cCoder.ClientRelationshipManagement.Platform.Models.Entities.AgentMessage
         {
-            Id = Guid.NewGuid(),
-            TenantId = email.TenantCompanyRelationship.TenantId,
-            TenantCompanyRelationshipId = email.TenantCompanyRelationshipId,
-            OpportunityId = email.OpportunityId,
-            ClientAccountId = email.ClientAccountId,
-            ProcessTaskId = task?.Id,
-            ProcessStepId = task?.ProcessStepId,
-            EmailId = email.Id,
-            ProcessDefinitionId = task?.ProcessInstance.ProcessDefinitionId,
-            Kind = AgentMessageKind.FeedbackRequest,
-            State = AgentMessageState.Pending,
-            CorrelationKey = $"email-rejection:{email.Id}",
-            Title = $"Review rejected email to {companyName}",
+            Id = Guid.NewGuid(), TenantId = email.TenantCompanyRelationship.TenantId,
+            TenantCompanyRelationshipId = email.TenantCompanyRelationshipId, OpportunityId = email.OpportunityId,
+            ClientAccountId = email.ClientAccountId, ProcessTaskId = task?.Id, ProcessStepId = task?.ProcessStepId,
+            EmailId = email.Id, ProcessDefinitionId = task?.ProcessInstance.ProcessDefinitionId,
+            Kind = AgentMessageKind.FeedbackRequest, State = AgentMessageState.Pending,
+            CorrelationKey = $"email-rejection:{email.Id}", Title = $"Review rejected email to {companyName}",
             Body = $"A human rejected this email and the source process may need refinement. {source}",
-            AgentName = "Approval Agent",
-            CreatedBy = CurrentUserId,
-            LastUpdatedBy = CurrentUserId
+            AgentName = "Approval Agent", CreatedBy = CurrentUserId, LastUpdatedBy = CurrentUserId
         }, cancellationToken);
         await agentMessageService.AppendEntryAsync(conversation.Id, "System", $"Rejected email evidence\nFrom: {email.FromDisplayName} <{email.FromEmailAddress}>\nTo: {email.ToAddresses}\nSubject: {email.Subject}\n\n{email.BodyText ?? email.BodyHtml}\n\n{source}", CurrentUserId, cancellationToken);
         await agentMessageService.AppendEntryAsync(conversation.Id, "User", request.Reason, CurrentUserId, cancellationToken);

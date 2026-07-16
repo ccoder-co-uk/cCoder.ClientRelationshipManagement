@@ -1,11 +1,11 @@
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using Microsoft.EntityFrameworkCore;
 
 namespace ClientRelationshipManagement.Web.Services.Processes;
 
-public sealed class ProcessValidationService(IPlatformDbContextFactory dbContextFactory)
+public sealed class ProcessValidationService(IProcessCoordinationService processWorkspace)
     : IProcessValidationService
 {
     static readonly string[] InitialCompanyFacts =
@@ -24,8 +24,7 @@ public sealed class ProcessValidationService(IPlatformDbContextFactory dbContext
         if (tenantIds.Count == 0)
             return new ProcessValidationResult { ValidatedOn = DateTimeOffset.UtcNow };
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        List<ProcessDefinition> definitions = await context.ProcessDefinitions
+        List<ProcessDefinition> definitions = await processWorkspace.RetrieveDefinitions()
             .AsNoTracking()
             .Where(definition => tenantIds.Contains(definition.TenantId) && definition.IsActive)
             .Include(definition => definition.Steps)
@@ -63,8 +62,7 @@ public sealed class ProcessValidationService(IPlatformDbContextFactory dbContext
         Guid processDefinitionId,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        ProcessDefinition definition = await context.ProcessDefinitions
+        ProcessDefinition definition = await processWorkspace.RetrieveDefinitions()
             .AsNoTracking()
             .Where(item => item.Id == processDefinitionId)
             .Include(item => item.Steps)
@@ -88,7 +86,7 @@ public sealed class ProcessValidationService(IPlatformDbContextFactory dbContext
             };
         }
 
-        List<ProcessDefinition> priorLanes = await context.ProcessDefinitions
+        List<ProcessDefinition> priorLanes = await processWorkspace.RetrieveDefinitions()
             .AsNoTracking()
             .Where(item => item.TenantId == definition.TenantId
                 && item.IsActive

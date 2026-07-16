@@ -1,5 +1,5 @@
 using cCoder.ClientRelationshipManagement.Models.Security;
-using cCoder.ClientRelationshipManagement.Platform.Data;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.Security.Objects;
 using ClientRelationshipManagement.Web.Models.Opportunities;
@@ -12,7 +12,7 @@ using PlatformEntities = cCoder.ClientRelationshipManagement.Platform.Models.Ent
 namespace ClientRelationshipManagement.Web.Controllers;
 
 public sealed class OpportunitiesController(
-    IPlatformDbContextFactory dbContextFactory,
+    ISalesCoordinationService salesWorkspaceService,
     ICRMAuthInfo authInfo,
     ISSOAuthInfo ssoAuthInfo)
     : Controller
@@ -28,7 +28,6 @@ public sealed class OpportunitiesController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
         string[] readableTenantIds = GetReadableTenantIds();
         SalesPipelineStage? parsedStage = Enum.TryParse<SalesPipelineStage>(stage, true, out SalesPipelineStage stageValue)
             ? stageValue
@@ -41,13 +40,13 @@ public sealed class OpportunitiesController(
         DateTimeOffset today = new(DateTime.UtcNow.Date, TimeSpan.Zero);
         DateTimeOffset tomorrow = today.AddDays(1);
 
-        IQueryable<PlatformEntities.Opportunity> opportunityQuery = context.Opportunities
+        IQueryable<PlatformEntities.Opportunity> opportunityQuery = salesWorkspaceService.RetrieveOpportunities()
             .AsNoTracking()
             .Include(item => item.TenantCompanyRelationship)
                 .ThenInclude(relationship => relationship.Company)
             .Include(item => item.PrimaryRelationshipContact)
                 .ThenInclude(contact => contact.CompanyContact)
-            .Where(item => readableTenantIds.Contains(item.TenantCompanyRelationship.TenantId));
+            ;
 
         if (normalizedScope == "active")
             opportunityQuery = opportunityQuery.Where(item => item.Stage != SalesPipelineStage.Won && item.Stage != SalesPipelineStage.Lost);
@@ -59,12 +58,12 @@ public sealed class OpportunitiesController(
         {
             opportunityQuery = taskFilter switch
             {
-                "due-today" => opportunityQuery.Where(item => context.ProcessTasks.Any(task =>
+                "due-today" => opportunityQuery.Where(item => salesWorkspaceService.RetrieveProcessTasks().Any(task =>
                     task.OpportunityId == item.Id && task.State == ProcessTaskState.Pending
                     && task.DueOn >= today && task.DueOn < tomorrow)),
-                "overdue" => opportunityQuery.Where(item => context.ProcessTasks.Any(task =>
+                "overdue" => opportunityQuery.Where(item => salesWorkspaceService.RetrieveProcessTasks().Any(task =>
                     task.OpportunityId == item.Id && task.State == ProcessTaskState.Pending && task.DueOn < today)),
-                _ => opportunityQuery.Where(item => context.ProcessTasks.Any(task =>
+                _ => opportunityQuery.Where(item => salesWorkspaceService.RetrieveProcessTasks().Any(task =>
                     task.OpportunityId == item.Id && task.State == ProcessTaskState.Pending))
             };
         }
@@ -86,7 +85,7 @@ public sealed class OpportunitiesController(
             })
             .ToListAsync();
 
-        Dictionary<Guid, (string ActionText, DateTimeOffset? DueOn)> nextTaskLookup = await context.ProcessTasks
+        Dictionary<Guid, (string ActionText, DateTimeOffset? DueOn)> nextTaskLookup = await salesWorkspaceService.RetrieveProcessTasks()
             .AsNoTracking()
             .Where(task => task.State == ProcessTaskState.Pending && task.OpportunityId.HasValue)
             .Where(task => rows.Select(row => row.Id).Contains(task.OpportunityId!.Value))
@@ -169,8 +168,7 @@ public sealed class OpportunitiesController(
             return redirect;
 
         string[] tenantIds = GetReadableTenantIds();
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
-        PlatformEntities.Opportunity opportunity = await context.Opportunities
+        PlatformEntities.Opportunity opportunity = await salesWorkspaceService.RetrieveOpportunities()
             .AsNoTracking()
             .Include(item => item.TenantCompanyRelationship)
                 .ThenInclude(item => item.Company)
@@ -183,7 +181,7 @@ public sealed class OpportunitiesController(
 
         Guid relationshipId = opportunity.TenantCompanyRelationshipId;
         string tenantId = opportunity.TenantCompanyRelationship.TenantId;
-        List<OpportunityDetailEvidenceViewModel> leadEvidence = await context.Leads
+        List<OpportunityDetailEvidenceViewModel> leadEvidence = await salesWorkspaceService.RetrieveLeads()
             .AsNoTracking()
             .Where(item => item.OpportunityId == id || item.TenantCompanyRelationshipId == relationshipId)
             .OrderByDescending(item => item.CreatedOn)
@@ -193,7 +191,7 @@ public sealed class OpportunitiesController(
                 Notes = item.QualificationNotes ?? string.Empty
             })
             .ToListAsync(cancellationToken);
-        List<OpportunityDetailActivityViewModel> activities = await context.Activities
+        List<OpportunityDetailActivityViewModel> activities = await salesWorkspaceService.RetrieveActivities()
             .AsNoTracking()
             .Where(item => item.OpportunityId == id)
             .OrderByDescending(item => item.ActivityOn)
@@ -206,7 +204,7 @@ public sealed class OpportunitiesController(
                 Outcome = item.Outcome ?? string.Empty
             })
             .ToListAsync(cancellationToken);
-        List<OpportunityDetailTaskViewModel> tasks = await context.ProcessTasks
+        List<OpportunityDetailTaskViewModel> tasks = await salesWorkspaceService.RetrieveProcessTasks()
             .AsNoTracking()
             .Where(item => item.OpportunityId == id)
             .OrderBy(item => item.DueOn)
@@ -220,7 +218,7 @@ public sealed class OpportunitiesController(
                 DueOn = item.DueOn
             })
             .ToListAsync(cancellationToken);
-        List<OpportunityDetailArtifactViewModel> artifacts = await context.CompanyHistory
+        List<OpportunityDetailArtifactViewModel> artifacts = await salesWorkspaceService.RetrieveCompanyHistory()
             .AsNoTracking()
             .Where(item => item.CompanyId == opportunity.TenantCompanyRelationship.CompanyId
                 && item.TenantId == tenantId)

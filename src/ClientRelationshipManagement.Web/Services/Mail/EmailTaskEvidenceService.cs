@@ -1,12 +1,15 @@
 using System.Text.RegularExpressions;
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using Microsoft.EntityFrameworkCore;
 
 namespace ClientRelationshipManagement.Web.Services.Mail;
 
-public sealed partial class EmailTaskEvidenceService(IPlatformDbContextFactory dbContextFactory)
+public sealed partial class EmailTaskEvidenceService(
+    IProcessCoordinationService processes,
+    IOperationsCoordinationService operations,
+    ISalesCoordinationService sales)
     : IEmailTaskEvidenceService
 {
     public async ValueTask<EmailTaskEvidenceResult> GetAsync(
@@ -14,15 +17,14 @@ public sealed partial class EmailTaskEvidenceService(IPlatformDbContextFactory d
         string executionUserId,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        ProcessTask task = await context.ProcessTasks
+        ProcessTask task = await processes.RetrieveTasks()
             .AsNoTracking()
             .FirstOrDefaultAsync(item => item.Id == processTaskId, cancellationToken);
 
         if (task is null)
             return null;
 
-        Email outbound = await context.Emails
+        Email outbound = await operations.RetrieveAllEmails()
             .AsNoTracking()
             .Include(item => item.Recipients)
             .Where(item => item.State == EmailState.Sent
@@ -33,7 +35,7 @@ public sealed partial class EmailTaskEvidenceService(IPlatformDbContextFactory d
             .OrderByDescending(item => item.SentOn)
             .FirstOrDefaultAsync(cancellationToken);
 
-        DateTimeOffset? mailboxCheckedThrough = await context.AgentAutomationSettings
+        DateTimeOffset? mailboxCheckedThrough = await operations.RetrieveAutomationSettings(executionUserId)
             .AsNoTracking()
             .Where(item => item.UserId == executionUserId)
             .Select(item => item.LastMailboxSyncOn)
@@ -68,7 +70,7 @@ public sealed partial class EmailTaskEvidenceService(IPlatformDbContextFactory d
 
         if (task.TenantCompanyRelationshipId.HasValue)
         {
-            List<string> contactAddresses = await context.RelationshipContacts
+            List<string> contactAddresses = await sales.RetrieveRelationshipContacts()
                 .AsNoTracking()
                 .Where(item => item.TenantCompanyRelationshipId == task.TenantCompanyRelationshipId
                     && item.CompanyContact.EmailAddress != null)
@@ -78,7 +80,7 @@ public sealed partial class EmailTaskEvidenceService(IPlatformDbContextFactory d
         }
 
         DateTimeOffset searchFrom = outbound.SentOn!.Value.AddMinutes(-5);
-        List<MailboxMessageRecord> messages = await context.MailboxMessageRecords
+        List<MailboxMessageRecord> messages = await operations.RetrieveMailboxMessages()
             .AsNoTracking()
             .Where(item => item.ReceivedOn >= searchFrom)
             .OrderByDescending(item => item.ReceivedOn)

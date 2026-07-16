@@ -1,7 +1,7 @@
 using System.Text;
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using Microsoft.EntityFrameworkCore;
 
 namespace ClientRelationshipManagement.Web.Services.Agents;
@@ -11,14 +11,16 @@ public interface IProcessHealthReviewService
     ValueTask<int> CreateDailyReviewsAsync(string createdBy, CancellationToken cancellationToken = default);
 }
 
-public sealed class ProcessHealthReviewService(IPlatformDbContextFactory dbContextFactory) : IProcessHealthReviewService
+public sealed class ProcessHealthReviewService(
+    IProcessCoordinationService processes,
+    cCoder.ClientRelationshipManagement.Services.Entities.IAgentMessageOrchestrationService messages)
+    : IProcessHealthReviewService
 {
     public async ValueTask<int> CreateDailyReviewsAsync(string createdBy, CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
         DateTimeOffset now = DateTimeOffset.UtcNow;
         DateOnly reportDate = DateOnly.FromDateTime(now.UtcDateTime);
-        var definitions = await context.ProcessDefinitions
+        var definitions = await processes.RetrieveDefinitions()
             .AsNoTracking()
             .Include(item => item.Steps)
             .Where(item => item.LifecycleState == ProcessDefinitionLifecycleState.Active || item.IsActive)
@@ -29,7 +31,7 @@ public sealed class ProcessHealthReviewService(IPlatformDbContextFactory dbConte
         foreach (var tenantGroup in definitions.GroupBy(item => item.TenantId))
         {
             string correlationKey = $"daily-process-health:{tenantGroup.Key}:{reportDate:yyyy-MM-dd}";
-            if (await context.AgentMessages.AnyAsync(item => item.CorrelationKey == correlationKey, cancellationToken))
+            if (await messages.RetrieveAll().AnyAsync(item => item.CorrelationKey == correlationKey, cancellationToken))
                 continue;
 
             StringBuilder report = new();
@@ -42,7 +44,7 @@ public sealed class ProcessHealthReviewService(IPlatformDbContextFactory dbConte
                 report.AppendLine($"{definition.Name} ({definition.ScopeType}, version {definition.VersionNumber})");
                 foreach (ProcessStep step in definition.Steps.Where(item => item.IsActive).OrderBy(item => item.Sequence))
                 {
-                    var counts = await context.ProcessTasks
+                    var counts = await processes.RetrieveTasks()
                         .AsNoTracking()
                         .Where(task => task.ProcessStepId == step.Id)
                         .GroupBy(_ => 1)
@@ -78,22 +80,10 @@ public sealed class ProcessHealthReviewService(IPlatformDbContextFactory dbConte
                 CreatedOn = now,
                 LastUpdated = now
             };
-            context.AgentMessages.Add(message);
-            context.AgentMessageEntries.Add(new AgentMessageEntry
-            {
-                Id = Guid.NewGuid(),
-                AgentMessageId = message.Id,
-                Role = "System",
-                Body = report.ToString().Trim(),
-                CreatedBy = createdBy,
-                LastUpdatedBy = createdBy,
-                CreatedOn = now,
-                LastUpdated = now
-            });
+            await messages.AddAsync(message, cancellationToken);
+            await messages.AppendEntryAsync(message.Id, "System", report.ToString().Trim(), cancellationToken);
             created++;
         }
-
-        await context.SaveChangesAsync(cancellationToken);
         return created;
     }
 }

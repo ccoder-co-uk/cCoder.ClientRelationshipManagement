@@ -1,12 +1,14 @@
 using cCoder.AI;
 using cCoder.AI.Models.Configurations;
 using cCoder.ClientRelationshipManagement.Platform;
+using cCoder.ClientRelationshipManagement.Api;
 using cCoder.Eventing;
 using cCoder.Security;
 using cCoder.Security.Data.EF;
 using cCoder.Security.Data.EF.Interfaces;
 using cCoder.Security.Objects;
 using ClientRelationshipManagement.Web.Brokers.Loggings;
+using ClientRelationshipManagement.Web.Brokers.Storages;
 using ClientRelationshipManagement.Web.Configuration;
 using ClientRelationshipManagement.Web.Services.Agents;
 using ClientRelationshipManagement.Web.Services.Execution;
@@ -34,7 +36,8 @@ public static class IServiceCollectionExtensions
 
         if (options.IncludeMvc)
         {
-            services.AddControllersWithViews();
+            services.AddControllersWithViews().AddClientRelationshipManagementApi();
+            services.AddClientRelationshipManagementApiDocumentation();
             services.AddCors();
             services.AddSession();
         }
@@ -149,6 +152,8 @@ public static class IServiceCollectionExtensions
         services.AddSecurity((securityServices, security) =>
             security.UseAESHMMACPasswordEncryption(securityServices, decryptionKey));
         services.AddSingleton(typeof(ILoggingBroker<>), typeof(LoggingBroker<>));
+        services.AddScoped<IEmailWorkflowBroker, EmailWorkflowBroker>();
+        services.AddScoped<IWorkflowBroker, WorkflowBroker>();
         services.AddScoped<ICurrentExecutionUserAccessor, CurrentExecutionUserAccessor>();
         services.AddScoped<IAgentWorkspaceService, AgentWorkspaceService>();
         services.AddScoped<IAgentSessionArchiveService, AgentSessionArchiveService>();
@@ -169,7 +174,7 @@ public static class IServiceCollectionExtensions
         services.AddScoped<IEmailDispatchProcessor, EmailDispatchProcessor>();
         services.AddScoped<IMailboxSyncProcessor, MailboxSyncProcessor>();
         services.AddScoped<ILeadIngestionService, LeadIngestionService>();
-        services.AddScoped<IAuthorityDataImportService, AuthorityDataImportService>();
+        services.AddScoped<IAuthorityDataImportCoordinationService, AuthorityDataImportCoordinationService>();
         services.AddScoped<ILeadWorkIntakeService, LeadWorkIntakeService>();
         services.AddScoped<IHostedImportClient, HostedImportClient>();
         services.AddScoped<IImportFileWorkspaceService, ImportFileWorkspaceService>();

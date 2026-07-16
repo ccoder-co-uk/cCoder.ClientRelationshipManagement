@@ -1,7 +1,13 @@
 namespace cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 
-public class LeadContact : AuditableEntity
+public class LeadContact : ICrmEntity
 {
+    public Guid Id { get; set; }
+    public string CreatedBy { get; set; }
+    public string LastUpdatedBy { get; set; }
+    public DateTimeOffset CreatedOn { get; set; }
+    public DateTimeOffset LastUpdated { get; set; }
+
     public Guid LeadId { get; set; }
     public bool IsPrimary { get; set; }
     public string Name { get; set; }

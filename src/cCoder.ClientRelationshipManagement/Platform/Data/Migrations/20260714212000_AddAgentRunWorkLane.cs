@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace cCoder.ClientRelationshipManagement.Platform.Data.Migrations;
 
-[DbContext(typeof(PlatformDbContext))]
+[DbContext(typeof(ClientRelationshipDbContext))]
 [Migration("20260714212000_AddAgentRunWorkLane")]
 public sealed class AddAgentRunWorkLane : Migration
 {

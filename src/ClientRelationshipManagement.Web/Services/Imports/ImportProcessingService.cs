@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using ClientRelationshipManagement.Web.Brokers.Loggings;
 using ClientRelationshipManagement.Web.Configuration;
 using ClientRelationshipManagement.Web.Services.Processes;
@@ -15,7 +15,8 @@ namespace ClientRelationshipManagement.Web.Services.Imports;
 
 public sealed class ImportProcessingService(
     IHostEnvironment environment,
-    IPlatformDbContextFactory dbContextFactory,
+    IImportCoordinationService imports,
+    ISalesCoordinationService sales,
     IWorkflowAutomationService workflowAutomationService,
     IOptions<ImportWorkflowOptions> options,
     ILoggingBroker<ImportProcessingService> loggingBroker)
@@ -23,8 +24,7 @@ public sealed class ImportProcessingService(
 {
     public async ValueTask<int> ProcessReadyImportsAsync(CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        Import[] imports = await context.Imports
+        Import[] readyImports = await imports.RetrieveAllImports()
             .Include(item => item.Source)
             .Where(item =>
                 item.JobStatus == ImportJobStatus.Ready
@@ -34,7 +34,7 @@ public sealed class ImportProcessingService(
             .ToArrayAsync(cancellationToken);
 
         int processedCount = 0;
-        foreach (Import import in imports)
+        foreach (Import import in readyImports)
         {
             await ProcessImportAsync(import, cancellationToken);
             processedCount++;
@@ -45,8 +45,7 @@ public sealed class ImportProcessingService(
 
     async ValueTask ProcessImportAsync(Import import, CancellationToken cancellationToken)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        Import trackedImport = await context.Imports
+        Import trackedImport = await imports.RetrieveAllImports()
             .Include(item => item.Source)
             .FirstAsync(item => item.Id == import.Id, cancellationToken);
 
@@ -59,17 +58,16 @@ public sealed class ImportProcessingService(
             trackedImport.ProcessingStartedOn = now;
             trackedImport.LastUpdated = now;
             trackedImport.LastUpdatedBy = "hosted-services";
-            await context.SaveChangesAsync(cancellationToken);
+            await imports.SaveAsync(cancellationToken);
 
             string canonicalFilePath = await CreateCanonicalCompanyFileAsync(trackedImport, cancellationToken);
             trackedImport.ProcessingStatus = ImportProcessingStatus.Merging;
             trackedImport.ProcessingCheckpoint = "canonicalized";
-            await context.SaveChangesAsync(cancellationToken);
+            await imports.SaveAsync(cancellationToken);
 
             int importedRows = await MergeCanonicalFileAsync(trackedImport.Id, canonicalFilePath, cancellationToken);
 
-            using PlatformDbContext completeContext = dbContextFactory.CreateDbContext(useAdminConnection: true);
-            Import completedImport = await completeContext.Imports.FirstAsync(item => item.Id == trackedImport.Id, cancellationToken);
+            Import completedImport = trackedImport;
             completedImport.ImportedRowCount = importedRows;
             completedImport.TotalRowCount = importedRows;
             completedImport.JobStatus = ImportJobStatus.Completed;
@@ -78,7 +76,7 @@ public sealed class ImportProcessingService(
             completedImport.ProcessingCompletedOn = DateTimeOffset.UtcNow;
             completedImport.LastUpdated = DateTimeOffset.UtcNow;
             completedImport.LastUpdatedBy = "hosted-services";
-            await completeContext.SaveChangesAsync(cancellationToken);
+            await imports.SaveAsync(cancellationToken);
 
             await workflowAutomationService.EnsureCoverageAsync(cancellationToken: cancellationToken);
             ArchiveImportFiles(completedImport.Id);
@@ -87,15 +85,14 @@ public sealed class ImportProcessingService(
         }
         catch (Exception exception)
         {
-            using PlatformDbContext failureContext = dbContextFactory.CreateDbContext(useAdminConnection: true);
-            Import failedImport = await failureContext.Imports.FirstAsync(item => item.Id == import.Id, cancellationToken);
+            Import failedImport = await imports.RetrieveAllImports().FirstAsync(item => item.Id == import.Id, cancellationToken);
             failedImport.JobStatus = ImportJobStatus.Failed;
             failedImport.ProcessingStatus = ImportProcessingStatus.Failed;
             failedImport.ErrorCount++;
             failedImport.ErrorSummary = exception.Message;
             failedImport.LastUpdated = DateTimeOffset.UtcNow;
             failedImport.LastUpdatedBy = "hosted-services";
-            await failureContext.SaveChangesAsync(cancellationToken);
+            await imports.SaveAsync(cancellationToken);
             MoveToFailed(import.Id);
             loggingBroker.LogError(exception, "Import processing failed for {ImportId}.", import.Id);
         }
@@ -160,8 +157,7 @@ public sealed class ImportProcessingService(
         string[] headers = parser.ReadFields() ?? [];
         Dictionary<string, int> headerLookup = BuildHeaderLookup(headers);
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        Import import = await context.Imports.Include(item => item.Source).FirstAsync(item => item.Id == importId, cancellationToken);
+        Import import = await imports.RetrieveAllImports().Include(item => item.Source).FirstAsync(item => item.Id == importId, cancellationToken);
         DateTimeOffset now = DateTimeOffset.UtcNow;
         int pendingSaves = 0;
 
@@ -177,29 +173,29 @@ public sealed class ImportProcessingService(
                 continue;
 
             string sourceRowNumber = Normalize(GetValue(row, headerLookup, "SourceRowNumber"));
-            Company company = await FindCompanyAsync(context, import.Source, companyNumber, vatNumber, cancellationToken);
+            Company company = await FindCompanyAsync(import.Source, companyNumber, vatNumber, cancellationToken);
             if (company is null)
             {
                 Address address = HasAddressData(row, headerLookup)
                     ? CreateAddress(import, companyNumber ?? vatNumber, row, headerLookup, now)
                     : null;
                 if (address is not null)
-                    context.Addresses.Add(address);
+                    sales.Add(address);
 
                 company = CreateCompany(import, address?.Id, row, headerLookup, now);
-                context.Companies.Add(company);
+                sales.Add(company);
             }
             else
             {
                 UpdateCompany(company, import, row, headerLookup, now);
                 Address address = company.RegisteredAddressId.HasValue
-                    ? await context.Addresses.FirstOrDefaultAsync(item => item.Id == company.RegisteredAddressId.Value, cancellationToken)
+                    ? await sales.RetrieveAddresses().FirstOrDefaultAsync(item => item.Id == company.RegisteredAddressId.Value, cancellationToken)
                     : null;
 
                 if (address is null && HasAddressData(row, headerLookup))
                 {
                     address = CreateAddress(import, companyNumber ?? vatNumber, row, headerLookup, now);
-                    context.Addresses.Add(address);
+                    sales.Add(address);
                     company.RegisteredAddressId = address.Id;
                 }
                 else if (address is not null && (!address.IsVerified || import.Source.IsAuthoritative))
@@ -208,7 +204,7 @@ public sealed class ImportProcessingService(
                 }
             }
 
-            Lead lead = await context.Leads.FirstOrDefaultAsync(item =>
+            Lead lead = await sales.RetrieveLeads().FirstOrDefaultAsync(item =>
                 item.SourceId == import.SourceId
                 && item.SourceRecordId == (companyNumber ?? vatNumber ?? sourceRowNumber),
                 cancellationToken);
@@ -216,29 +212,32 @@ public sealed class ImportProcessingService(
             if (lead is null)
             {
                 lead = CreateLead(import, company.Id, row, headerLookup, now);
-                context.Leads.Add(lead);
+                sales.Add(lead);
             }
 
-            CompanyContact contact = await UpsertContactAsync(context, import, company.Id, row, headerLookup, now, cancellationToken);
-            CreateImportLink(context, import, company.Id, lead.Id, contact?.Id, sourceRowNumber, now);
+            CompanyContact contact = await UpsertContactAsync(import, company.Id, row, headerLookup, now, cancellationToken);
+            CreateImportLink(import, company.Id, lead.Id, contact?.Id, sourceRowNumber, now);
 
             importedRows++;
             pendingSaves++;
             if (pendingSaves >= options.Value.ProcessingBatchSize)
             {
-                await context.SaveChangesAsync(cancellationToken);
+                await sales.SaveAsync(cancellationToken);
+                await imports.SaveAsync(cancellationToken);
                 pendingSaves = 0;
             }
         }
 
         if (pendingSaves > 0)
-            await context.SaveChangesAsync(cancellationToken);
+        {
+            await sales.SaveAsync(cancellationToken);
+            await imports.SaveAsync(cancellationToken);
+        }
 
         return importedRows;
     }
 
     async ValueTask<Company> FindCompanyAsync(
-        PlatformDbContext context,
         Source source,
         string companyNumber,
         string vatNumber,
@@ -246,7 +245,7 @@ public sealed class ImportProcessingService(
     {
         if (!string.IsNullOrWhiteSpace(companyNumber))
         {
-            Company exact = await context.Companies.FirstOrDefaultAsync(item =>
+            Company exact = await sales.RetrieveCompanies().FirstOrDefaultAsync(item =>
                 item.SourceSystem == source.Name
                 && item.SourceRecordId == companyNumber,
                 cancellationToken);
@@ -257,7 +256,7 @@ public sealed class ImportProcessingService(
 
         if (source.IsAuthoritative || !string.IsNullOrWhiteSpace(vatNumber))
         {
-            return await context.Companies.FirstOrDefaultAsync(item =>
+            return await sales.RetrieveCompanies().FirstOrDefaultAsync(item =>
                 item.VatNumber == vatNumber
                 || (!string.IsNullOrWhiteSpace(companyNumber) && item.CompanyNumber == companyNumber),
                 cancellationToken);
@@ -398,8 +397,7 @@ public sealed class ImportProcessingService(
         };
     }
 
-    static async ValueTask<CompanyContact> UpsertContactAsync(
-        PlatformDbContext context,
+    async ValueTask<CompanyContact> UpsertContactAsync(
         Import import,
         Guid companyId,
         string[] row,
@@ -416,7 +414,7 @@ public sealed class ImportProcessingService(
         CompanyContact contact = null;
         if (!string.IsNullOrWhiteSpace(email))
         {
-            contact = await context.CompanyContacts.FirstOrDefaultAsync(item =>
+            contact = await sales.RetrieveCompanyContacts().FirstOrDefaultAsync(item =>
                 item.CompanyId == companyId && item.EmailAddress == email,
                 cancellationToken);
         }
@@ -439,14 +437,13 @@ public sealed class ImportProcessingService(
                 LastUpdated = now
             };
 
-            context.CompanyContacts.Add(contact);
+            sales.Add(contact);
         }
 
         return contact;
     }
 
-    static void CreateImportLink(
-        PlatformDbContext context,
+    void CreateImportLink(
         Import import,
         Guid companyId,
         Guid leadId,
@@ -454,7 +451,7 @@ public sealed class ImportProcessingService(
         string sourceRowNumber,
         DateTimeOffset now)
     {
-        context.ImportLinks.Add(new ImportLink
+        imports.Add(new ImportLink
         {
             Id = Guid.NewGuid(),
             ImportId = import.Id,

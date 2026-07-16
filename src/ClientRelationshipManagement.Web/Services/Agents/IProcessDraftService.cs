@@ -19,10 +19,17 @@ public interface IProcessDraftService
         string approvedBy,
         string approvalNotes,
         CancellationToken cancellationToken = default);
+
+    ValueTask<ProcessDefinition> RejectDraftAsync(
+        Guid draftProcessDefinitionId,
+        string rejectedBy,
+        string rejectionNotes,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class ProcessStepDraftUpdate
 {
+    public Guid? Id { get; set; }
     public string Key { get; set; } = string.Empty;
     public string Name { get; set; }
     public string Objective { get; set; }

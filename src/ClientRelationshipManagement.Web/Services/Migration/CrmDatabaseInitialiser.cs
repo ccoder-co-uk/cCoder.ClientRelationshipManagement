@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore;
 namespace ClientRelationshipManagement.Web.Services.Migration;
 
 public sealed class CrmDatabaseInitialiser(
-    IPlatformDbContextFactory dbContextFactory,
+    IClientRelationshipDbContextFactory dbContextFactory,
     ICrmPlatformBootstrapService crmPlatformBootstrapService,
     ILoggingBroker<CrmDatabaseInitialiser> loggingBroker)
     : ICrmDatabaseInitialiser
@@ -14,7 +14,7 @@ public sealed class CrmDatabaseInitialiser(
     {
         loggingBroker.LogInformation("Initialising CRM platform schemas");
 
-        using PlatformDbContext dbContext = dbContextFactory.CreateDbContext(useAdminConnection: true);
+        using ClientRelationshipDbContext dbContext = dbContextFactory.CreateDbContext(useAdminConnection: true);
         await dbContext.Database.MigrateAsync(cancellationToken);
         await crmPlatformBootstrapService.InitialiseAsync(cancellationToken);
     }

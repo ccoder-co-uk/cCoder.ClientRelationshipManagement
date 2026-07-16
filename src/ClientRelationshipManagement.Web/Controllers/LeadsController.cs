@@ -1,5 +1,5 @@
 using cCoder.ClientRelationshipManagement.Models.Security;
-using cCoder.ClientRelationshipManagement.Platform.Data;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.Security.Objects;
 using ClientRelationshipManagement.Web.Models.Leads;
@@ -14,7 +14,7 @@ using PlatformEntities = cCoder.ClientRelationshipManagement.Platform.Models.Ent
 namespace ClientRelationshipManagement.Web.Controllers;
 
 public sealed class LeadsController(
-    IPlatformDbContextFactory dbContextFactory,
+    ISalesCoordinationService salesWorkspaceService,
     ILeadIngestionService leadIngestionService,
     IWorkflowAutomationService workflowAutomationService,
     ICRMAuthInfo authInfo,
@@ -32,7 +32,6 @@ public sealed class LeadsController(
 
         await workflowAutomationService.EnsureCoverageAsync();
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
         string[] readableTenantIds = GetReadableTenantIds();
         string normalizedScope = scope?.Trim().ToLowerInvariant() ?? string.Empty;
         string taskFilter = NormalizeTaskFilter(tasks);
@@ -42,7 +41,7 @@ public sealed class LeadsController(
 
         if (normalizedScope is "candidates" or "suppressed")
         {
-            IQueryable<PlatformEntities.Company> companies = context.Companies
+            IQueryable<PlatformEntities.Company> companies = salesWorkspaceService.RetrieveCompanies()
                 .AsNoTracking()
                 .Where(company => company.SourceSystem == "CompaniesHouse");
 
@@ -51,7 +50,7 @@ public sealed class LeadsController(
                 : companies.Where(company =>
                     !company.IsProspectingSuppressed
                     && !company.Relationships.Any()
-                    && !context.Leads.Any(lead => lead.CompanyId == company.Id));
+                    && !salesWorkspaceService.RetrieveLeads().Any(lead => lead.CompanyId == company.Id));
 
             if (!string.IsNullOrWhiteSpace(search))
             {
@@ -97,7 +96,7 @@ public sealed class LeadsController(
             });
         }
 
-        IQueryable<LeadRowProjection> query = context.Leads
+        IQueryable<LeadRowProjection> query = salesWorkspaceService.RetrieveLeads()
             .AsNoTracking()
             .Where(lead => readableTenantIds.Contains(lead.TenantId))
             .Select(lead => new LeadRowProjection
@@ -107,7 +106,7 @@ public sealed class LeadsController(
                 Status = lead.Status,
                 SourceSystem = lead.SourceSystem ?? string.Empty,
                 CompanyName = lead.RawCompanyName,
-                ContactName = context.LeadContacts
+                ContactName = salesWorkspaceService.RetrieveLeadContacts()
                     .Where(contact => contact.LeadId == lead.Id)
                     .OrderByDescending(contact => contact.IsPrimary)
                     .Select(contact => contact.Name)
@@ -130,12 +129,12 @@ public sealed class LeadsController(
         {
             query = taskFilter switch
             {
-                "due-today" => query.Where(item => context.ProcessTasks.Any(task =>
+                "due-today" => query.Where(item => salesWorkspaceService.RetrieveProcessTasks().Any(task =>
                     task.LeadId == item.Id && task.State == ProcessTaskState.Pending
                     && task.DueOn >= today && task.DueOn < tomorrow)),
-                "overdue" => query.Where(item => context.ProcessTasks.Any(task =>
+                "overdue" => query.Where(item => salesWorkspaceService.RetrieveProcessTasks().Any(task =>
                     task.LeadId == item.Id && task.State == ProcessTaskState.Pending && task.DueOn < today)),
-                _ => query.Where(item => context.ProcessTasks.Any(task =>
+                _ => query.Where(item => salesWorkspaceService.RetrieveProcessTasks().Any(task =>
                     task.LeadId == item.Id && task.State == ProcessTaskState.Pending))
             };
         }
@@ -196,8 +195,7 @@ public sealed class LeadsController(
             return redirect;
 
         string[] tenantIds = GetReadableTenantIds();
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
-        PlatformEntities.Lead lead = await context.Leads
+        PlatformEntities.Lead lead = await salesWorkspaceService.RetrieveLeads()
             .AsNoTracking()
             .Include(item => item.Company)
             .Include(item => item.Contacts)
@@ -205,7 +203,7 @@ public sealed class LeadsController(
         if (lead is null)
             return NotFound();
 
-        List<LeadDetailTaskViewModel> tasks = await context.ProcessTasks
+        List<LeadDetailTaskViewModel> tasks = await salesWorkspaceService.RetrieveProcessTasks()
             .AsNoTracking()
             .Where(item => item.LeadId == id)
             .OrderBy(item => item.DueOn)
@@ -220,7 +218,7 @@ public sealed class LeadsController(
                 CompletedOn = item.CompletedOn
             })
             .ToListAsync(cancellationToken);
-        List<LeadDetailArtifactViewModel> artifacts = await context.CompanyHistory
+        List<LeadDetailArtifactViewModel> artifacts = await salesWorkspaceService.RetrieveCompanyHistory()
             .AsNoTracking()
             .Where(item => item.CompanyId == lead.CompanyId && item.TenantId == lead.TenantId)
             .OrderByDescending(item => item.OccurredOn)
@@ -348,85 +346,19 @@ public sealed class LeadsController(
         if (!ModelState.IsValid)
             return View(await CreateEditorModelAsync(model.Id.Value, model));
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        PlatformEntities.Lead lead = await context.Leads
-            .Include(item => item.Company)
-                .ThenInclude(company => company.RegisteredAddress)
-            .FirstOrDefaultAsync(item => item.Id == model.Id.Value);
-        if (lead is null || !GetWriteableTenantIds().Contains(lead.TenantId))
-            return NotFound();
-
-        lead.TenantId = model.TenantId.Trim();
-        lead.SourceSystem = Normalize(model.SourceSystem);
-        lead.SourceRecordId = Normalize(model.SourceRecordId);
-        lead.SourceFileName = Normalize(model.SourceFileName);
-        lead.Status = model.Status;
-        lead.RawCompanyName = model.RawCompanyName.Trim();
-        lead.RawTradingName = Normalize(model.RawTradingName);
-        lead.RawCompanyNumber = Normalize(model.RawCompanyNumber);
-        lead.RawVatNumber = Normalize(model.RawVatNumber);
-        lead.RawWebsiteUrl = Normalize(model.RawWebsiteUrl);
-        lead.RawContactEmailAddress = Normalize(model.RawContactEmailAddress);
-        lead.RawContactPhoneNumber = Normalize(model.RawContactPhoneNumber);
-        string addressText = Normalize(model.RawAddressText);
-        if (addressText is null)
+        PlatformEntities.Lead lead = await leadIngestionService.UpdateLeadAsync(new UpdateLeadCommand
         {
-            lead.Company.RegisteredAddressId = null;
-        }
-        else if (lead.Company.RegisteredAddress is null)
-        {
-            PlatformEntities.Address address = AddressRecordMapper.CreateFromText(
-                addressText,
-                lead.SourceSystem,
-                CurrentUserId,
-                DateTimeOffset.UtcNow);
-            context.Addresses.Add(address);
-            lead.Company.RegisteredAddressId = address.Id;
-        }
-        else
-        {
-            AddressRecordMapper.ApplyText(lead.Company.RegisteredAddress, addressText, CurrentUserId, DateTimeOffset.UtcNow);
-        }
-        lead.Company.LastUpdatedBy = CurrentUserId;
-        lead.Company.LastUpdated = DateTimeOffset.UtcNow;
-        lead.QualificationNotes = Normalize(model.QualificationNotes);
-        lead.LastUpdatedBy = CurrentUserId;
-        lead.LastUpdated = DateTimeOffset.UtcNow;
-
-        PlatformEntities.LeadContact contact = await context.LeadContacts
-            .FirstOrDefaultAsync(item => item.LeadId == lead.Id);
-
-        if (contact is null && HasContactData(model))
-        {
-            context.LeadContacts.Add(new PlatformEntities.LeadContact
-            {
-                Id = Guid.NewGuid(),
-                LeadId = lead.Id,
-                IsPrimary = true,
-                Name = Normalize(model.ContactName),
-                Position = Normalize(model.ContactPosition),
-                EmailAddress = Normalize(model.ContactEmailAddress),
-                PhoneNumber = Normalize(model.ContactPhoneNumber),
-                LinkedInUrl = Normalize(model.ContactLinkedInUrl),
-                CreatedBy = CurrentUserId,
-                LastUpdatedBy = CurrentUserId,
-                CreatedOn = DateTimeOffset.UtcNow,
-                LastUpdated = DateTimeOffset.UtcNow
-            });
-        }
-        else if (contact is not null)
-        {
-            contact.Name = Normalize(model.ContactName);
-            contact.Position = Normalize(model.ContactPosition);
-            contact.EmailAddress = Normalize(model.ContactEmailAddress);
-            contact.PhoneNumber = Normalize(model.ContactPhoneNumber);
-            contact.LinkedInUrl = Normalize(model.ContactLinkedInUrl);
-            contact.LastUpdatedBy = CurrentUserId;
-            contact.LastUpdated = DateTimeOffset.UtcNow;
-        }
-
-        await context.SaveChangesAsync();
-        await workflowAutomationService.EnsureCoverageAsync(leadId: lead.Id, forceCreate: true);
+            Id = model.Id.Value, TenantId = model.TenantId, Status = model.Status,
+            SourceSystem = model.SourceSystem, SourceRecordId = model.SourceRecordId, SourceFileName = model.SourceFileName,
+            RawCompanyName = model.RawCompanyName, RawTradingName = model.RawTradingName,
+            RawCompanyNumber = model.RawCompanyNumber, RawVatNumber = model.RawVatNumber,
+            RawWebsiteUrl = model.RawWebsiteUrl, RawContactEmailAddress = model.RawContactEmailAddress,
+            RawContactPhoneNumber = model.RawContactPhoneNumber, RawAddressText = model.RawAddressText,
+            QualificationNotes = model.QualificationNotes, ContactName = model.ContactName,
+            ContactPosition = model.ContactPosition, ContactEmailAddress = model.ContactEmailAddress,
+            ContactPhoneNumber = model.ContactPhoneNumber, ContactLinkedInUrl = model.ContactLinkedInUrl
+        });
+        if (lead is null) return NotFound();
 
         TempData["LeadsNotice"] = "Lead updated.";
         return RedirectToAction(nameof(Edit), new { id = lead.Id });
@@ -444,8 +376,7 @@ public sealed class LeadsController(
 
     async Task<LeadEditorViewModel> CreateEditorModelAsync(Guid id, LeadEditorViewModel postedModel = null)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
-        PlatformEntities.Lead lead = await context.Leads
+        PlatformEntities.Lead lead = await salesWorkspaceService.RetrieveLeads()
             .Include(item => item.Company)
                 .ThenInclude(company => company.RegisteredAddress)
             .AsNoTracking()
@@ -454,7 +385,7 @@ public sealed class LeadsController(
         if (lead is null || !GetReadableTenantIds().Contains(lead.TenantId))
             return null;
 
-        PlatformEntities.LeadContact contact = await context.LeadContacts
+        PlatformEntities.LeadContact contact = await salesWorkspaceService.RetrieveLeadContacts()
             .AsNoTracking()
             .Where(item => item.LeadId == id)
             .OrderByDescending(item => item.IsPrimary)

@@ -19,8 +19,8 @@ public sealed class PlatformServiceCollectionExtensionsTests
             configuration.AdminConnectionString = "Server=(localdb)\\MSSQLLocalDB;Database=crm-platform-tests;";
         });
 
-        ServiceDescriptor platformConfigurationDescriptor = Assert.Single(services, item => item.ServiceType == typeof(PlatformConfiguration));
-        ServiceDescriptor dbContextFactoryDescriptor = Assert.Single(services, item => item.ServiceType == typeof(IPlatformDbContextFactory));
+        ServiceDescriptor platformConfigurationDescriptor = Assert.Single(services, item => item.ServiceType == typeof(CRMConfiguration));
+        ServiceDescriptor dbContextFactoryDescriptor = Assert.Single(services, item => item.ServiceType == typeof(IClientRelationshipDbContextFactory));
 
         Assert.NotNull(platformConfigurationDescriptor.ImplementationInstance);
         Assert.Equal(ServiceLifetime.Scoped, dbContextFactoryDescriptor.Lifetime);

@@ -96,12 +96,12 @@ internal sealed class AcceptanceDatabaseManager(AcceptanceSettings settings)
 
     void MigrateCrmPlatform()
     {
-        DbContextOptions<PlatformDbContext> options =
-            new DbContextOptionsBuilder<PlatformDbContext>()
+        DbContextOptions<ClientRelationshipDbContext> options =
+            new DbContextOptionsBuilder<ClientRelationshipDbContext>()
                 .UseSqlServer(settings.CrmAdminConnectionString)
                 .Options;
 
-        using var dbContext = new PlatformDbContext(options);
+        using var dbContext = new ClientRelationshipDbContext(options);
         dbContext.Database.Migrate();
     }
 

@@ -33,10 +33,10 @@ public sealed class AuthorityImportTests
     [Fact]
     public void CompanyAuthorityIdentity_IsUniqueAndFiltered()
     {
-        DbContextOptions<PlatformDbContext> options = new DbContextOptionsBuilder<PlatformDbContext>()
+        DbContextOptions<ClientRelationshipDbContext> options = new DbContextOptionsBuilder<ClientRelationshipDbContext>()
             .UseSqlServer("Server=(localdb)\\MSSQLLocalDB;Database=authority-model-test;Trusted_Connection=True")
             .Options;
-        using PlatformDbContext context = new(options);
+        using ClientRelationshipDbContext context = new(options);
 
         var company = context.Model.FindEntityType(typeof(Company));
         var index = company.GetIndexes().Single(candidate =>

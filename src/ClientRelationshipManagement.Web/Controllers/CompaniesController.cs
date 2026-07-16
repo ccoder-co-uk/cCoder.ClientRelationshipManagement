@@ -1,5 +1,5 @@
 using cCoder.ClientRelationshipManagement.Models.Security;
-using cCoder.ClientRelationshipManagement.Platform.Data;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.Security.Objects;
@@ -12,7 +12,7 @@ namespace ClientRelationshipManagement.Web.Controllers;
 
 [Route("Companies")]
 public sealed class CompaniesController(
-    IPlatformDbContextFactory dbContextFactory,
+    ISalesCoordinationService salesWorkspaceService,
     ICRMAuthInfo authInfo,
     ISSOAuthInfo ssoAuthInfo)
     : Controller
@@ -33,8 +33,7 @@ public sealed class CompaniesController(
             return redirect;
 
         string[] tenantIds = GetReadableTenantIds();
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
-        IQueryable<Company> query = VisibleCompanies(context, tenantIds).AsNoTracking();
+        IQueryable<Company> query = salesWorkspaceService.RetrieveCompanies().AsNoTracking();
 
         search = search?.Trim() ?? string.Empty;
         status = status?.Trim() ?? string.Empty;
@@ -82,7 +81,7 @@ public sealed class CompaniesController(
                 IsVerified = company.IsVerified,
                 IsProspectingSuppressed = company.IsProspectingSuppressed,
                 ContactCount = company.Contacts.Count,
-                LeadCount = context.Leads.Count(lead => lead.CompanyId == company.Id && tenantIds.Contains(lead.TenantId)),
+                LeadCount = salesWorkspaceService.RetrieveLeads().Count(lead => lead.CompanyId == company.Id),
                 RelationshipCount = company.Relationships.Count(relationship => tenantIds.Contains(relationship.TenantId))
             })
             .ToListAsync(cancellationToken);
@@ -110,16 +109,15 @@ public sealed class CompaniesController(
             return redirect;
 
         string[] tenantIds = GetReadableTenantIds();
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
-        if (!await VisibleCompanies(context, tenantIds).AnyAsync(company => company.Id == id, cancellationToken))
+        if (!await salesWorkspaceService.RetrieveCompanies().AnyAsync(company => company.Id == id, cancellationToken))
             return NotFound();
 
-        Company company = await context.Companies
+        Company company = await salesWorkspaceService.RetrieveCompanies()
             .AsNoTracking()
             .Include(item => item.RegisteredAddress)
             .SingleAsync(item => item.Id == id, cancellationToken);
 
-        List<CompanyContact> contacts = await context.CompanyContacts
+        List<CompanyContact> contacts = await salesWorkspaceService.RetrieveCompanyContacts()
             .AsNoTracking()
             .Where(item => item.CompanyId == id)
             .OrderByDescending(item => item.IsPrimary)
@@ -127,19 +125,19 @@ public sealed class CompaniesController(
             .Take(100)
             .ToListAsync(cancellationToken);
 
-        var leads = await context.Leads.AsNoTracking()
-            .Where(item => item.CompanyId == id && tenantIds.Contains(item.TenantId))
+        var leads = await salesWorkspaceService.RetrieveLeads().AsNoTracking()
+            .Where(item => item.CompanyId == id)
             .OrderByDescending(item => item.CreatedOn)
             .Take(100)
             .Select(item => new { item.Id, item.TenantId, item.Status, item.QualificationNotes, item.CreatedOn })
             .ToListAsync(cancellationToken);
-        var relationships = await context.TenantCompanyRelationships.AsNoTracking()
-            .Where(item => item.CompanyId == id && tenantIds.Contains(item.TenantId))
+        var relationships = await salesWorkspaceService.RetrieveRelationships().AsNoTracking()
+            .Where(item => item.CompanyId == id)
             .OrderByDescending(item => item.CreatedOn)
             .Take(100)
             .Select(item => new { item.Id, item.TenantId, item.Status, item.CurrentStage, item.OpportunitySummary, item.CreatedOn })
             .ToListAsync(cancellationToken);
-        var opportunities = await context.Opportunities.AsNoTracking()
+        var opportunities = await salesWorkspaceService.RetrieveOpportunities().AsNoTracking()
             .Where(item => item.TenantCompanyRelationship.CompanyId == id
                 && tenantIds.Contains(item.TenantCompanyRelationship.TenantId))
             .OrderByDescending(item => item.CreatedOn)
@@ -154,7 +152,7 @@ public sealed class CompaniesController(
                 item.CreatedOn
             })
             .ToListAsync(cancellationToken);
-        var clients = await context.ClientAccounts.AsNoTracking()
+        var clients = await salesWorkspaceService.RetrieveClientAccounts().AsNoTracking()
             .Where(item => item.TenantCompanyRelationship.CompanyId == id
                 && tenantIds.Contains(item.TenantCompanyRelationship.TenantId))
             .OrderByDescending(item => item.CreatedOn)
@@ -168,7 +166,7 @@ public sealed class CompaniesController(
                 item.CreatedOn
             })
             .ToListAsync(cancellationToken);
-        var tasks = await context.ProcessTasks.AsNoTracking()
+        var tasks = await salesWorkspaceService.RetrieveProcessTasks().AsNoTracking()
             .Where(item =>
                 (item.LeadId.HasValue && item.Lead.CompanyId == id && tenantIds.Contains(item.Lead.TenantId))
                 || (item.TenantCompanyRelationshipId.HasValue
@@ -186,8 +184,8 @@ public sealed class CompaniesController(
                 item.ProcessInstance.ProcessDefinition.ScopeType
             })
             .ToListAsync(cancellationToken);
-        List<CompanyHistoryItemViewModel> history = await context.CompanyHistory.AsNoTracking()
-            .Where(item => item.CompanyId == id && tenantIds.Contains(item.TenantId))
+        List<CompanyHistoryItemViewModel> history = await salesWorkspaceService.RetrieveCompanyHistory().AsNoTracking()
+            .Where(item => item.CompanyId == id)
             .OrderByDescending(item => item.OccurredOn)
             .ThenByDescending(item => item.CreatedOn)
             .Take(100)
@@ -306,13 +304,12 @@ public sealed class CompaniesController(
             return redirect;
 
         string[] tenantIds = GetReadableTenantIds();
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
-        bool canRead = await VisibleCompanies(context, tenantIds)
+        bool canRead = await salesWorkspaceService.RetrieveCompanies()
             .AnyAsync(item => item.Id == id, cancellationToken);
         if (!canRead)
             return NotFound();
 
-        var company = await context.Companies
+        var company = await salesWorkspaceService.RetrieveCompanies()
             .AsNoTracking()
             .Where(item => item.Id == id)
             .Select(item => new
@@ -326,7 +323,7 @@ public sealed class CompaniesController(
         if (company is null)
             return NotFound();
 
-        List<CompanyHistoryItemViewModel> history = await context.CompanyHistory
+        List<CompanyHistoryItemViewModel> history = await salesWorkspaceService.RetrieveCompanyHistory()
             .AsNoTracking()
             .Where(item => item.CompanyId == id && tenantIds.Contains(item.TenantId))
             .OrderByDescending(item => item.OccurredOn)
@@ -370,13 +367,6 @@ public sealed class CompaniesController(
         : authInfo.WriteableTenants.Length > 0
             ? authInfo.WriteableTenants
             : ["default"];
-
-    static IQueryable<Company> VisibleCompanies(PlatformDbContext context, string[] tenantIds) =>
-        context.Companies.Where(company =>
-            company.SourceSystem == "CompaniesHouse"
-            || company.Relationships.Any(relationship => tenantIds.Contains(relationship.TenantId))
-            || context.Leads.Any(lead => lead.CompanyId == company.Id && tenantIds.Contains(lead.TenantId))
-            || context.CompanyHistory.Any(history => history.CompanyId == company.Id && tenantIds.Contains(history.TenantId)));
 
     static string NormalizeSort(string sort) => sort?.Trim().ToLowerInvariant() switch
     {

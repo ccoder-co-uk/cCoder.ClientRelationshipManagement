@@ -1,7 +1,13 @@
 namespace cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 
-public sealed class AgentAutomationSetting : AuditableEntity
+public sealed class AgentAutomationSetting : ICrmEntity
 {
+    public Guid Id { get; set; }
+    public string CreatedBy { get; set; }
+    public string LastUpdatedBy { get; set; }
+    public DateTimeOffset CreatedOn { get; set; }
+    public DateTimeOffset LastUpdated { get; set; }
+
     public string UserId { get; set; }
     public bool AutoApproveProcessEmails { get; set; }
     public DateTimeOffset? LastMailboxSyncOn { get; set; }

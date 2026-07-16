@@ -1,4 +1,3 @@
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.Security.Objects;
 using ClientRelationshipManagement.Web.Brokers.Loggings;
@@ -6,17 +5,43 @@ using ClientRelationshipManagement.Web.Services.Execution;
 using ClientRelationshipManagement.Web.Utilities;
 using Microsoft.EntityFrameworkCore;
 using PlatformEntities = cCoder.ClientRelationshipManagement.Platform.Models.Entities;
+using ClientRelationshipManagement.Web.Services.Agents;
+using ClientRelationshipManagement.Web.Brokers.Storages;
 
 namespace ClientRelationshipManagement.Web.Services.Mail;
 
 public sealed class EmailDraftWorkflowService(
-    IPlatformDbContextFactory dbContextFactory,
+    IEmailWorkflowBroker storage,
     ICurrentUserMailProfileProvider currentUserMailProfileProvider,
     ISSOAuthInfo authInfo,
     ICurrentExecutionUserAccessor currentExecutionUserAccessor,
     ILoggingBroker<EmailDraftWorkflowService> loggingBroker)
     : IEmailDraftWorkflowService
 {
+    public async ValueTask<PlatformEntities.Email> RejectAsync(
+        Guid clientId, Guid emailId, string reason, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(reason)) return null;
+        PlatformEntities.Email email = await storage.Emails
+            .Include(item => item.Material)
+            .Include(item => item.TenantCompanyRelationship).ThenInclude(item => item.Company)
+            .FirstOrDefaultAsync(item => item.Id == emailId && item.TenantCompanyRelationshipId == clientId, cancellationToken);
+        if (email is null) return null;
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        email.State = EmailState.Rejected;
+        email.LastError = $"Rejected by {CurrentUserId}: {reason.Trim()}";
+        email.LastUpdatedBy = CurrentUserId;
+        email.LastUpdated = now;
+        if (email.Material is not null)
+        {
+            email.Material.Status = MaterialStatus.Archived;
+            email.Material.LastUpdatedBy = CurrentUserId;
+            email.Material.LastUpdated = now;
+        }
+        await storage.SaveAsync(cancellationToken);
+        return email;
+    }
     public async ValueTask<PlatformEntities.Email> SaveDraftAsync(
         EmailDraftUpsertCommand command,
         CancellationToken cancellationToken = default)
@@ -30,9 +55,7 @@ public sealed class EmailDraftWorkflowService(
             || RecipientEmailContentValidator.ContainsInternalDraftingGuidance(body))
             return null;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-
-        PlatformEntities.TenantCompanyRelationship relationship = await context.TenantCompanyRelationships
+        PlatformEntities.TenantCompanyRelationship relationship = await storage.Relationships
             .FirstOrDefaultAsync(item => item.Id == command.ClientId, cancellationToken);
 
         if (relationship is null)
@@ -43,7 +66,7 @@ public sealed class EmailDraftWorkflowService(
         MailSenderProfile senderProfile = await currentUserMailProfileProvider.GetCurrentAsync(cancellationToken);
 
         PlatformEntities.Material material = await GetOrCreateMaterialAsync(
-            context,
+            storage,
             relationship,
             command,
             subject,
@@ -52,8 +75,8 @@ public sealed class EmailDraftWorkflowService(
             currentUser,
             cancellationToken);
 
-        PlatformEntities.Email email = await ResolveExistingEmailAsync(context, command, material?.Id, cancellationToken);
-        PlatformEntities.CompanyContact contact = await ResolvePreferredContactAsync(context, relationship.Id, email?.CompanyContactId, material?.CompanyContactId, cancellationToken);
+        PlatformEntities.Email email = await ResolveExistingEmailAsync(storage, command, material?.Id, cancellationToken);
+        PlatformEntities.CompanyContact contact = await ResolvePreferredContactAsync(storage, relationship.Id, email?.CompanyContactId, material?.CompanyContactId, cancellationToken);
         Guid? resolvedClientAccountId = command.ClientAccountId ?? material?.ClientAccountId ?? email?.ClientAccountId;
 
         if (email is null)
@@ -85,7 +108,7 @@ public sealed class EmailDraftWorkflowService(
                 LastUpdated = now
             };
 
-            context.Emails.Add(email);
+            storage.Add(email);
         }
         else
         {
@@ -121,9 +144,9 @@ public sealed class EmailDraftWorkflowService(
             material.ClientAccountId = resolvedClientAccountId ?? material.ClientAccountId;
         }
 
-        await UpsertRecipientsAsync(context, email, contact, cancellationToken);
+        await UpsertRecipientsAsync(storage, email, contact, cancellationToken);
         await UpsertLinkedActivityAsync(
-            context,
+            storage,
             relationship.Id,
             command,
             material?.Id,
@@ -135,7 +158,7 @@ public sealed class EmailDraftWorkflowService(
             currentUser,
             cancellationToken);
 
-        await context.SaveChangesAsync(cancellationToken);
+        await storage.SaveAsync(cancellationToken);
         loggingBroker.LogInformation(
             "Saved draft email for {RelationshipName} with subject {Subject}.",
             ResolveRelationshipName(relationship),
@@ -149,9 +172,7 @@ public sealed class EmailDraftWorkflowService(
         DateTimeOffset? scheduledSendTimeUtc,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-
-        PlatformEntities.Email email = await context.Emails
+        PlatformEntities.Email email = await storage.Emails
             .Include(item => item.Material)
             .Include(item => item.TenantCompanyRelationship)
             .Include(item => item.CompanyContact)
@@ -193,8 +214,8 @@ public sealed class EmailDraftWorkflowService(
             email.Material.LastUpdated = now;
         }
 
-        await UpsertRecipientsAsync(context, email, email.CompanyContact, cancellationToken);
-        await context.SaveChangesAsync(cancellationToken);
+        await UpsertRecipientsAsync(storage, email, email.CompanyContact, cancellationToken);
+        await storage.SaveAsync(cancellationToken);
         loggingBroker.LogInformation(
             "Approved draft email for {RelationshipName} with subject {Subject}. Scheduled for {ScheduledSendTimeUtc}.",
             ResolveRelationshipName(email.TenantCompanyRelationship),
@@ -208,9 +229,7 @@ public sealed class EmailDraftWorkflowService(
         Guid emailId,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-
-        PlatformEntities.Email email = await context.Emails
+        PlatformEntities.Email email = await storage.Emails
             .Include(item => item.Material)
             .FirstOrDefaultAsync(item => item.Id == emailId && item.TenantCompanyRelationshipId == clientId, cancellationToken);
 
@@ -235,7 +254,7 @@ public sealed class EmailDraftWorkflowService(
             email.Material.LastUpdated = now;
         }
 
-        await context.SaveChangesAsync(cancellationToken);
+        await storage.SaveAsync(cancellationToken);
         loggingBroker.LogInformation(
             "Marked email as sent for {ClientId} with subject {Subject}.",
             clientId,
@@ -244,23 +263,23 @@ public sealed class EmailDraftWorkflowService(
     }
 
     async ValueTask<PlatformEntities.Email> ResolveExistingEmailAsync(
-        PlatformDbContext context,
+        IEmailWorkflowBroker storage,
         EmailDraftUpsertCommand command,
         Guid? materialId,
         CancellationToken cancellationToken)
     {
         if (command.EmailId.HasValue && command.EmailId.Value != Guid.Empty)
-            return await context.Emails.FirstOrDefaultAsync(item => item.Id == command.EmailId.Value, cancellationToken);
+            return await storage.Emails.FirstOrDefaultAsync(item => item.Id == command.EmailId.Value, cancellationToken);
 
         Guid resolvedMaterialId = command.ClientMaterialId ?? materialId ?? Guid.Empty;
         if (resolvedMaterialId == Guid.Empty)
             return null;
 
-        return await context.Emails.FirstOrDefaultAsync(item => item.MaterialId == resolvedMaterialId, cancellationToken);
+        return await storage.Emails.FirstOrDefaultAsync(item => item.MaterialId == resolvedMaterialId, cancellationToken);
     }
 
     async ValueTask<PlatformEntities.Material> GetOrCreateMaterialAsync(
-        PlatformDbContext context,
+        IEmailWorkflowBroker storage,
         PlatformEntities.TenantCompanyRelationship relationship,
         EmailDraftUpsertCommand command,
         string subject,
@@ -273,7 +292,7 @@ public sealed class EmailDraftWorkflowService(
 
         if (command.ClientMaterialId.HasValue && command.ClientMaterialId.Value != Guid.Empty)
         {
-            material = await context.Materials.FirstOrDefaultAsync(item => item.Id == command.ClientMaterialId.Value, cancellationToken);
+            material = await storage.Materials.FirstOrDefaultAsync(item => item.Id == command.ClientMaterialId.Value, cancellationToken);
         }
 
         if (material is null)
@@ -294,7 +313,7 @@ public sealed class EmailDraftWorkflowService(
                 LastUpdated = now
             };
 
-            context.Materials.Add(material);
+            storage.Add(material);
             return material;
         }
 
@@ -311,7 +330,7 @@ public sealed class EmailDraftWorkflowService(
     }
 
     async ValueTask<PlatformEntities.CompanyContact> ResolvePreferredContactAsync(
-        PlatformDbContext context,
+        IEmailWorkflowBroker storage,
         Guid relationshipId,
         Guid? emailContactId,
         Guid? materialContactId,
@@ -319,36 +338,36 @@ public sealed class EmailDraftWorkflowService(
     {
         Guid? preferredId = emailContactId ?? materialContactId;
         if (preferredId.HasValue)
-            return await context.CompanyContacts.FirstOrDefaultAsync(item => item.Id == preferredId.Value, cancellationToken);
+            return await storage.CompanyContacts.FirstOrDefaultAsync(item => item.Id == preferredId.Value, cancellationToken);
 
-        Guid? relationshipContactId = await context.RelationshipContacts
+        Guid? relationshipContactId = await storage.RelationshipContacts
             .Where(item => item.TenantCompanyRelationshipId == relationshipId)
             .OrderByDescending(item => item.IsPrimary)
             .Select(item => (Guid?)item.CompanyContactId)
             .FirstOrDefaultAsync(cancellationToken);
 
         if (relationshipContactId.HasValue)
-            return await context.CompanyContacts.FirstOrDefaultAsync(item => item.Id == relationshipContactId.Value, cancellationToken);
+        return await storage.CompanyContacts.FirstOrDefaultAsync(item => item.Id == relationshipContactId.Value, cancellationToken);
 
         return null;
     }
 
     async ValueTask UpsertRecipientsAsync(
-        PlatformDbContext context,
+        IEmailWorkflowBroker storage,
         PlatformEntities.Email email,
         PlatformEntities.CompanyContact contact,
         CancellationToken cancellationToken)
     {
-        List<PlatformEntities.EmailRecipient> existingRecipients = await context.EmailRecipients
+        List<PlatformEntities.EmailRecipient> existingRecipients = await storage.EmailRecipients
             .Where(item => item.EmailId == email.Id)
             .ToListAsync(cancellationToken);
 
         if (existingRecipients.Count > 0)
-            context.EmailRecipients.RemoveRange(existingRecipients);
+        storage.RemoveEmailRecipients(existingRecipients);
 
         foreach (string address in SplitAddresses(email.ToAddresses))
         {
-            context.EmailRecipients.Add(new PlatformEntities.EmailRecipient
+            storage.Add(new PlatformEntities.EmailRecipient
             {
                 Id = Guid.NewGuid(),
                 EmailId = email.Id,
@@ -366,7 +385,7 @@ public sealed class EmailDraftWorkflowService(
 
         foreach (string address in SplitAddresses(email.CcAddresses))
         {
-            context.EmailRecipients.Add(new PlatformEntities.EmailRecipient
+            storage.Add(new PlatformEntities.EmailRecipient
             {
                 Id = Guid.NewGuid(),
                 EmailId = email.Id,
@@ -381,7 +400,7 @@ public sealed class EmailDraftWorkflowService(
 
         foreach (string address in SplitAddresses(email.BccAddresses))
         {
-            context.EmailRecipients.Add(new PlatformEntities.EmailRecipient
+            storage.Add(new PlatformEntities.EmailRecipient
             {
                 Id = Guid.NewGuid(),
                 EmailId = email.Id,
@@ -396,7 +415,7 @@ public sealed class EmailDraftWorkflowService(
     }
 
     async ValueTask UpsertLinkedActivityAsync(
-        PlatformDbContext context,
+        IEmailWorkflowBroker storage,
         Guid relationshipId,
         EmailDraftUpsertCommand command,
         Guid? materialId,
@@ -411,7 +430,7 @@ public sealed class EmailDraftWorkflowService(
         if (!materialId.HasValue || materialId.Value == Guid.Empty)
             return;
 
-        PlatformEntities.Activity linkedActivity = await context.Activities
+        PlatformEntities.Activity linkedActivity = await storage.Activities
             .FirstOrDefaultAsync(
                 item => item.TenantCompanyRelationshipId == relationshipId && item.MaterialId == materialId.Value,
                 cancellationToken);
@@ -420,7 +439,7 @@ public sealed class EmailDraftWorkflowService(
 
         if (linkedActivity is null)
         {
-            context.Activities.Add(new PlatformEntities.Activity
+            storage.Add(new PlatformEntities.Activity
             {
                 Id = Guid.NewGuid(),
                 TenantCompanyRelationshipId = relationshipId,

@@ -10,6 +10,12 @@ public sealed class CreateProcessDraftProposalRequest
     public string CorrelationKey { get; set; }
     public string ApprovalTitle { get; set; }
     public string ApprovalBody { get; set; }
+    // A proposal that targets one known step may use this compact shape. This is
+    // intentionally supported because agent tools commonly operate on one step.
+    public Guid? ProcessStepId { get; set; }
+    public string ProcessStepKey { get; set; }
+    public string EmailSubjectTemplate { get; set; }
+    public string EmailBodyTemplate { get; set; }
     public List<ProcessStepDraftUpdateRequest> StepUpdates { get; set; } = [];
 }
 
@@ -20,6 +26,7 @@ public sealed class AppendAgentMessageEntryRequest
 
 public sealed class ProcessStepDraftUpdateRequest
 {
+    public Guid? Id { get; set; }
     public string Key { get; set; } = string.Empty;
     public string Name { get; set; }
     public string Objective { get; set; }

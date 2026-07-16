@@ -74,20 +74,20 @@ public abstract class CRMControllerAcceptanceTestBase(CRMAcceptanceFixture fixtu
         return await Client.PostAsync(postUrl, payload);
     }
 
-    protected async Task ExecuteInAdminContextAsync(Func<PlatformDbContext, Task> action)
+    protected async Task ExecuteInAdminContextAsync(Func<ClientRelationshipDbContext, Task> action)
     {
         using IServiceScope scope = Fixture.Factory.Services.CreateScope();
-        using PlatformDbContext dbContext =
-            scope.ServiceProvider.GetRequiredService<IPlatformDbContextFactory>().CreateDbContext(useAdminConnection: true);
+        using ClientRelationshipDbContext dbContext =
+            scope.ServiceProvider.GetRequiredService<IClientRelationshipDbContextFactory>().CreateDbContext(useAdminConnection: true);
 
         await action(dbContext);
     }
 
-    protected async Task<TResult> QueryInAdminContextAsync<TResult>(Func<PlatformDbContext, Task<TResult>> action)
+    protected async Task<TResult> QueryInAdminContextAsync<TResult>(Func<ClientRelationshipDbContext, Task<TResult>> action)
     {
         using IServiceScope scope = Fixture.Factory.Services.CreateScope();
-        using PlatformDbContext dbContext =
-            scope.ServiceProvider.GetRequiredService<IPlatformDbContextFactory>().CreateDbContext(useAdminConnection: true);
+        using ClientRelationshipDbContext dbContext =
+            scope.ServiceProvider.GetRequiredService<IClientRelationshipDbContextFactory>().CreateDbContext(useAdminConnection: true);
 
         return await action(dbContext);
     }

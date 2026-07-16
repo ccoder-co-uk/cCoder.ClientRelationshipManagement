@@ -26,26 +26,14 @@
     </PackageReference>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.2" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.2" />
+    <PackageReference Include="Microsoft.AspNetCore.OData" Version="9.4.1" />
+    <PackageReference Include="Swashbuckle.AspNetCore.SwaggerGen" Version="10.2.3" />
     <PackageReference Include="cCoder.Eventing" Version="2026.4.28.2114" />
     <PackageReference Include="cCoder.Security.Data" Version="2026.4.29.2038" />
   </ItemGroup>
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Compile Remove="Api\**\*.cs" />
-    <Compile Remove="Brokers\Events\**\*.cs" />
-    <Compile Remove="Brokers\Storages\**\*.cs" />
-    <Compile Remove="Data\**\*.cs" />
-    <Compile Remove="Migrations\**\*.cs" />
-    <Compile Remove="Models\Configuration\**\*.cs" />
-    <Compile Remove="Models\Entities\**\*.cs" />
-    <Compile Remove="Models\Enums\**\*.cs" />
-    <Compile Remove="Models\Requests\**\*.cs" />
-    <Compile Remove="Services\**\*.cs" />
-    <Compile Remove="AppExtensions.cs" />
   </ItemGroup>
 
 </Project>

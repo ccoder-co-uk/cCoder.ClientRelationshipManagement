@@ -1,0 +1,88 @@
+@model ClientRelationshipManagement.Web.Models.Admin.ProcessProposalReviewViewModel
+@{ ViewData["Title"] = $"Review {Model.Name}"; }
+
+<main class="page-shell proposal-review-page">
+    <section class="page-hero proposal-review-hero">
+        <div>
+            <span class="proposal-eyebrow">Process proposal · v@(Model.CurrentVersion) → v@(Model.ProposedVersion)</span>
+            <h1>@Model.Name</h1>
+            <p>@Model.ChangeSummary</p>
+        </div>
+        <div class="page-hero__actions">
+            <form method="post" action="/Admin/ProcessProposals/@Model.Id/Approve" onsubmit="return confirm('Approve and activate this proposed process version?');">
+                @Html.AntiForgeryToken()
+                <button type="submit" class="primary-action" disabled="@(Model.IsNoOp ? "disabled" : null)"
+                        title="@(Model.IsNoOp ? "This proposal cannot be approved because it contains no stored changes." : "Approve and activate this proposed process version.")">
+                    Approve proposal
+                </button>
+            </form>
+            <form method="post" action="/Admin/ProcessProposals/@Model.Id/Reject" onsubmit="return confirm('Reject this proposal and remove it from the review queue?');">
+                @Html.AntiForgeryToken()
+                <button type="submit" class="secondary-action">Reject proposal</button>
+            </form>
+            <a class="secondary-action" href="/Admin/Process/Edit/@Model.Id">Edit proposed version</a>
+            <a class="secondary-action" href="/Admin/Process/Edit/@Model.Id">Open full proposed process</a>
+            <a class="secondary-action" href="/Admin/ProcessProposals">Back to proposals</a>
+        </div>
+    </section>
+
+    @if (Model.IsNoOp)
+    {
+        <section class="data-panel proposal-empty" role="alert">
+            <h2>Invalid proposal — no stored changes</h2>
+            <p>The rationale claims a change, but the proposed process is identical to the version it supersedes. This proposal cannot support an informed approval and should not be activated.</p>
+        </section>
+    }
+
+    <section class="proposal-impact-strip" aria-label="Proposal impact summary">
+        <div><strong>@(Model.IsNoOp ? "Invalid" : "Material")</strong><span>change classification</span></div>
+        <div><strong>@Model.MaterialChangeCount</strong><span>specific change@(Model.MaterialChangeCount == 1 ? "" : "s")</span></div>
+        <div><strong>@Model.ChangedStepCount</strong><span>step@(Model.ChangedStepCount == 1 ? "" : "s") affected</span></div>
+        <div><strong>@(Model.HasRoutingChanges ? "Changed" : "Unchanged")</strong><span>workflow routing</span></div>
+        <div><strong>@Model.ScopeType</strong><span>process scope</span></div>
+    </section>
+
+    <section class="data-panel proposal-context">
+        <header><div><span>Where the change sits</span><h2>Workflow context</h2></div><small>Unchanged steps are deliberately muted.</small></header>
+        <div class="proposal-workflow" role="list">
+            @foreach (var step in Model.Steps)
+            {
+                <a role="listitem" class="proposal-workflow__step is-@step.ChangeState"
+                   href="@(step.ChangeCount > 0 ? $"#change-{step.Key.ToLowerInvariant()}" : "#")">
+                    <span>@step.Sequence</span><strong>@step.Name</strong><small>@step.ActionType</small>
+                    @if (step.ChangeCount > 0) { <b>@step.ChangeCount change@(step.ChangeCount == 1 ? "" : "s")</b> }
+                </a>
+            }
+        </div>
+    </section>
+
+    <section class="proposal-change-list" aria-label="Specific proposed changes">
+        @if (Model.Changes.Count == 0)
+        {
+            <div class="data-panel proposal-empty"><h2>No differences were persisted</h2><p>The draft currently matches the version it supersedes.</p></div>
+        }
+        else
+        {
+            @foreach (var group in Model.Changes.GroupBy(change => new { change.StepKey, change.StepName }))
+            {
+                <article class="data-panel proposal-change-group" id="change-@group.Key.StepKey.ToLowerInvariant()">
+                    <header><div><span>@(string.IsNullOrWhiteSpace(group.Key.StepKey) ? "Process definition" : group.Key.StepKey)</span><h2>@group.Key.StepName</h2></div><b>@group.Count() change@(group.Count() == 1 ? "" : "s")</b></header>
+                    @foreach (var change in group)
+                    {
+                        <section class="proposal-diff is-@change.ChangeType" id="@change.Anchor">
+                            <div class="proposal-diff__heading"><span>@change.Category</span><h3>@change.Property</h3></div>
+                            <div class="proposal-diff__columns @(change.IsLongText ? "is-long-text" : "")">
+                                <div><span class="proposal-diff__label is-current">Current · v@Model.CurrentVersion</span><pre>@change.CurrentValue</pre></div>
+                                <div><span class="proposal-diff__label is-proposed">Proposed · v@Model.ProposedVersion</span><pre>@change.ProposedValue</pre></div>
+                            </div>
+                        </section>
+                    }
+                </article>
+            }
+        }
+    </section>
+
+    <footer class="proposal-review-footer">
+        <p>Proposed by <strong>@Model.ProposedBy</strong> on @Model.CreatedOn.</p>
+    </footer>
+</main>

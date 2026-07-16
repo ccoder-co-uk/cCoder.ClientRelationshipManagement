@@ -31,12 +31,18 @@
         <div class="conversation-detail">
             <section class="data-panel conversation-detail__heading">
                 <div><span class="crm-pill">@message.Kind · @message.State</span><h2>@message.Title</h2><p>@message.Body</p></div>
-                <form asp-action="@(message.State == cCoder.ClientRelationshipManagement.Platform.Models.Enums.AgentMessageState.Pending ? "ResolveMessage" : "ReopenMessage")" method="post">
-                    @Html.AntiForgeryToken()
-                    <input type="hidden" name="id" value="@message.Id" />
-                    <input type="hidden" name="returnUrl" value="/Admin/Messages/@message.Id" />
-                    <button type="submit" class="secondary-action">@(message.State == cCoder.ClientRelationshipManagement.Platform.Models.Enums.AgentMessageState.Pending ? "Resolve" : "Reopen")</button>
-                </form>
+                <div class="page-hero__actions">
+                    @if (message.ProposedProcessDefinitionId.HasValue)
+                    {
+                        <a class="primary-action" href="/Admin/ProcessProposals/@message.ProposedProcessDefinitionId">View proposed fix</a>
+                    }
+                    <form asp-action="@(message.State == cCoder.ClientRelationshipManagement.Platform.Models.Enums.AgentMessageState.Pending ? "ResolveMessage" : "ReopenMessage")" method="post">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="id" value="@message.Id" />
+                        <input type="hidden" name="returnUrl" value="/Admin/Messages/@message.Id" />
+                        <button type="submit" class="secondary-action">@(message.State == cCoder.ClientRelationshipManagement.Platform.Models.Enums.AgentMessageState.Pending ? "Resolve" : "Reopen")</button>
+                    </form>
+                </div>
             </section>
 
             <section class="data-panel conversation-thread">

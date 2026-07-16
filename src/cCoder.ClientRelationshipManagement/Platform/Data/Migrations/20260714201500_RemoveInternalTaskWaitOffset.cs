@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace cCoder.ClientRelationshipManagement.Platform.Data.Migrations;
 
-[DbContext(typeof(PlatformDbContext))]
+[DbContext(typeof(ClientRelationshipDbContext))]
 [Migration("20260714201500_RemoveInternalTaskWaitOffset")]
 public sealed class RemoveInternalTaskWaitOffset : Migration
 {
