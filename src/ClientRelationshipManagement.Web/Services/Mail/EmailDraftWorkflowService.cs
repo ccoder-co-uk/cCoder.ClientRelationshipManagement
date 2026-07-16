@@ -78,6 +78,13 @@ public sealed class EmailDraftWorkflowService(
         PlatformEntities.Email email = await ResolveExistingEmailAsync(storage, command, material?.Id, cancellationToken);
         PlatformEntities.CompanyContact contact = await ResolvePreferredContactAsync(storage, relationship.Id, email?.CompanyContactId, material?.CompanyContactId, cancellationToken);
         Guid? resolvedClientAccountId = command.ClientAccountId ?? material?.ClientAccountId ?? email?.ClientAccountId;
+        string resolvedToAddresses = ResolveRecipientAddresses(
+            command.ToAddresses,
+            contact,
+            relationship,
+            email?.ToAddresses);
+        if (RecipientEmailContentValidator.Validate(resolvedToAddresses, subject, body).Count > 0)
+            return null;
 
         if (email is null)
         {
@@ -93,7 +100,7 @@ public sealed class EmailDraftWorkflowService(
                 FromDisplayName = senderProfile?.DisplayName ?? relationship.AccountOwnerDisplayName ?? currentUser,
                 FromEmailAddress = senderProfile?.EmailAddress,
                 ReplyToAddresses = senderProfile?.EmailAddress,
-                ToAddresses = ResolveRecipientAddresses(command.ToAddresses, contact, relationship),
+                ToAddresses = resolvedToAddresses,
                 CcAddresses = Normalize(command.CcAddresses),
                 BccAddresses = Normalize(command.BccAddresses),
                 Subject = subject,
@@ -121,7 +128,7 @@ public sealed class EmailDraftWorkflowService(
             email.FromDisplayName = senderProfile?.DisplayName ?? email.FromDisplayName ?? relationship.AccountOwnerDisplayName ?? currentUser;
             email.FromEmailAddress = senderProfile?.EmailAddress ?? email.FromEmailAddress;
             email.ReplyToAddresses = Normalize(email.ReplyToAddresses) ?? senderProfile?.EmailAddress;
-            email.ToAddresses = ResolveRecipientAddresses(command.ToAddresses, contact, relationship, email.ToAddresses);
+            email.ToAddresses = resolvedToAddresses;
             email.CcAddresses = Normalize(command.CcAddresses);
             email.BccAddresses = Normalize(command.BccAddresses);
             email.Subject = subject;

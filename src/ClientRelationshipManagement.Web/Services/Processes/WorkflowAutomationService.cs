@@ -587,6 +587,7 @@ public sealed class WorkflowAutomationService(
             .Where(step =>
                 step.ProcessDefinition.TenantId == tenantId
                 && step.ProcessDefinition.IsActive
+                && step.ProcessDefinition.VersionNumber <= 1
                 && step.IsActive)
             .Include(step => step.ProcessDefinition)
             .ToListAsync(cancellationToken);
@@ -612,7 +613,10 @@ public sealed class WorkflowAutomationService(
         CancellationToken cancellationToken)
     {
         List<PlatformEntities.ProcessDefinition> definitions = await storage.ProcessDefinitions
-            .Where(definition => definition.TenantId == tenantId && definition.IsActive)
+            .Where(definition =>
+                definition.TenantId == tenantId
+                && definition.IsActive
+                && definition.VersionNumber <= 1)
             .Include(definition => definition.Steps)
                 .ThenInclude(step => step.OutgoingTransitions)
             .ToListAsync(cancellationToken);
@@ -989,6 +993,21 @@ public sealed class WorkflowAutomationService(
             .FirstOrDefaultAsync(
                 item => item.OpportunityId == opportunity.Id && item.State == ProcessInstanceState.Active,
                 cancellationToken);
+
+        if (!await HasUsableRelationshipContactAsync(
+                storage,
+                opportunity.TenantCompanyRelationshipId,
+                cancellationToken))
+        {
+            await CloseActiveInstanceAsync(storage, activeInstance, "Missing contact point", cancellationToken);
+            opportunity.Stage = SalesPipelineStage.Nurture;
+            opportunity.LastUpdatedBy = CurrentUserId;
+            opportunity.LastUpdated = DateTimeOffset.UtcNow;
+            loggingBroker.LogWarning(
+                "Opportunity {OpportunityId} cannot enter workflow because its relationship has no usable contact point.",
+                opportunity.Id);
+            return;
+        }
 
         if (opportunity.Stage is SalesPipelineStage.Won or SalesPipelineStage.Lost)
         {
@@ -1523,6 +1542,19 @@ public sealed class WorkflowAutomationService(
                 loggingBroker.LogWarning(
                     "Did not create email draft for task {ProcessTaskId} because no recipient email address is available.",
                     task.Id);
+                return task;
+            }
+
+            IReadOnlyList<string> validationErrors = RecipientEmailContentValidator.Validate(
+                recipientAddress,
+                task.RenderedEmailSubject ?? task.RenderedTitle,
+                task.RenderedEmailBody);
+            if (validationErrors.Count > 0)
+            {
+                loggingBroker.LogWarning(
+                    "Did not create email draft for task {ProcessTaskId}: {ValidationErrors}",
+                    task.Id,
+                    string.Join(" ", validationErrors));
                 return task;
             }
 
@@ -2202,18 +2234,39 @@ public sealed class WorkflowAutomationService(
             await ResolveOrCreateRelationshipContactAsync(storage, relationship.Id, companyContact.Id, leadContact, now, cancellationToken);
         }
 
+        PlatformEntities.RelationshipContact primaryContact = await storage.RelationshipContacts
+            .Include(item => item.CompanyContact)
+            .Where(item => item.TenantCompanyRelationshipId == relationship.Id
+                && (!string.IsNullOrWhiteSpace(item.CompanyContact.EmailAddress)
+                    || !string.IsNullOrWhiteSpace(item.CompanyContact.PhoneNumber)))
+            .OrderByDescending(item => item.IsPrimary)
+            .ThenBy(item => item.CreatedOn)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (primaryContact is null)
+        {
+            lead.Status = LeadStatus.Deferred;
+            lead.QualificationNotes = AppendNote(
+                lead.QualificationNotes,
+                "Opportunity creation deferred: no verified contact email address or phone number is available.");
+            lead.LastUpdatedBy = CurrentUserId;
+            lead.LastUpdated = now;
+            relationship.Status = RelationshipStatus.Prospect;
+            relationship.CurrentStage = SalesPipelineStage.Researched;
+            relationship.LastUpdatedBy = CurrentUserId;
+            relationship.LastUpdated = now;
+            loggingBroker.LogWarning(
+                "Lead {LeadId} was not converted because no usable contact point exists.",
+                lead.Id);
+            return;
+        }
+
         PlatformEntities.Opportunity opportunity = lead.OpportunityId.HasValue
             ? await storage.Opportunities.FirstOrDefaultAsync(item => item.Id == lead.OpportunityId.Value, cancellationToken)
             : null;
 
         if (opportunity is null)
         {
-            PlatformEntities.RelationshipContact primaryContact = await storage.RelationshipContacts
-                .Where(item => item.TenantCompanyRelationshipId == relationship.Id)
-                .OrderByDescending(item => item.IsPrimary)
-                .ThenBy(item => item.CreatedOn)
-                .FirstOrDefaultAsync(cancellationToken);
-
             opportunity = new PlatformEntities.Opportunity
             {
                 Id = Guid.NewGuid(),
@@ -2238,6 +2291,21 @@ public sealed class WorkflowAutomationService(
         lead.LastUpdatedBy = CurrentUserId;
         lead.LastUpdated = now;
     }
+
+    static async ValueTask<bool> HasUsableRelationshipContactAsync(
+        IWorkflowBroker storage,
+        Guid relationshipId,
+        CancellationToken cancellationToken) =>
+        await storage.RelationshipContacts.AnyAsync(
+            item => item.TenantCompanyRelationshipId == relationshipId
+                && (!string.IsNullOrWhiteSpace(item.CompanyContact.EmailAddress)
+                    || !string.IsNullOrWhiteSpace(item.CompanyContact.PhoneNumber)),
+            cancellationToken);
+
+    static string AppendNote(string existing, string note) =>
+        string.IsNullOrWhiteSpace(existing)
+            ? note
+            : $"{existing.Trim()}\n\n{note}";
 
     async ValueTask CreateClientAccountAsync(
         IWorkflowBroker storage,
