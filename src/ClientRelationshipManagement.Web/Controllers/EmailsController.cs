@@ -128,14 +128,20 @@ public sealed class EmailsController(
                         ? string.Empty
                         : item.SentOn.Value.LocalDateTime.ToString("dd MMM yyyy HH:mm"),
                     CreatedOnLabel = item.CreatedOn.LocalDateTime.ToString("dd MMM yyyy HH:mm"),
-                    LastError = item.LastError,
-                    CanApprove = item.State is EmailState.Draft or EmailState.Failed,
+                    LastError = ResolveContentWarning(item.Preview, item.LastError),
+                    CanApprove = (item.State is EmailState.Draft or EmailState.Failed)
+                        && !RecipientEmailContentValidator.ContainsInternalDraftingGuidance(item.Preview),
                     CanReject = item.State is EmailState.Draft or EmailState.Failed,
                     CanMarkSent = item.State != EmailState.Sent
                 })
             ]
         });
     }
+
+    static string ResolveContentWarning(string body, string lastError) =>
+        RecipientEmailContentValidator.ContainsInternalDraftingGuidance(body)
+            ? "This draft contains internal drafting guidance and must be edited before approval."
+            : lastError;
 
     [HttpPost("ReviewAndApprove")]
     [ValidateAntiForgeryToken]
