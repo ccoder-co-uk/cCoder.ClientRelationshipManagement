@@ -4,6 +4,7 @@ public interface IAgentWorkspaceService
 {
     string RootPath { get; }
     string GetTaskAgentWorkingDirectory();
+    string GetTaskAgentSessionHistoryDirectory();
     string GetProcessOptimiserWorkingDirectory();
     string GetProcessOptimiserSessionHistoryDirectory();
     ValueTask<string> ReadTaskAgentPromptAsync(CancellationToken cancellationToken = default);

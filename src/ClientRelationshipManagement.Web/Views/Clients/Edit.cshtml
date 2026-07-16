@@ -7,10 +7,11 @@
     <section class="page-hero">
         <div>
             <h1>@Model.FormTitle</h1>
+            <p>Manage the live account, primary contact, service history, communications, and future commercial opportunities.</p>
         </div>
 
         <div class="page-hero__actions">
-            <a class="secondary-action" href="/Documentation/Pages/Client-Details-Page">Client Details Notes</a>
+            <a class="secondary-action" href="/Documentation/Pages/Clients/Details">Client Details Notes</a>
             <a class="secondary-action" href="/Clients">Back to Clients</a>
         </div>
     </section>
@@ -28,10 +29,17 @@
             <form asp-action="Edit" method="post" class="crm-form">
                 @Html.AntiForgeryToken()
                 <input asp-for="Id" type="hidden" />
+                <input asp-for="Status" type="hidden" />
+                <input asp-for="CurrentStage" type="hidden" />
 
                 <div asp-validation-summary="ModelOnly" class="auth-error" role="alert"></div>
 
                 <div class="form-grid">
+                    <div class="form-section-heading auth-field--full">
+                        <h2>Client account</h2>
+                        <p>The operational status and ownership of the active relationship.</p>
+                    </div>
+
                     <label class="auth-field">
                         <span>Company Name</span>
                         <input asp-for="CompanyName" />
@@ -48,18 +56,13 @@
                     </label>
 
                     <label class="auth-field">
-                        <span>Lead Source</span>
-                        <input asp-for="LeadSource" />
+                        <span>Account Reference</span>
+                        <input asp-for="AccountReference" />
                     </label>
 
                     <label class="auth-field">
-                        <span>Status</span>
-                        <select asp-for="Status" asp-items="Model.StatusOptions"></select>
-                    </label>
-
-                    <label class="auth-field">
-                        <span>Stage</span>
-                        <select asp-for="CurrentStage" asp-items="Model.StageOptions"></select>
+                        <span>Account Status</span>
+                        <select asp-for="ClientAccountStatus" asp-items="Model.ClientAccountStatusOptions"></select>
                     </label>
 
                     <label class="auth-field">
@@ -68,19 +71,44 @@
                     </label>
 
                     <label class="auth-field">
-                        <span>Fit Score</span>
-                        <input asp-for="FitScore" type="number" step="0.1" />
+                        <span>Contract Signed</span>
+                        <input asp-for="ContractSignedOn" type="date" />
                     </label>
 
                     <label class="auth-field">
-                        <span>Contact Email</span>
+                        <span>Go Live</span>
+                        <input asp-for="GoLiveOn" type="date" />
+                    </label>
+
+                    <div class="form-section-heading auth-field--full">
+                        <h2>Primary contact</h2>
+                        <p>The person the account team should use for routine client communications.</p>
+                    </div>
+
+                    <label class="auth-field">
+                        <span>Name</span>
+                        <input asp-for="PrimaryContactName" />
+                    </label>
+
+                    <label class="auth-field">
+                        <span>Role</span>
+                        <input asp-for="PrimaryContactPosition" />
+                    </label>
+
+                    <label class="auth-field">
+                        <span>Email</span>
                         <input asp-for="ContactEmailAddress" />
                     </label>
 
                     <label class="auth-field">
-                        <span>Contact Phone</span>
+                        <span>Phone</span>
                         <input asp-for="ContactPhoneNumber" />
                     </label>
+
+                    <div class="form-section-heading auth-field--full">
+                        <h2>Company and relationship context</h2>
+                        <p>Reference information retained from acquisition and used to keep future work grounded.</p>
+                    </div>
 
                     <label class="auth-field">
                         <span>Website</span>
@@ -90,6 +118,16 @@
                     <label class="auth-field">
                         <span>Initial Route</span>
                         <input asp-for="InitialRoute" />
+                    </label>
+
+                    <label class="auth-field">
+                        <span>Lead Source</span>
+                        <input asp-for="LeadSource" />
+                    </label>
+
+                    <label class="auth-field">
+                        <span>Original Fit Score</span>
+                        <input asp-for="FitScore" type="number" step="0.1" />
                     </label>
 
                     <label class="auth-field auth-field--full auth-field--multiline">
@@ -114,7 +152,7 @@
 
                     <label class="checkbox-field">
                         <input asp-for="IsArchived" type="checkbox" />
-                        <span>Archive this client</span>
+                        <span>Archive this account</span>
                     </label>
 
                     <label class="checkbox-field">

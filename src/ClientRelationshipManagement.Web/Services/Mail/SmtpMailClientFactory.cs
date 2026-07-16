@@ -5,11 +5,15 @@ namespace ClientRelationshipManagement.Web.Services.Mail;
 
 public sealed class SmtpMailClientFactory(
     IOptions<MailOptions> options,
-    IHttpClientFactory httpClientFactory) : IMailClientFactory
+    IHttpClientFactory httpClientFactory,
+    IMicrosoftGraphMailboxClient microsoftGraphMailboxClient) : IMailClientFactory
 {
     public IMailClient CreateClient()
     {
         MailOptions mailOptions = options.Value;
+
+        if (string.Equals(mailOptions.Provider, "MicrosoftGraph", StringComparison.OrdinalIgnoreCase))
+            return microsoftGraphMailboxClient;
 
         if (string.Equals(mailOptions.Provider, "SendGrid", StringComparison.OrdinalIgnoreCase))
         {

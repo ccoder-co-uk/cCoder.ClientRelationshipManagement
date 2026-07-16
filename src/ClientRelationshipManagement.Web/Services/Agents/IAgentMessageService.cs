@@ -15,4 +15,18 @@ public interface IAgentMessageService
         string respondedBy,
         string responseNotes,
         CancellationToken cancellationToken = default);
+
+    ValueTask<AgentMessageEntry> AppendEntryAsync(
+        Guid messageId,
+        string role,
+        string body,
+        string createdBy,
+        CancellationToken cancellationToken = default);
+
+    ValueTask<AgentMessage> ChangeStateAsync(
+        Guid messageId,
+        AgentMessageState state,
+        string changedBy,
+        string auditNote,
+        CancellationToken cancellationToken = default);
 }

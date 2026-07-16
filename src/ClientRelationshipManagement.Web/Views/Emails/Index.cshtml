@@ -6,7 +6,8 @@
 <main class="page-shell">
     <section class="page-hero">
         <div>
-            <h1>Emails Page</h1>
+            <h1>Emails</h1>
+            <p class="lede">Review queued, approved, sent, and failed commercial email activity.</p>
         </div>
     </section>
 
@@ -53,7 +54,7 @@
 
             <div class="filter-bar__actions">
                 <button type="submit" class="primary-action">Filter</button>
-                <a class="secondary-action" href="/Emails">Reset</a>
+                <a class="secondary-action" href="/Admin/Emails">Reset</a>
             </div>
         </form>
 
@@ -95,10 +96,6 @@
                                 <td class="table-actions">
                                     <div class="inline-actions">
                                         <button type="button" class="secondary-action" data-open-dialog="@dialogId">View</button>
-                                        @if (email.CanApprove)
-                                        {
-                                            <button type="button" class="secondary-action" data-open-dialog="approve-@email.Id">Approve</button>
-                                        }
                                         @if (email.CanMarkSent)
                                         {
                                             <form asp-action="MarkSent" method="post">
@@ -112,16 +109,17 @@
                                 </td>
                             </tr>
 
-                            <dialog id="@dialogId" class="crm-dialog">
+                            <dialog id="@dialogId" class="crm-dialog crm-dialog--email">
                                 <div class="crm-dialog__header">
                                     <div>
-                                        <h3>@email.Subject</h3>
-                                        <p>@email.ClientName | @email.StateLabel</p>
+                                        <h3>Email to @email.ClientName</h3>
+                                        <p>@email.StateLabel</p>
                                     </div>
                                     <button type="button" class="crm-dialog__close" data-close-dialog="@dialogId">Close</button>
                                 </div>
                                 <div class="crm-dialog__body">
                                     <div class="crm-dialog__meta">
+                                        <span class="queue-count">From: @(string.IsNullOrWhiteSpace(email.FromEmailAddress) ? "Sender pending" : $"{email.FromDisplayName} <{email.FromEmailAddress}>")</span>
                                         <span class="queue-count">To: @(string.IsNullOrWhiteSpace(email.ToAddresses) ? "Recipient pending" : email.ToAddresses)</span>
                                         <span class="queue-count">@email.ScheduledSendLabel</span>
                                     </div>
@@ -132,29 +130,21 @@
                                             <p>@email.LastError</p>
                                         </section>
                                     }
-                                    <div class="crm-dialog__content">@email.Preview</div>
-                                    <div class="form-actions form-actions--start">
-                                        <a class="secondary-action" href="/Clients/Edit/@email.ClientId">View client</a>
-                                    </div>
-                                </div>
-                            </dialog>
-
-                            @if (email.CanApprove)
-                            {
-                                <dialog id="approve-@email.Id" class="crm-dialog">
-                                    <div class="crm-dialog__header">
-                                        <div>
-                                            <h3>Approve Email</h3>
-                                            <p>@email.Subject</p>
-                                        </div>
-                                        <button type="button" class="crm-dialog__close" data-close-dialog="approve-@email.Id">Close</button>
-                                    </div>
-                                    <div class="crm-dialog__body">
-                                        <form asp-action="Approve" method="post" class="crm-form crm-form--compact">
+                                    @if (email.CanApprove)
+                                    {
+                                        <form asp-action="ReviewAndApprove" method="post" class="crm-form crm-form--compact">
                                             @Html.AntiForgeryToken()
                                             <input type="hidden" name="ClientId" value="@email.ClientId" />
                                             <input type="hidden" name="EmailId" value="@email.Id" />
                                             <div class="form-grid">
+                                                <label class="auth-field auth-field--full">
+                                                    <span>Subject</span>
+                                                    <input name="Subject" value="@email.Subject" required />
+                                                </label>
+                                                <label class="auth-field auth-field--full auth-field--multiline email-review-body">
+                                                    <span>Email content</span>
+                                                    <textarea name="Body" required>@email.Preview</textarea>
+                                                </label>
                                                 <label class="auth-field auth-field--full">
                                                     <span>Scheduled Send On</span>
                                                     <input name="ScheduledSendOn" type="datetime-local" value="@email.ScheduledSendValue" />
@@ -162,6 +152,46 @@
                                             </div>
                                             <div class="form-actions form-actions--start">
                                                 <button type="submit" class="primary-action">Approve Send</button>
+                                                @if (email.CanReject)
+                                                {
+                                                    <button type="button" class="secondary-action" data-open-dialog="reject-@email.Id" data-close-before-open>Reject</button>
+                                                }
+                                            </div>
+                                        </form>
+                                    }
+                                    else
+                                    {
+                                        <div class="mail-message">
+                                            <strong>@email.Subject</strong>
+                                            <div class="crm-dialog__content">@email.Preview</div>
+                                        </div>
+                                    }
+                                </div>
+                            </dialog>
+
+                            @if (email.CanReject)
+                            {
+                                <dialog id="reject-@email.Id" class="crm-dialog">
+                                    <div class="crm-dialog__header">
+                                        <div>
+                                            <h3>Reject email</h3>
+                                            <p>Explain what is wrong so the Approval Agent can trace and improve the source process.</p>
+                                        </div>
+                                        <button type="button" class="crm-dialog__close" data-close-dialog="reject-@email.Id">Close</button>
+                                    </div>
+                                    <div class="crm-dialog__body">
+                                        <form asp-action="Reject" method="post" class="crm-form crm-form--compact">
+                                            @Html.AntiForgeryToken()
+                                            <input type="hidden" name="ClientId" value="@email.ClientId" />
+                                            <input type="hidden" name="EmailId" value="@email.Id" />
+                                            <div class="form-grid">
+                                                <label class="auth-field auth-field--full auth-field--multiline">
+                                                    <span>Reason for rejection</span>
+                                                    <textarea name="Reason" minlength="5" required placeholder="Explain the problem, or ask the agent to suggest something better."></textarea>
+                                                </label>
+                                            </div>
+                                            <div class="form-actions form-actions--start">
+                                                <button type="submit" class="primary-action">Reject and open conversation</button>
                                             </div>
                                         </form>
                                     </div>
@@ -182,6 +212,9 @@
 
         openButtons.forEach(button => {
             button.addEventListener("click", () => {
+                if (button.hasAttribute("data-close-before-open")) {
+                    button.closest("dialog")?.close();
+                }
                 document.getElementById(button.dataset.openDialog)?.showModal();
             });
         });
@@ -206,5 +239,10 @@
                 }
             });
         });
+
+        const linkedDialogId = window.location.hash.slice(1);
+        if (linkedDialogId) {
+            document.getElementById(linkedDialogId)?.showModal();
+        }
     })();
 </script>

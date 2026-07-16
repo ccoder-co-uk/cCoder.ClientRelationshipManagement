@@ -1,4 +1,5 @@
 using ClientRelationshipManagement.Web.Utilities;
+using ClientRelationshipManagement.Web.Services.Leads;
 using PlatformEntities = cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 
 namespace ClientRelationshipManagement.Web.Services.Processes;
@@ -19,6 +20,7 @@ internal static class WorkflowTemplateRenderer
         "{{Company.ContactEmailAddress}}",
         "{{Company.ContactPhoneNumber}}",
         "{{Company.RegisteredOfficeText}}",
+        "{{Contact.FirstName}}",
         "{{Contact.Name}}",
         "{{Contact.Position}}",
         "{{Contact.EmailAddress}}",
@@ -32,6 +34,10 @@ internal static class WorkflowTemplateRenderer
         "{{Opportunity.PainSummary}}",
         "{{Opportunity.ValueHypothesis}}",
         "{{Opportunity.DecisionProcess}}",
+        "{{Opportunity.EstimatedAnnualValue}}",
+        "{{Opportunity.Probability}}",
+        "{{Opportunity.LatestResponseSubject}}",
+        "{{Opportunity.LatestResponseBody}}",
         "{{ClientAccount.AccountReference}}",
         "{{Now.Date}}",
         "{{Now.DateTime}}"
@@ -45,7 +51,8 @@ internal static class WorkflowTemplateRenderer
         PlatformEntities.TenantCompanyRelationship relationship = null,
         PlatformEntities.Opportunity opportunity = null,
         PlatformEntities.ClientAccount clientAccount = null,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null,
+        PlatformEntities.Activity latestInboundActivity = null)
     {
         if (string.IsNullOrWhiteSpace(template))
             return null;
@@ -63,7 +70,8 @@ internal static class WorkflowTemplateRenderer
             ["Company.WebsiteUrl"] = company?.WebsiteUrl,
             ["Company.ContactEmailAddress"] = company?.ContactEmailAddress,
             ["Company.ContactPhoneNumber"] = company?.ContactPhoneNumber,
-            ["Company.RegisteredOfficeText"] = company?.RegisteredOfficeText,
+            ["Company.RegisteredOfficeText"] = AddressRecordMapper.Format(company?.RegisteredAddress),
+            ["Contact.FirstName"] = ResolveFirstName(companyContact?.Name),
             ["Contact.Name"] = companyContact?.Name,
             ["Contact.Position"] = companyContact?.Position,
             ["Contact.EmailAddress"] = companyContact?.EmailAddress,
@@ -77,6 +85,10 @@ internal static class WorkflowTemplateRenderer
             ["Opportunity.PainSummary"] = opportunity?.PainSummary,
             ["Opportunity.ValueHypothesis"] = opportunity?.ValueHypothesis,
             ["Opportunity.DecisionProcess"] = opportunity?.DecisionProcess,
+            ["Opportunity.EstimatedAnnualValue"] = opportunity?.EstimatedAnnualValue?.ToString("0.##"),
+            ["Opportunity.Probability"] = opportunity?.Probability?.ToString("0.##"),
+            ["Opportunity.LatestResponseSubject"] = latestInboundActivity?.Summary,
+            ["Opportunity.LatestResponseBody"] = latestInboundActivity?.Outcome,
             ["ClientAccount.AccountReference"] = clientAccount?.AccountReference,
             ["Now.Date"] = (now ?? DateTimeOffset.UtcNow).ToString("dd MMM yyyy"),
             ["Now.DateTime"] = (now ?? DateTimeOffset.UtcNow).ToString("dd MMM yyyy HH:mm")
@@ -88,4 +100,8 @@ internal static class WorkflowTemplateRenderer
 
         return rendered.Trim();
     }
+
+    static string ResolveFirstName(string contactName) => string.IsNullOrWhiteSpace(contactName)
+        ? null
+        : contactName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
 }

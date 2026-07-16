@@ -1,0 +1,180 @@
+@model ClientRelationshipManagement.Web.Models.Companies.CompanyExplorerPageViewModel
+@{
+    ViewData["Title"] = "Companies";
+    string SortUrl(string key)
+    {
+        bool nextDescending = Model.Sort == key && !Model.Descending;
+        return Url.Action("Index", new
+        {
+            Model.Search,
+            Model.Status,
+            Model.Source,
+            Model.Country,
+            sort = key,
+            descending = nextDescending,
+            page = 1,
+            Model.PageSize
+        })!;
+    }
+}
+
+<main class="page-shell company-explorer">
+    <section class="page-hero">
+        <div>
+            <h1>Companies</h1>
+            <p class="lede">Explore imported and captured company master data without promoting records into the client list.</p>
+        </div>
+    </section>
+
+    <section class="data-panel">
+        <form method="get" class="company-filter-bar">
+            <label class="auth-field auth-field--full">
+                <span>Search</span>
+                <input type="search" name="search" value="@Model.Search" placeholder="Company name or authority number (starts with)" />
+            </label>
+            <label class="auth-field">
+                <span>Status</span>
+                <input name="status" value="@Model.Status" placeholder="Exact status" />
+            </label>
+            <label class="auth-field">
+                <span>Source</span>
+                <input name="source" value="@Model.Source" placeholder="CompaniesHouse" />
+            </label>
+            <label class="auth-field">
+                <span>Country</span>
+                <input name="country" value="@Model.Country" placeholder="United Kingdom" />
+            </label>
+            <label class="auth-field">
+                <span>Rows</span>
+                <select name="pageSize">
+                    @foreach (int size in new[] { 25, 50, 100 })
+                    {
+                        <option value="@size" selected="@(Model.PageSize == size)">@size</option>
+                    }
+                </select>
+            </label>
+            <input type="hidden" name="sort" value="@Model.Sort" />
+            <input type="hidden" name="descending" value="@Model.Descending.ToString().ToLowerInvariant()" />
+            <div class="company-filter-bar__actions">
+                <button type="submit" class="primary-action">Apply filters</button>
+                <a class="secondary-action" href="/Companies">Reset</a>
+            </div>
+        </form>
+
+        <div class="company-results-toolbar">
+            <p>Showing @Model.FirstItem.ToString("N0")–@Model.LastItem.ToString("N0") of @Model.TotalCount.ToString("N0") companies</p>
+            <span>Page @Model.Page.ToString("N0") of @Model.TotalPages.ToString("N0")</span>
+        </div>
+
+        <div class="table-shell company-table-shell">
+            <table class="crm-table company-table">
+                <thead>
+                    <tr>
+                        <th class="tree-grid__toggle-column"><span class="sr-only">Expand</span></th>
+                        <th><a href="@SortUrl("name")">Company</a></th>
+                        <th><a href="@SortUrl("number")">Number</a></th>
+                        <th><a href="@SortUrl("status")">Status</a></th>
+                        <th>Scale</th>
+                        <th><a href="@SortUrl("rank")">Rank</a></th>
+                        <th><a href="@SortUrl("source")">Source</a></th>
+                        <th>Context</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (Model.Companies.Count == 0)
+                    {
+                        <tr><td colspan="8">No companies match the current filters.</td></tr>
+                    }
+                    else
+                    {
+                        @foreach (var company in Model.Companies)
+                        {
+                            <tr class="company-summary-row" data-company-row="@company.Id">
+                                <td class="tree-grid__toggle-cell"><button type="button" class="tree-grid__toggle" data-company-expand="@company.Id" aria-expanded="false" aria-label="Expand @company.Name"><span aria-hidden="true"></span></button></td>
+                                <td>
+                                    <strong class="company-name" title="@company.Name">@company.Name</strong>
+                                    <small>@(string.IsNullOrWhiteSpace(company.Category) ? company.Country : company.Category)</small>
+                                </td>
+                                <td>@(string.IsNullOrWhiteSpace(company.CompanyNumber) ? "—" : company.CompanyNumber)</td>
+                                <td>
+                                    <span class="crm-pill">@(string.IsNullOrWhiteSpace(company.Status) ? "Unknown" : company.Status)</span>
+                                    @if (company.IsProspectingSuppressed)
+                                    {
+                                        <small>Prospecting suppressed</small>
+                                    }
+                                </td>
+                                <td>
+                                    <span>@(company.EmployeeCount.HasValue ? $"{company.EmployeeCount.Value:N0} employees" : "Employees unknown")</span>
+                                    <small>@(company.AnnualRevenue.HasValue ? $"{company.RevenueCurrency} {company.AnnualRevenue.Value:N0}" : "Revenue unknown")</small>
+                                </td>
+                                <td>@(company.RankingScore?.ToString() ?? "—")</td>
+                                <td>@(string.IsNullOrWhiteSpace(company.Source) ? "—" : company.Source)</td>
+                                <td>
+                                    <span>@company.ContactCount contact@(company.ContactCount == 1 ? "" : "s")</span>
+                                    <small>@company.LeadCount lead@(company.LeadCount == 1 ? "" : "s") · @company.RelationshipCount relationship@(company.RelationshipCount == 1 ? "" : "s")</small>
+                                </td>
+                            </tr>
+                            <tr class="company-detail-row" data-company-details-row="@company.Id" hidden>
+                                <td colspan="8"><div class="company-detail-host" data-company-details="@company.Id"></div></td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        <nav class="company-pager" aria-label="Company results pages">
+            <a class="secondary-action @(Model.HasPreviousPage ? "" : "is-disabled")"
+               aria-disabled="@(!Model.HasPreviousPage)"
+               href="@(Model.HasPreviousPage ? Url.Action("Index", new { Model.Search, Model.Status, Model.Source, Model.Country, Model.Sort, Model.Descending, page = Model.Page - 1, Model.PageSize }) : null)">Previous</a>
+            <span>Page @Model.Page.ToString("N0")</span>
+            <a class="secondary-action @(Model.HasNextPage ? "" : "is-disabled")"
+               aria-disabled="@(!Model.HasNextPage)"
+               href="@(Model.HasNextPage ? Url.Action("Index", new { Model.Search, Model.Status, Model.Source, Model.Country, Model.Sort, Model.Descending, page = Model.Page + 1, Model.PageSize }) : null)">Next</a>
+        </nav>
+    </section>
+</main>
+
+<script>
+    (() => {
+        const initialiseTabs = (host) => {
+            const tabs = host.querySelectorAll("[data-company-tab]");
+            tabs.forEach((tab) => tab.addEventListener("click", () => {
+                tabs.forEach((candidate) => {
+                    const active = candidate === tab;
+                    candidate.classList.toggle("is-active", active);
+                    candidate.setAttribute("aria-selected", active ? "true" : "false");
+                });
+                host.querySelectorAll("[data-company-panel]").forEach((panel) => {
+                    panel.hidden = panel.dataset.companyPanel !== tab.dataset.companyTab;
+                });
+            }));
+        };
+
+        document.querySelectorAll("[data-company-expand]").forEach((button) => {
+            button.addEventListener("click", async () => {
+                const id = button.dataset.companyExpand;
+                const row = document.querySelector(`[data-company-details-row="${id}"]`);
+                const host = row.querySelector("[data-company-details]");
+                const opening = row.hidden;
+                row.hidden = !opening;
+                button.setAttribute("aria-expanded", opening ? "true" : "false");
+                button.setAttribute("aria-label", `${opening ? "Collapse" : "Expand"} company details`);
+                if (!opening || host.dataset.loaded === "true") return;
+
+                host.innerHTML = '<p class="crm-muted">Loading company details…</p>';
+                try {
+                    const response = await fetch(`/Companies/${id}/Details`, {
+                        headers: { "X-Requested-With": "XMLHttpRequest" }
+                    });
+                    if (!response.ok) throw new Error();
+                    host.innerHTML = await response.text();
+                    host.dataset.loaded = "true";
+                    initialiseTabs(host);
+                } catch {
+                    host.innerHTML = '<div class="empty-state empty-state--compact"><strong>Details could not be loaded.</strong><p>Collapse and try again.</p></div>';
+                }
+            });
+        });
+    })();
+</script>

@@ -35,7 +35,7 @@ public sealed class EmailsPageTests(CRMAcceptanceFixture fixture)
             await dbContext.SaveChangesAsync();
         });
 
-        string response = await GetStringAsync("/Emails");
+        string response = await GetStringAsync("/Admin/Emails");
 
         response.Should().Contain("Emails Page");
         response.Should().Contain("Queue Co");
@@ -73,15 +73,15 @@ public sealed class EmailsPageTests(CRMAcceptanceFixture fixture)
             {
                 ["User"] = Fixture.Settings.SessionUserEmail,
                 ["Pass"] = Fixture.Settings.SessionUserPassword,
-                ["ReturnUrl"] = "/Emails",
+                ["ReturnUrl"] = "/Admin/Emails",
             }));
 
         loginResponse.StatusCode.Should().Be(HttpStatusCode.Redirect);
 
         using HttpResponseMessage response = await PostFormWithAntiforgeryAsync(
             clientHttp,
-            "/Emails",
-            "/Emails/Approve",
+            "/Admin/Emails",
+            "/Admin/Emails/Approve",
             new Dictionary<string, string>
             {
                 ["ClientId"] = client.Id.ToString(),
@@ -134,15 +134,15 @@ public sealed class EmailsPageTests(CRMAcceptanceFixture fixture)
             {
                 ["User"] = Fixture.Settings.SessionUserEmail,
                 ["Pass"] = Fixture.Settings.SessionUserPassword,
-                ["ReturnUrl"] = "/Emails",
+                ["ReturnUrl"] = "/Admin/Emails",
             }));
 
         loginResponse.StatusCode.Should().Be(HttpStatusCode.Redirect);
 
         using HttpResponseMessage response = await PostFormWithAntiforgeryAsync(
             clientHttp,
-            "/Emails",
-            "/Emails/MarkSent",
+            "/Admin/Emails",
+            "/Admin/Emails/MarkSent",
             new Dictionary<string, string>
             {
                 ["ClientId"] = client.Id.ToString(),

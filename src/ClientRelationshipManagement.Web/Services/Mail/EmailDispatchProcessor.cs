@@ -28,9 +28,15 @@ public sealed class EmailDispatchProcessor(
         }
 
         bool isSendGrid = string.Equals(mailOptions.Provider, "SendGrid", StringComparison.OrdinalIgnoreCase);
+        bool isMicrosoftGraph = string.Equals(mailOptions.Provider, "MicrosoftGraph", StringComparison.OrdinalIgnoreCase);
         bool isConfigured = isSendGrid
             ? !string.IsNullOrWhiteSpace(mailOptions.ApiKey)
-            : !string.IsNullOrWhiteSpace(mailOptions.Host);
+            : isMicrosoftGraph
+                ? !string.IsNullOrWhiteSpace(mailOptions.MicrosoftGraphTenantId)
+                    && !string.IsNullOrWhiteSpace(mailOptions.MicrosoftGraphClientId)
+                    && !string.IsNullOrWhiteSpace(mailOptions.MicrosoftGraphClientSecret)
+                    && !string.IsNullOrWhiteSpace(mailOptions.MicrosoftGraphMailboxUser)
+                : !string.IsNullOrWhiteSpace(mailOptions.Host);
 
         if (!isConfigured)
         {

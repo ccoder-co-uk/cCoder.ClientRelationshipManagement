@@ -131,7 +131,7 @@
             <div class="workspace-card__stats">
                 @if (!string.IsNullOrWhiteSpace(Model.LinkedCompanyId))
                 {
-                    <span>Company linked</span>
+                    <a class="secondary-action" href="/Companies/@Model.LinkedCompanyId/History">View company history</a>
                 }
                 @if (!string.IsNullOrWhiteSpace(Model.LinkedRelationshipId))
                 {

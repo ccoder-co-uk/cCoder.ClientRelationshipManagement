@@ -5,8 +5,12 @@ public sealed class AgentWorkflowOptions
     public bool Enabled { get; set; }
     public bool TaskAgentEnabled { get; set; }
     public bool ProcessOptimiserEnabled { get; set; }
+    public bool EmailApprovalAgentEnabled { get; set; } = true;
     public int TaskAgentIntervalMinutes { get; set; } = 10;
+    public int TaskAgentRunTimeoutMinutes { get; set; } = 8;
     public int ProcessOptimiserIntervalMinutes { get; set; } = 60;
+    public int ProcessHealthReviewIntervalHours { get; set; } = 24;
+    public int EmailApprovalAgentIntervalMinutes { get; set; } = 1;
     public string ExecutionUserId { get; set; } = string.Empty;
     public string AgentWorkspacePath { get; set; } = "Agent Workspace";
     public string CrmApiBaseUrl { get; set; } = string.Empty;
@@ -14,6 +18,9 @@ public sealed class AgentWorkflowOptions
     public string TaskAgentModel { get; set; } = string.Empty;
     public string ProcessOptimiserProvider { get; set; } = string.Empty;
     public string ProcessOptimiserModel { get; set; } = string.Empty;
+    public string EmailApprovalAgentProvider { get; set; } = string.Empty;
+    public string EmailApprovalAgentModel { get; set; } = string.Empty;
+    public int EmailApprovalAgentBatchSize { get; set; } = 5;
     public int MaxIterations { get; set; } = 30;
     public int SessionArchiveLimit { get; set; } = 100;
 }

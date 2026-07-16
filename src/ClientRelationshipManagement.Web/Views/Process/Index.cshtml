@@ -9,13 +9,14 @@
             <h1>Process</h1>
             <p class="lede">
                 Maintain the reusable workflow definitions that drive lead qualification,
-                opportunity progression, and client onboarding across the ClientRelationshipManagement.Web.
+                opportunity conversion, and recurring client maintenance across the ClientRelationshipManagement.Web.
             </p>
         </div>
 
         <div class="page-hero__actions">
+            <a class="primary-action" href="/Admin/Process/Designer">Open lifecycle designer</a>
             <button type="button" class="primary-action" onclick="document.getElementById('createProcessDialog').showModal()">New process</button>
-            <a class="secondary-action" href="/Documentation/Pages/Process-Page">Process Notes</a>
+            <a class="secondary-action" href="/Documentation/Pages/Admin/Process">Process Notes</a>
         </div>
     </section>
 
@@ -65,7 +66,7 @@
                                 <td>@(definition.IsDefault ? "Yes" : "No")</td>
                                 <td>@(definition.IsActive ? "Active" : "Inactive")</td>
                                 <td class="table-actions">
-                                    <a class="secondary-action" href="/Process/Edit/@definition.Id">Edit</a>
+                                    <a class="secondary-action" href="/Admin/Process/Edit/@definition.Id">Edit</a>
                                     <form asp-action="DeleteDefinition" method="post" class="inline-form">
                                         @Html.AntiForgeryToken()
                                         <input type="hidden" name="id" value="@definition.Id" />

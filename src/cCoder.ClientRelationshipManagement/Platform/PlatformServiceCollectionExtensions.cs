@@ -23,7 +23,9 @@ public static class PlatformServiceCollectionExtensions
 
         services.AddSingleton(configuration);
         services.AddDbContext<PlatformDbContext>(options =>
-            options.UseSqlServer(configuration.ConnectionString));
+            options.UseSqlServer(
+                configuration.ConnectionString,
+                sqlServer => sqlServer.CommandTimeout(600)));
 
         services.AddScoped<IAuthorizationBroker, AuthorizationBroker>();
         services.AddScoped(provider => provider.GetRequiredService<IAuthorizationBroker>().GetCRMAuthInfo());

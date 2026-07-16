@@ -5,6 +5,7 @@ public class Company : AuditableEntity
     public string LegacyId { get; set; }
     public string SourceSystem { get; set; }
     public string SourceRecordId { get; set; }
+    public string AuthorityRecordHash { get; set; }
     public bool IsVerified { get; set; }
     public string OfficialName { get; set; }
     public string LegalEntityName { get; set; }
@@ -22,7 +23,6 @@ public class Company : AuditableEntity
     public string WebsiteUrl { get; set; }
     public string ContactEmailAddress { get; set; }
     public string ContactPhoneNumber { get; set; }
-    public string RegisteredOfficeText { get; set; }
     public string ResearchSummary { get; set; }
     public string VerificationNotes { get; set; }
     public decimal? AnnualRevenue { get; set; }
@@ -30,9 +30,13 @@ public class Company : AuditableEntity
     public int? EmployeeCount { get; set; }
     public int? RankingScore { get; set; }
     public string RankingRationale { get; set; }
+    public bool IsProspectingSuppressed { get; set; }
+    public string ProspectingSuppressedReason { get; set; }
+    public DateTimeOffset? ProspectingSuppressedOn { get; set; }
     public Guid? RegisteredAddressId { get; set; }
 
     public virtual Address RegisteredAddress { get; set; }
     public virtual ICollection<CompanyContact> Contacts { get; set; } = new List<CompanyContact>();
     public virtual ICollection<TenantCompanyRelationship> Relationships { get; set; } = new List<TenantCompanyRelationship>();
+    public virtual ICollection<CompanyHistoryItem> History { get; set; } = new List<CompanyHistoryItem>();
 }

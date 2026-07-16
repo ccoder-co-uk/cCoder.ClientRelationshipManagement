@@ -24,6 +24,10 @@ public class ProcessTask : AuditableEntity
     public string CompletionNotes { get; set; }
     public DateTimeOffset? CompletedOn { get; set; }
     public string CompletedBy { get; set; }
+    public Guid? AgentClaimId { get; set; }
+    public string AgentClaimedBy { get; set; }
+    public DateTimeOffset? AgentClaimedOn { get; set; }
+    public DateTimeOffset? AgentClaimExpiresOn { get; set; }
 
     public virtual ProcessInstance ProcessInstance { get; set; }
     public virtual ProcessStep ProcessStep { get; set; }

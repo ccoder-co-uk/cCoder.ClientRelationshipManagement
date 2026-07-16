@@ -3,155 +3,357 @@
     ViewData["Title"] = "Admin";
 }
 
-<section class="crm-section">
-    <div class="crm-section__header">
+<main class="page-shell">
+    <section class="page-hero">
         <div>
             <h1>Admin</h1>
             <p>Operational visibility for agent runs, approvals, and process improvement proposals.</p>
         </div>
-    </div>
+    </section>
 
     @if (!string.IsNullOrWhiteSpace(Model.Notice))
     {
         <div class="crm-notice">@Model.Notice</div>
     }
 
-    <div class="stats-grid stats-grid--top">
-        <article class="stat-card">
-            <span>Pending email approvals</span>
-            <strong>@Model.PendingEmailApprovalCount</strong>
-        </article>
-        <article class="stat-card">
-            <span>Pending agent messages</span>
-            <strong>@Model.PendingAgentMessageCount</strong>
-        </article>
-        <article class="stat-card">
-            <span>Pending process proposals</span>
-            <strong>@Model.PendingProcessProposalCount</strong>
-        </article>
+    <div class="stats-rail stats-rail--primary admin-stats-rail">
+        @if (Model.PendingEmailApprovalCount > 0)
+        {
+            <a class="metric-pill metric-link metric-pill--primary" href="/Admin/Emails">
+                <span>Pending email approvals</span>
+                <strong>@Model.PendingEmailApprovalCount</strong>
+            </a>
+        }
+        else
+        {
+            <article class="metric-pill metric-pill--primary"><span>Pending email approvals</span><strong>0</strong></article>
+        }
+        @if (Model.PendingAgentMessageCount > 0)
+        {
+            <a class="metric-pill metric-link metric-pill--primary" href="/Admin/Messages">
+                <span>Pending agent messages</span>
+                <strong>@Model.PendingAgentMessageCount</strong>
+            </a>
+        }
+        else
+        {
+            <article class="metric-pill metric-pill--primary"><span>Pending agent messages</span><strong>0</strong></article>
+        }
+        @if (Model.PendingProcessProposalCount > 0)
+        {
+            <a class="metric-pill metric-link metric-pill--primary" href="/Admin/ProcessProposals">
+                <span>Pending process proposals</span>
+                <strong>@Model.PendingProcessProposalCount</strong>
+            </a>
+        }
+        else
+        {
+            <article class="metric-pill metric-pill--primary"><span>Pending process proposals</span><strong>0</strong></article>
+        }
     </div>
 
-    <div class="crm-split crm-split--admin">
-        <section class="crm-card">
-            <div class="crm-card__header">
-                <h2>Pending Agent Messages</h2>
-            </div>
-            <div class="crm-stack">
-                @if (Model.PendingMessages.Count == 0)
-                {
-                    <p class="crm-muted">No pending messages are waiting for a response.</p>
-                }
-                else
-                {
-                    @foreach (var message in Model.PendingMessages)
-                    {
-                        <article class="crm-feed-card">
-                            <div class="crm-feed-card__header">
-                                <div>
-                                    <span class="crm-pill">@message.Kind</span>
-                                    <h3>@message.Title</h3>
-                                </div>
-                                <span class="crm-muted">@message.CreatedOn</span>
-                            </div>
-                            <p>@message.Body</p>
-                            <div class="crm-feed-card__actions">
-                                <a class="secondary-action" href="@message.ContextLink">Open Context</a>
-                                <form asp-action="ApproveMessage" method="post">
-                                    @Html.AntiForgeryToken()
-                                    <input type="hidden" name="id" value="@message.Id" />
-                                    <input type="hidden" name="proposedProcessDefinitionId" value="@message.ProposedProcessDefinitionId" />
-                                    <button type="submit" class="primary-action">Approve</button>
-                                </form>
-                                <form asp-action="RejectMessage" method="post">
-                                    @Html.AntiForgeryToken()
-                                    <input type="hidden" name="id" value="@message.Id" />
-                                    <button type="submit" class="secondary-action">Reject</button>
-                                </form>
-                                <form asp-action="DismissMessage" method="post">
-                                    @Html.AntiForgeryToken()
-                                    <input type="hidden" name="id" value="@message.Id" />
-                                    <button type="submit" class="secondary-action">Dismiss</button>
-                                </form>
-                            </div>
-                        </article>
-                    }
-                }
-            </div>
-        </section>
+    <section class="crm-section admin-workspace">
 
-        <section class="crm-card">
-            <div class="crm-card__header">
-                <h2>Recent Agent Runs</h2>
+    <section class="crm-card ai-routing-card">
+        <div class="crm-card__header ai-routing-header">
+            <div>
+                <h2>Commercial workflow routing</h2>
+                <p class="crm-muted">One provider route per lane. Edit any row, then save the complete routing plan once.</p>
             </div>
-            <div class="crm-table">
+        </div>
+
+        <form asp-action="ConfigureAiRouting" method="post" id="ai-routing-form">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="ApprovalProfileKey" value="@Model.SelectedAiProfileKey" data-route-profile="approval" />
+            <input type="hidden" name="ApprovalModel" value="@Model.SelectedAiModel" data-route-model-input="approval" />
+            <input type="hidden" name="ApprovalConcurrency" value="@Model.ApprovalConcurrency" data-route-concurrency="approval" />
+            @foreach (var lane in Model.AiWorkLanes)
+            {
+                <input type="hidden" name="@(lane.Lane)ProfileKey" value="@lane.SelectedProfileKey" data-route-profile="@lane.Lane.ToLowerInvariant()" />
+                <input type="hidden" name="@(lane.Lane)Model" value="@lane.SelectedModel" data-route-model-input="@lane.Lane.ToLowerInvariant()" />
+                <input type="hidden" name="@(lane.Lane)Concurrency" value="@lane.Concurrency" data-route-concurrency="@lane.Lane.ToLowerInvariant()" />
+            }
+
+            <div class="ai-routing-toolbar" role="toolbar" aria-label="Routing actions">
+                <p>Edits are staged until the complete routing plan is saved.</p>
+                <div>
+                    <button type="button" class="secondary-action" id="openProviderDirectory">Provider directory</button>
+                    <button type="submit" class="primary-action">Save routing</button>
+                </div>
+            </div>
+
+            <div class="ai-routing-matrix">
                 <table>
                     <thead>
                     <tr>
-                        <th>Kind</th>
-                        <th>State</th>
-                        <th>User</th>
+                        <th>Workflow lane</th>
                         <th>Provider</th>
-                        <th>Iterations</th>
-                        <th>Started</th>
+                        <th>Model</th>
+                        <th>Workers</th>
+                        <th>Status</th>
+                        <th><span class="sr-only">Actions</span></th>
                     </tr>
                     </thead>
                     <tbody>
-                    @foreach (var run in Model.RecentRuns)
+                    @{
+                        var approvalProfile = Model.AiProfiles.FirstOrDefault(profile => profile.Key == Model.SelectedAiProfileKey);
+                    }
+                    <tr data-route-row="approval">
+                        <td>
+                            <strong>Approval &amp; optimisation</strong>
+                            <small>Review outbound email and improve process definitions.</small>
+                        </td>
+                        <td data-route-provider>@approvalProfile?.DisplayName</td>
+                        <td data-route-model>@Model.SelectedAiModel</td>
+                        <td data-route-workers>@Model.ApprovalConcurrency</td>
+                        <td><span class="crm-pill ai-route-status ai-route-status--enabled" data-route-status>AI managed</span></td>
+                        <td><button type="button" class="secondary-action ai-route-edit" data-route-edit="approval" data-route-label="Approval &amp; optimisation">Edit</button></td>
+                    </tr>
+                    @foreach (var lane in Model.AiWorkLanes)
                     {
-                        <tr>
-                            <td>@run.Kind</td>
-                            <td>@run.State</td>
-                            <td>@run.ExecutionUserId</td>
-                            <td>@run.Provider / @run.Model</td>
-                            <td>@run.Iterations</td>
-                            <td>@run.StartedOn</td>
+                        var routeKey = lane.Lane.ToLowerInvariant();
+                        var selectedProfile = Model.AiProfiles.FirstOrDefault(profile => profile.Key == lane.SelectedProfileKey);
+                        var laneDescription = lane.Lane switch
+                        {
+                            "Lead" => "Research and qualify imported companies.",
+                            "Opportunity" => "Progress interest towards a demo and account-owner handoff.",
+                            "Client" => "Schedule reviews and relationship housekeeping.",
+                            _ => "Manage this stage of the commercial workflow."
+                        };
+                        <tr data-route-row="@routeKey">
+                            <td>
+                                <strong>@lane.DisplayName</strong>
+                                <small>@laneDescription</small>
+                            </td>
+                            <td data-route-provider>@(lane.IsEnabled ? selectedProfile?.DisplayName : "Human managed")</td>
+                            <td data-route-model>@(lane.IsEnabled ? lane.SelectedModel : "—")</td>
+                            <td data-route-workers>@(lane.IsEnabled ? lane.Concurrency.ToString() : "—")</td>
+                            <td><span class="crm-pill ai-route-status @(lane.IsEnabled ? "ai-route-status--enabled" : null)" data-route-status>@(lane.IsEnabled ? "AI managed" : "Human managed")</span></td>
+                            <td><button type="button" class="secondary-action ai-route-edit" data-route-edit="@routeKey" data-route-label="@lane.DisplayName">Edit</button></td>
                         </tr>
                     }
                     </tbody>
                 </table>
             </div>
-        </section>
-    </div>
 
-    <section class="crm-card">
-        <div class="crm-card__header">
-            <h2>Draft Process Proposals</h2>
-        </div>
-        <div class="crm-table">
-            <table>
-                <thead>
-                <tr>
-                    <th>Name</th>
-                    <th>Scope</th>
-                    <th>Version</th>
-                    <th>Agent</th>
-                    <th>Summary</th>
-                    <th>Created</th>
-                </tr>
-                </thead>
-                <tbody>
-                @if (Model.DraftProcesses.Count == 0)
-                {
-                    <tr>
-                        <td colspan="6">No process drafts are waiting for review.</td>
-                    </tr>
-                }
-                else
-                {
-                    @foreach (var draft in Model.DraftProcesses)
-                    {
-                        <tr>
-                            <td>@draft.Name</td>
-                            <td>@draft.ScopeType</td>
-                            <td>@draft.VersionNumber</td>
-                            <td>@draft.ProposedByAgent</td>
-                            <td>@draft.ChangeSummary</td>
-                            <td>@draft.CreatedOn</td>
-                        </tr>
-                    }
-                }
-                </tbody>
-            </table>
-        </div>
+            <dialog id="aiRouteDialog" class="crm-dialog ai-route-dialog">
+                <div class="crm-dialog__header">
+                    <div>
+                        <h3 id="aiRouteDialogTitle">Edit workflow lane</h3>
+                        <p>Choose how new work in this lane should be handled.</p>
+                    </div>
+                    <button type="button" class="crm-dialog__close" data-ai-route-close>Close</button>
+                </div>
+                <div class="crm-dialog__body">
+                    <div class="ai-route-dialog__form crm-form-horizontal">
+                        <label class="crm-form-horizontal__row">
+                            <span class="crm-form-horizontal__label">Provider</span>
+                            <select id="aiRouteProvider">
+                                <option value="none" data-provider-name="Human managed" data-provider-capacity="1">None — human managed</option>
+                                @foreach (var profile in Model.AiProfiles)
+                                {
+                                    <option value="@profile.Key" data-provider-name="@profile.DisplayName" data-provider-default-model="@profile.Model" data-provider-capacity="@profile.MaxConcurrency" disabled="@(!profile.IsConfigured ? "disabled" : null)">@profile.DisplayName</option>
+                                }
+                            </select>
+                        </label>
+                        <label class="crm-form-horizontal__row" id="aiRouteModelField">
+                            <span class="crm-form-horizontal__label">Model</span>
+                            <span class="crm-form-horizontal__control">
+                                <select id="aiRouteModel"></select>
+                                <small id="aiRouteModelHint">Models are loaded from the selected provider.</small>
+                            </span>
+                        </label>
+                        <label class="crm-form-horizontal__row" id="aiRouteWorkersField">
+                            <span class="crm-form-horizontal__label">Workers</span>
+                            <span class="crm-form-horizontal__control">
+                                <input id="aiRouteWorkers" type="number" min="1" max="64" value="1" />
+                                <small id="aiRouteCapacityHint">Provider capacity determines the effective maximum.</small>
+                            </span>
+                        </label>
+                    </div>
+                    <div class="ai-route-dialog__actions">
+                        <button type="button" class="secondary-action" data-ai-route-close>Cancel</button>
+                        <button type="button" class="primary-action" id="applyAiRouteEdit">Apply to grid</button>
+                    </div>
+                </div>
+            </dialog>
+
+            <dialog id="aiProviderDirectoryDialog" class="crm-dialog crm-dialog--wide">
+                <div class="crm-dialog__header">
+                    <div>
+                        <h3>Provider directory</h3>
+                        <p>Configured endpoints, default models, and declared worker capacity.</p>
+                    </div>
+                    <button type="button" class="crm-dialog__close" data-provider-directory-close>Close</button>
+                </div>
+                <div class="crm-dialog__body">
+                    <div class="ai-routing-profiles">
+                        @foreach (var profile in Model.AiProfiles)
+                        {
+                            <article class="ai-routing-profile">
+                                <div>
+                                    <strong>@profile.DisplayName</strong>
+                                    @if (!profile.IsConfigured)
+                                    {
+                                        <span class="crm-pill">Setup required</span>
+                                    }
+                                </div>
+                                <p>@profile.Description</p>
+                                <dl class="ai-provider-facts">
+                                    <div><dt>Default model</dt><dd>@profile.Model</dd></div>
+                                    <div><dt>Workers</dt><dd>@profile.MaxConcurrency maximum</dd></div>
+                                </dl>
+                                <code class="ai-provider-endpoint" title="@profile.Endpoint">@profile.Endpoint</code>
+                            </article>
+                        }
+                    </div>
+                </div>
+            </dialog>
+        </form>
     </section>
-</section>
+
+    </section>
+</main>
+
+<script>
+    (() => {
+        const form = document.getElementById("ai-routing-form");
+        const dialog = document.getElementById("aiRouteDialog");
+        const directoryDialog = document.getElementById("aiProviderDirectoryDialog");
+        const dialogTitle = document.getElementById("aiRouteDialogTitle");
+        const provider = document.getElementById("aiRouteProvider");
+        const model = document.getElementById("aiRouteModel");
+        const modelField = document.getElementById("aiRouteModelField");
+        const modelHint = document.getElementById("aiRouteModelHint");
+        const workers = document.getElementById("aiRouteWorkers");
+        const workersField = document.getElementById("aiRouteWorkersField");
+        const capacityHint = document.getElementById("aiRouteCapacityHint");
+        const applyButton = document.getElementById("applyAiRouteEdit");
+        const noneOption = provider.querySelector('option[value="none"]');
+        let activeRoute = null;
+
+        const routeProfileInput = (routeKey) =>
+            form.querySelector(`[data-route-profile="${routeKey}"]`);
+        const routeConcurrencyInput = (routeKey) =>
+            form.querySelector(`[data-route-concurrency="${routeKey}"]`);
+        const routeModelInput = (routeKey) =>
+            form.querySelector(`[data-route-model-input="${routeKey}"]`);
+
+        const refreshWorkerState = () => {
+            const selected = provider.selectedOptions[0];
+            const isHumanManaged = provider.value === "none";
+            const capacity = Math.max(1, Number(selected?.dataset.providerCapacity || 1));
+            workersField.hidden = isHumanManaged || capacity === 1;
+            workers.max = capacity.toString();
+            workers.value = Math.min(Math.max(1, Number(workers.value || 1)), capacity).toString();
+            capacityHint.textContent = `This provider supports up to ${capacity} concurrent inference call${capacity === 1 ? "" : "s"}.`;
+        };
+
+        const loadModels = async (selectedModel) => {
+            const selectedProvider = provider.selectedOptions[0];
+            const isHumanManaged = provider.value === "none";
+            modelField.hidden = isHumanManaged;
+            refreshWorkerState();
+
+            if (isHumanManaged) {
+                model.replaceChildren(new Option("—", ""));
+                return;
+            }
+
+            model.disabled = true;
+            applyButton.disabled = true;
+            modelHint.textContent = "Loading models from the provider…";
+            const fallbackModel = selectedModel || selectedProvider.dataset.providerDefaultModel || "";
+            try {
+                const response = await fetch(`/Admin/AiProviders/${encodeURIComponent(provider.value)}/Models`, {
+                    headers: { "Accept": "application/json" }
+                });
+                if (!response.ok) {
+                    throw new Error(`Model listing returned ${response.status}.`);
+                }
+
+                const result = await response.json();
+                const models = Array.from(new Set([...(result.models || []), fallbackModel].filter(Boolean)));
+                model.replaceChildren(...models.map(item => new Option(item, item)));
+                model.value = models.includes(fallbackModel) ? fallbackModel : result.defaultModel;
+                modelHint.textContent = `${models.length} model${models.length === 1 ? "" : "s"} available from this provider.`;
+            } catch {
+                model.replaceChildren(new Option(fallbackModel, fallbackModel));
+                modelHint.textContent = "Live model listing is unavailable; the configured model is shown.";
+            } finally {
+                model.disabled = false;
+                applyButton.disabled = false;
+            }
+        };
+
+        document.querySelectorAll("[data-route-edit]").forEach((button) => {
+            button.addEventListener("click", async () => {
+                activeRoute = button.dataset.routeEdit;
+                dialogTitle.textContent = `Edit ${button.dataset.routeLabel}`;
+                noneOption.hidden = activeRoute === "approval";
+                noneOption.disabled = activeRoute === "approval";
+                provider.value = routeProfileInput(activeRoute).value;
+                workers.value = routeConcurrencyInput(activeRoute)?.value || "1";
+                dialog.showModal();
+                await loadModels(routeModelInput(activeRoute).value);
+            });
+        });
+
+        provider.addEventListener("change", async () => {
+            await loadModels(provider.selectedOptions[0]?.dataset.providerDefaultModel || "");
+        });
+
+        applyButton.addEventListener("click", () => {
+            if (!activeRoute) {
+                return;
+            }
+
+            const profileInput = routeProfileInput(activeRoute);
+            const modelInput = routeModelInput(activeRoute);
+            const concurrencyInput = routeConcurrencyInput(activeRoute);
+            const selected = provider.selectedOptions[0];
+            const row = document.querySelector(`[data-route-row="${activeRoute}"]`);
+            const isHumanManaged = provider.value === "none";
+
+            profileInput.value = provider.value;
+            modelInput.value = isHumanManaged ? "" : model.value;
+            if (concurrencyInput && !isHumanManaged) {
+                concurrencyInput.value = workers.value;
+            }
+
+            row.querySelector("[data-route-provider]").textContent = selected.dataset.providerName;
+            row.querySelector("[data-route-model]").textContent = isHumanManaged ? "—" : model.value;
+            row.querySelector("[data-route-workers]").textContent = isHumanManaged ? "—" : workers.value;
+
+            const status = row.querySelector("[data-route-status]");
+            status.textContent = isHumanManaged ? "Human managed" : "AI managed";
+            status.classList.toggle("ai-route-status--enabled", !isHumanManaged);
+            row.classList.add("ai-routing-row--staged");
+            dialog.close();
+        });
+
+        document.querySelectorAll("[data-ai-route-close]").forEach((button) => {
+            button.addEventListener("click", () => dialog.close());
+        });
+
+        document.getElementById("openProviderDirectory").addEventListener("click", () =>
+            directoryDialog.showModal());
+        document.querySelectorAll("[data-provider-directory-close]").forEach((button) => {
+            button.addEventListener("click", () => directoryDialog.close());
+        });
+
+        [dialog, directoryDialog].forEach((currentDialog) => {
+            currentDialog.addEventListener("click", (event) => {
+                const bounds = currentDialog.getBoundingClientRect();
+                const isInside =
+                    bounds.top <= event.clientY &&
+                    event.clientY <= bounds.bottom &&
+                    bounds.left <= event.clientX &&
+                    event.clientX <= bounds.right;
+                if (!isInside) {
+                    currentDialog.close();
+                }
+            });
+        });
+    })();
+</script>

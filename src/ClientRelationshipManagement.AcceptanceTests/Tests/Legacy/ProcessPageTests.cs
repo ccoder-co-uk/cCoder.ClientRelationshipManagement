@@ -16,7 +16,7 @@ public sealed class ProcessPageTests(CRMAcceptanceFixture fixture)
     [CRMAcceptanceFact]
     public async Task Get_Index_ShowsProcessDesigner()
     {
-        string response = await GetStringAsync("/Process");
+        string response = await GetStringAsync("/Admin/Process");
 
         response.Should().Contain("Process Page");
         response.Should().Contain("Default Outbound Prospecting");
@@ -37,15 +37,15 @@ public sealed class ProcessPageTests(CRMAcceptanceFixture fixture)
             {
                 ["User"] = Fixture.Settings.SessionUserEmail,
                 ["Pass"] = Fixture.Settings.SessionUserPassword,
-                ["ReturnUrl"] = "/Process",
+                ["ReturnUrl"] = "/Admin/Process",
             }));
 
         loginResponse.StatusCode.Should().Be(HttpStatusCode.Redirect);
 
         using HttpResponseMessage response = await PostFormWithAntiforgeryAsync(
             clientHttp,
-            "/Process",
-            "/Process/SaveDefinition",
+            "/Admin/Process",
+            "/Admin/Process/SaveDefinition",
             new Dictionary<string, string>
             {
                 ["TenantId"] = "default",
@@ -67,7 +67,7 @@ public sealed class ProcessPageTests(CRMAcceptanceFixture fixture)
     [CRMAcceptanceFact]
     public async Task Post_SaveStep_CreatesProcessStep()
     {
-        await GetStringAsync("/Process");
+        await GetStringAsync("/Admin/Process");
 
         ClientProcessDefinition definition = await QueryInAdminContextAsync(dbContext =>
             dbContext.ClientProcessDefinitions.IgnoreQueryFilters()
@@ -84,15 +84,15 @@ public sealed class ProcessPageTests(CRMAcceptanceFixture fixture)
             {
                 ["User"] = Fixture.Settings.SessionUserEmail,
                 ["Pass"] = Fixture.Settings.SessionUserPassword,
-                ["ReturnUrl"] = $"/Process?id={definition.Id}",
+                ["ReturnUrl"] = $"/Admin/Process?id={definition.Id}",
             }));
 
         loginResponse.StatusCode.Should().Be(HttpStatusCode.Redirect);
 
         using HttpResponseMessage response = await PostFormWithAntiforgeryAsync(
             clientHttp,
-            $"/Process?id={definition.Id}",
-            "/Process/SaveStep",
+            $"/Admin/Process?id={definition.Id}",
+            "/Admin/Process/SaveStep",
             new Dictionary<string, string>
             {
                 ["ClientProcessDefinitionId"] = definition.Id.ToString(),
@@ -119,7 +119,7 @@ public sealed class ProcessPageTests(CRMAcceptanceFixture fixture)
     [CRMAcceptanceFact]
     public async Task Post_SaveTransition_CreatesProcessTransition()
     {
-        await GetStringAsync("/Process");
+        await GetStringAsync("/Admin/Process");
 
         ClientProcessDefinition definition = await QueryInAdminContextAsync(dbContext =>
             dbContext.ClientProcessDefinitions.IgnoreQueryFilters()
@@ -144,15 +144,15 @@ public sealed class ProcessPageTests(CRMAcceptanceFixture fixture)
             {
                 ["User"] = Fixture.Settings.SessionUserEmail,
                 ["Pass"] = Fixture.Settings.SessionUserPassword,
-                ["ReturnUrl"] = $"/Process?id={definition.Id}",
+                ["ReturnUrl"] = $"/Admin/Process?id={definition.Id}",
             }));
 
         loginResponse.StatusCode.Should().Be(HttpStatusCode.Redirect);
 
         using HttpResponseMessage response = await PostFormWithAntiforgeryAsync(
             clientHttp,
-            $"/Process?id={definition.Id}",
-            "/Process/SaveTransition",
+            $"/Admin/Process?id={definition.Id}",
+            "/Admin/Process/SaveTransition",
             new Dictionary<string, string>
             {
                 ["ClientProcessStepId"] = steps[0].Id.ToString(),

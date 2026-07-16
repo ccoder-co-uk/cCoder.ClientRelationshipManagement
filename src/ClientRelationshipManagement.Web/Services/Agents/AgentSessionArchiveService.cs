@@ -92,7 +92,9 @@ public sealed class AgentSessionArchiveService(
         AgentSessionArchive archive,
         CancellationToken cancellationToken)
     {
-        string directoryPath = agentWorkspaceService.GetProcessOptimiserSessionHistoryDirectory();
+        string directoryPath = kind == AgentRunKind.TaskAgent
+            ? agentWorkspaceService.GetTaskAgentSessionHistoryDirectory()
+            : agentWorkspaceService.GetProcessOptimiserSessionHistoryDirectory();
         Directory.CreateDirectory(directoryPath);
 
         string fileName =

@@ -1,0 +1,92 @@
+@model ClientRelationshipManagement.Web.Models.Admin.AdminAgentRunsPageViewModel
+@{
+    ViewData["Title"] = "Agent runs";
+}
+
+<main class="page-shell">
+    <section class="page-hero">
+        <div>
+            <h1>Agent runs</h1>
+            <p>Execution history across approval, lead, opportunity, and client automation.</p>
+        </div>
+    </section>
+
+    <section class="data-panel">
+        <div class="agent-runs-toolbar">
+            <p>@Model.TotalCount.ToString("N0") run@(Model.TotalCount == 1 ? "" : "s")</p>
+            <form method="get" action="/Admin/Runs" class="agent-runs-page-size">
+                <label for="agent-runs-page-size">Rows per page</label>
+                <select id="agent-runs-page-size" name="pageSize" onchange="this.form.submit()">
+                    @foreach (int size in new[] { 10, 25, 50 })
+                    {
+                        <option value="@size" selected="@(Model.PageSize == size)">@size</option>
+                    }
+                </select>
+            </form>
+        </div>
+        <div class="table-shell agent-runs-table-shell">
+            <table class="crm-table">
+                <thead>
+                <tr>
+                    <th>Kind</th>
+                    <th>State</th>
+                    <th>Source</th>
+                    <th>User</th>
+                    <th>Provider</th>
+                    <th>Model</th>
+                    <th>Iterations</th>
+                    <th>Items</th>
+                    <th>Started</th>
+                    <th>Completed</th>
+                </tr>
+                </thead>
+                <tbody>
+                @if (Model.Runs.Count == 0)
+                {
+                    <tr><td colspan="10">No agent runs have been recorded.</td></tr>
+                }
+                else
+                {
+                    @foreach (var run in Model.Runs)
+                    {
+                        <tr title="@(string.IsNullOrWhiteSpace(run.ErrorMessage) ? run.Summary : run.ErrorMessage)">
+                            <td>@run.Kind</td>
+                            <td><span class="crm-pill">@run.State</span></td>
+                            <td>
+                                @if (!string.IsNullOrWhiteSpace(run.WorkLane))
+                                {
+                                    <strong>@run.WorkLane</strong>
+                                    @if (!string.IsNullOrWhiteSpace(run.ProcessStepKey))
+                                    {
+                                        <small class="table-secondary">@run.ProcessStepKey</small>
+                                    }
+                                }
+                                else
+                                {
+                                    <span>Shared service</span>
+                                }
+                            </td>
+                            <td>@run.ExecutionUserId</td>
+                            <td>@run.Provider</td>
+                            <td>@run.Model</td>
+                            <td>@run.Iterations</td>
+                            <td>@run.ProcessedItemCount</td>
+                            <td>@run.StartedOn</td>
+                            <td>@run.CompletedOn</td>
+                        </tr>
+                    }
+                }
+                </tbody>
+            </table>
+        </div>
+        <nav class="company-pager agent-runs-pager" aria-label="Agent run history pages">
+            <a class="secondary-action @(Model.HasPreviousPage ? "" : "is-disabled")"
+               aria-disabled="@(!Model.HasPreviousPage)"
+               href="@(Model.HasPreviousPage ? Url.Action("Runs", new { page = Model.Page - 1, Model.PageSize }) : null)">Previous</a>
+            <span>Page @Model.Page.ToString("N0") of @Model.TotalPages.ToString("N0")</span>
+            <a class="secondary-action @(Model.HasNextPage ? "" : "is-disabled")"
+               aria-disabled="@(!Model.HasNextPage)"
+               href="@(Model.HasNextPage ? Url.Action("Runs", new { page = Model.Page + 1, Model.PageSize }) : null)">Next</a>
+        </nav>
+    </section>
+</main>

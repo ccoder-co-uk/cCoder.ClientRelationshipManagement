@@ -29,6 +29,12 @@ public sealed class ClientEditorViewModel
     [Display(Name = "Contact phone")]
     public string ContactPhoneNumber { get; set; } = string.Empty;
 
+    [Display(Name = "Primary contact")]
+    public string PrimaryContactName { get; set; } = string.Empty;
+
+    [Display(Name = "Role")]
+    public string PrimaryContactPosition { get; set; } = string.Empty;
+
     [Display(Name = "Website")]
     public string WebsiteUrl { get; set; } = string.Empty;
 
@@ -72,9 +78,22 @@ public sealed class ClientEditorViewModel
     [Display(Name = "Priority")]
     public RelationshipPriority Priority { get; set; }
 
+    [Display(Name = "Account status")]
+    public ClientAccountStatus ClientAccountStatus { get; set; }
+
+    [Display(Name = "Account reference")]
+    public string AccountReference { get; set; } = string.Empty;
+
+    [Display(Name = "Contract signed")]
+    public DateTime? ContractSignedOn { get; set; }
+
+    [Display(Name = "Go live")]
+    public DateTime? GoLiveOn { get; set; }
+
     public IReadOnlyList<SelectListItem> StatusOptions { get; init; } = Array.Empty<SelectListItem>();
     public IReadOnlyList<SelectListItem> StageOptions { get; init; } = Array.Empty<SelectListItem>();
     public IReadOnlyList<SelectListItem> PriorityOptions { get; init; } = Array.Empty<SelectListItem>();
+    public IReadOnlyList<SelectListItem> ClientAccountStatusOptions { get; init; } = Array.Empty<SelectListItem>();
     public IReadOnlyList<SelectListItem> ActivityTypeOptions { get; init; } = Array.Empty<SelectListItem>();
     public IReadOnlyList<SelectListItem> ActivityDirectionOptions { get; init; } = Array.Empty<SelectListItem>();
     public IReadOnlyList<SelectListItem> OpportunityTypeOptions { get; init; } = Array.Empty<SelectListItem>();

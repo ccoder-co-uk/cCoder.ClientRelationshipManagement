@@ -10,6 +10,7 @@ public sealed class CreateAgentMessageRequest
     public Guid? OpportunityId { get; set; }
     public Guid? ClientAccountId { get; set; }
     public Guid? ProcessTaskId { get; set; }
+    public Guid? ProcessStepId { get; set; }
     public Guid? EmailId { get; set; }
     public Guid? ProcessDefinitionId { get; set; }
     public Guid? ProposedProcessDefinitionId { get; set; }

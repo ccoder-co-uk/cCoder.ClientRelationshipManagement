@@ -24,16 +24,16 @@ public static class Program
             options.TimestampFormat = "HH:mm:ss ";
         });
 
-        string crmConnection = ConfigurationValueResolver.GetRequired(
+        string crmConnection = ConfigurationValueResolver.GetRequiredSqlConnection(
             builder.Configuration,
             "ConnectionStrings:CRM");
 
-        string crmAdminConnection = ConfigurationValueResolver.GetOptional(
+        string crmAdminConnection = ConfigurationValueResolver.GetOptionalSqlConnection(
             builder.Configuration,
             "ConnectionStrings:CRMAdmin")
             ?? crmConnection;
 
-        string ssoConnection = ConfigurationValueResolver.GetRequired(
+        string ssoConnection = ConfigurationValueResolver.GetRequiredSqlConnection(
             builder.Configuration,
             "ConnectionStrings:SSO");
 
@@ -54,6 +54,7 @@ public static class Program
             });
 
         builder.Services.AddCors();
+        builder.Services.AddDistributedMemoryCache();
 
         WebApplication app = builder.Build();
         app.UseCors(policy =>
@@ -63,6 +64,7 @@ public static class Program
             policy.AllowAnyMethod();
         });
 
+        MapServiceEndpoints(app);
         MapImportEndpoints(app);
 
         using IServiceScope scope = app.Services.CreateScope();
@@ -72,6 +74,23 @@ public static class Program
             .InitialiseAsync();
 
         await app.RunAsync();
+    }
+
+    static void MapServiceEndpoints(WebApplication app)
+    {
+        app.MapGet("/", (HttpRequest request) =>
+        {
+            int webPort = request.Host.Port == 7295 ? 7294 : 5294;
+            string host = request.Host.Host;
+
+            return Results.Redirect($"{request.Scheme}://{host}:{webPort}/");
+        });
+
+        app.MapGet("/health", () => Results.Ok(new
+        {
+            Service = "ClientRelationshipManagement.HostedServices",
+            Status = "Healthy"
+        }));
     }
 
     static void MapImportEndpoints(WebApplication app)

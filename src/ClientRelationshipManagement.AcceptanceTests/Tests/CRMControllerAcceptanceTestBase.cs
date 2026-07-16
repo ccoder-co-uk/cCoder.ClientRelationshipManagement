@@ -110,10 +110,22 @@ public abstract class CRMControllerAcceptanceTestBase(CRMAcceptanceFixture fixtu
     {
         Guid leadId = Guid.NewGuid();
         Guid contactId = Guid.NewGuid();
+        Guid companyId = Guid.NewGuid();
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
         await ExecuteInAdminContextAsync(async db =>
         {
+            db.Companies.Add(new Company
+            {
+                Id = companyId,
+                SourceSystem = "Acceptance",
+                OfficialName = Unique("Lead Company"),
+                CreatedBy = Fixture.Settings.UserId,
+                LastUpdatedBy = Fixture.Settings.UserId,
+                CreatedOn = now,
+                LastUpdated = now
+            });
+
             db.Leads.Add(new Lead
             {
                 Id = leadId,
@@ -122,6 +134,7 @@ public abstract class CRMControllerAcceptanceTestBase(CRMAcceptanceFixture fixtu
                 Status = LeadStatus.Imported,
                 RawCompanyName = Unique("Lead Company"),
                 RawWebsiteUrl = "https://lead.example.com",
+                CompanyId = companyId,
                 CreatedBy = Fixture.Settings.UserId,
                 LastUpdatedBy = Fixture.Settings.UserId,
                 CreatedOn = now,
@@ -278,7 +291,7 @@ public abstract class CRMControllerAcceptanceTestBase(CRMAcceptanceFixture fixtu
                 .FirstAsync());
     }
 
-    protected async Task SeedSentOpportunityEmailAsync(
+    protected async Task<Guid> SeedSentOpportunityEmailAsync(
         Guid relationshipId,
         Guid opportunityId,
         Guid companyContactId,
@@ -330,6 +343,8 @@ public abstract class CRMControllerAcceptanceTestBase(CRMAcceptanceFixture fixtu
 
             await db.SaveChangesAsync();
         });
+
+        return emailId;
     }
 
     protected AcceptanceSettings CloneSettings(bool bypassAuthentication) =>

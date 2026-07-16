@@ -1,0 +1,904 @@
+@using cCoder.ClientRelationshipManagement.Platform.Models.Enums
+@using ClientRelationshipManagement.Web.Services.Processes
+@model WorkflowModelPageViewModel
+@{
+    ViewData["Title"] = "Full Company Process Model";
+    const int nodeStartLeft = 36;
+    const int nodeColumnWidth = 240;
+    const int portalColumnInset = 8;
+    const int topRowOffset = 70;
+    const int nodeRowSpacing = 210;
+    const int nodeHeight = 132;
+    const int terminalNodeHeight = 42;
+    const int terminalNodeGap = 6;
+    Dictionary<Guid, int> portalColumns = [];
+    Dictionary<Guid, Dictionary<Guid, (int Row, int Column)>> processStepLayouts = [];
+    Dictionary<Guid, int> processLaneTops = [];
+    Dictionary<Guid, int> processLaneHeights = [];
+    int nextLaneTop = 24;
+    int maximumUsedColumn = 0;
+
+    if (Model.Processes.Count > 0)
+        portalColumns[Model.Processes[0].Id] = 0;
+
+    foreach (WorkflowProcessViewModel process in Model.Processes)
+    {
+        int portalColumn = portalColumns.GetValueOrDefault(process.Id, 0);
+        int columnSpan = process.Steps.Count <= 8
+            ? Math.Max(1, process.Steps.Count / 2)
+            : Math.Clamp((int)Math.Ceiling(Math.Sqrt(process.Steps.Count)), 3, 5);
+        Dictionary<Guid, (int Row, int Column)> layout = [];
+        int stepIndex = 0;
+        int row = 0;
+        while (stepIndex < process.Steps.Count)
+        {
+            IEnumerable<int> columns = row switch
+            {
+                0 => Enumerable.Range(portalColumn + 1, columnSpan),
+                _ when row % 2 == 1 => Enumerable.Range(portalColumn, columnSpan + 1).Reverse(),
+                _ => Enumerable.Range(portalColumn, columnSpan + 1)
+            };
+
+            foreach (int column in columns)
+            {
+                if (stepIndex >= process.Steps.Count)
+                    break;
+                layout[process.Steps[stepIndex].Id] = (row, column);
+                stepIndex++;
+            }
+            row++;
+        }
+
+        int maximumRow = layout.Values.Select(position => position.Row).DefaultIfEmpty(0).Max();
+        int laneHeight = topRowOffset + (maximumRow * nodeRowSpacing) + nodeHeight + 86;
+        processStepLayouts[process.Id] = layout;
+        processLaneTops[process.Id] = nextLaneTop;
+        processLaneHeights[process.Id] = laneHeight;
+        nextLaneTop += laneHeight + 20;
+        maximumUsedColumn = Math.Max(maximumUsedColumn, Math.Max(portalColumn, layout.Values.Select(position => position.Column).DefaultIfEmpty(portalColumn).Max()) + 1);
+
+        foreach (WorkflowStepViewModel step in process.Steps)
+        {
+            foreach (WorkflowTransitionViewModel transition in step.Transitions.Where(transition => transition.GraphTargetId.StartsWith("portal-", StringComparison.Ordinal)))
+            {
+                WorkflowProcessViewModel target = Model.Processes.FirstOrDefault(candidate =>
+                    transition.GraphTargetId == $"portal-{candidate.Id:N}");
+                if (target is not null)
+                    portalColumns[target.Id] = layout[step.Id].Column;
+            }
+        }
+    }
+
+    int stageWidth = Math.Max(1540, nodeStartLeft + (maximumUsedColumn * nodeColumnWidth) + 270);
+    int stageHeight = Math.Max(620, nextLaneTop + 6);
+}
+
+<main class="page-shell workflow-model-page">
+    <section class="page-hero workflow-model-hero">
+        <h1>Full Company Process Model</h1>
+        <div class="page-hero__actions">
+            <a class="secondary-action" href="/Admin/Process/Designer">Edit process layout</a>
+            <a class="secondary-action" href="/Admin/Process">Process definitions</a>
+        </div>
+        <p class="lede">Trace every route from a company entering the work pool through lead qualification, opportunity conversion, and ongoing client care.</p>
+    </section>
+
+    <section class="workflow-model-status @(Model.IsValid && Model.CompanyCoverage.IsComplete ? "is-valid" : "has-errors")" aria-label="Workflow status">
+        <div class="workflow-model-status__state">
+            <span class="workflow-model-status__indicator" aria-hidden="true"></span>
+            <div>
+                <strong>@(Model.IsValid ? "Lifecycle is executable" : "Lifecycle needs attention")</strong>
+                <small data-live-key="generated-at">Generated from the live process definitions at @Model.GeneratedOn.ToLocalTime().ToString("HH:mm:ss")</small>
+            </div>
+        </div>
+        <div class="workflow-model-status__coverage" data-live-key="company-coverage">
+            <strong>@Model.CompanyCoverage.AccountedCompanies.ToString("N0") of @Model.CompanyCoverage.TotalCompanies.ToString("N0") companies have a visible place</strong>
+            <div>
+                <span class="is-pool">Pool <b>@Model.CompanyCoverage.CandidateCompanies.ToString("N0")</b></span>
+                <span class="is-lead">Leads <b>@Model.CompanyCoverage.LeadCompanies.ToString("N0")</b></span>
+                <span class="is-opportunity">Opportunities <b>@Model.CompanyCoverage.OpportunityCompanies.ToString("N0")</b></span>
+                <span class="is-client">Clients <b>@Model.CompanyCoverage.ClientCompanies.ToString("N0")</b></span>
+                <span class="is-excluded">Excluded <b>@Model.CompanyCoverage.ExcludedCompanies.ToString("N0")</b></span>
+                @if (Model.CompanyCoverage.ManualRelationshipCompanies > 0)
+                {
+                    <span class="is-manual">Manual relationships <b>@Model.CompanyCoverage.ManualRelationshipCompanies.ToString("N0")</b></span>
+                }
+                @if (Model.CompanyCoverage.UnclassifiedCompanies > 0)
+                {
+                    <span class="is-unclassified">Needs reconciliation <b>@Model.CompanyCoverage.UnclassifiedCompanies.ToString("N0")</b></span>
+                }
+            </div>
+        </div>
+        <dl>
+            <div><dt>Processes</dt><dd>@Model.Processes.Count</dd></div>
+            <div><dt>Steps</dt><dd>@Model.TotalSteps</dd></div>
+            <div><dt>Routes</dt><dd>@Model.TotalTransitions</dd></div>
+            <div><dt>Issues</dt><dd>@Model.Issues.Count</dd></div>
+        </dl>
+    </section>
+
+    @if (Model.Issues.Count > 0)
+    {
+        <details class="workflow-model-findings">
+            <summary>Review @Model.Issues.Count validation finding@(Model.Issues.Count == 1 ? "" : "s")</summary>
+            <div>
+                @foreach (ProcessValidationIssue issue in Model.Issues)
+                {
+                    <p><strong>@issue.ProcessName</strong>@(string.IsNullOrWhiteSpace(issue.StepName) ? "" : $" · {issue.StepName}") — @issue.Message</p>
+                }
+            </div>
+        </details>
+    }
+
+    <section class="workflow-workspace" aria-label="Interactive company lifecycle design surface">
+        <header class="workflow-workspace__toolbar">
+            <div class="workflow-workspace__view-switcher" role="group" aria-label="Focus workflow lane">
+                <button type="button" class="is-active" data-focus-lane="all">End to end</button>
+                @foreach (WorkflowProcessViewModel process in Model.Processes)
+                {
+                    <button type="button" data-focus-lane="@process.Id">@process.LaneLabel</button>
+                }
+            </div>
+            <div class="workflow-workspace__tools">
+                <label class="workflow-auto-refresh">
+                    <input type="checkbox" data-workflow-auto-refresh checked />
+                    <span aria-hidden="true"></span>
+                    Auto-refresh
+                </label>
+                <small class="workflow-refresh-status" id="workflowRefreshStatus">Updated @Model.GeneratedOn.ToLocalTime().ToString("HH:mm:ss")</small>
+                <details class="workflow-legend">
+                    <summary>Legend</summary>
+                    <div>
+                        <span><i class="is-default"></i> Default route</span>
+                        <span><i class="is-branch"></i> Alternative outcome</span>
+                        <span><i class="is-handoff"></i> Process hand-off</span>
+                        <span><i class="is-terminal"></i> Lifecycle exit</span>
+                        <span><i class="is-iteration" aria-hidden="true">↻</i> Repeating step</span>
+                    </div>
+                </details>
+                <button type="button" data-workflow-zoom="out" title="Zoom out" aria-label="Zoom out">−</button>
+                <output id="workflowZoom" aria-live="polite">100%</output>
+                <button type="button" data-workflow-zoom="in" title="Zoom in" aria-label="Zoom in">+</button>
+                <button type="button" data-workflow-fit>Fit</button>
+            </div>
+        </header>
+
+        <div class="workflow-workspace__body">
+            <div class="workflow-surface-viewport" id="workflowViewport" tabindex="0" aria-label="Workflow canvas. Drag the background to pan and use the toolbar to zoom.">
+                <div class="workflow-surface-space" id="workflowSpace">
+                    <div class="workflow-surface-stage" id="workflowStage" style="width:@(stageWidth)px;height:@(stageHeight)px" data-width="@stageWidth" data-height="@stageHeight">
+                        <svg class="workflow-connectors" id="workflowConnectors" width="@stageWidth" height="@stageHeight" aria-hidden="true">
+                            <defs>
+                                <marker id="workflowArrowDefault" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="7" markerHeight="7" orient="auto"><path d="M 1 1 L 11 6 L 1 11 z"></path></marker>
+                                <marker id="workflowArrowBranch" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="7" markerHeight="7" orient="auto"><path d="M 1 1 L 11 6 L 1 11 z"></path></marker>
+                                <marker id="workflowArrowHandoff" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="7" markerHeight="7" orient="auto"><path d="M 1 1 L 11 6 L 1 11 z"></path></marker>
+                                <marker id="workflowArrowTerminal" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="7" markerHeight="7" orient="auto"><path d="M 1 1 L 11 6 L 1 11 z"></path></marker>
+                            </defs>
+                        </svg>
+
+                        @for (int processIndex = 0; processIndex < Model.Processes.Count; processIndex++)
+                        {
+                            WorkflowProcessViewModel process = Model.Processes[processIndex];
+                            int laneTop = processLaneTops[process.Id];
+                            int laneHeight = processLaneHeights[process.Id];
+                            int portalColumn = portalColumns.GetValueOrDefault(process.Id, 0);
+                            Dictionary<Guid, (int Row, int Column)> stepLayout = processStepLayouts[process.Id];
+                            int maximumNodeRow = stepLayout.Values.Select(position => position.Row).DefaultIfEmpty(0).Max();
+                            HashSet<(int Row, int Column)> occupiedCells = stepLayout.Values.ToHashSet();
+                            occupiedCells.Add((0, portalColumn));
+                            WorkflowStepViewModel entryStep = process.Steps
+                                .OrderByDescending(step => step.IsEntryPoint)
+                                .ThenBy(step => step.Sequence)
+                                .FirstOrDefault();
+                            string portalTitle = process.ScopeType switch
+                            {
+                                ProcessScopeType.Lead => "Company tipped in",
+                                ProcessScopeType.Opportunity => "Opportunity created",
+                                _ => "Client account created"
+                            };
+                            string portalDetail = process.ScopeType switch
+                            {
+                                ProcessScopeType.Lead => "Selected from the imported company pool",
+                                ProcessScopeType.Opportunity => "A lead passed the qualification rule",
+                                _ => "The account owner approved moving forward"
+                            };
+                            string portalCountDetail = process.ScopeType == ProcessScopeType.Lead
+                                ? $"{process.PortalCount:N0} waiting in the pool"
+                                : $"{process.PortalCount:N0} currently in this lane";
+
+                            <section class="workflow-lane workflow-lane--@process.LaneKey" style="top:@(laneTop)px;width:@(stageWidth - 32)px;height:@(laneHeight)px" data-lane-id="@process.Id">
+                                <header class="workflow-lane__header">
+                                    <button type="button" data-inspector-template="process-template-@process.Id.ToString("N")">
+                                        <span>@process.LaneLabel</span>
+                                        <strong>@process.Name</strong>
+                                        <small>v@(process.VersionNumber) · @process.Steps.Count steps</small>
+                                    </button>
+                                    <div data-live-key="lane-@process.Id.ToString("N")">
+                                        <span>@process.ActiveInstances active</span>
+                                        <span>@process.CompletedInstances completed</span>
+                                        @if (process.UnmappedActiveInstances > 0)
+                                        {
+                                            <span class="has-warning">@process.UnmappedActiveInstances unmapped</span>
+                                        }
+                                    </div>
+                                </header>
+                            </section>
+
+                            <button type="button"
+                                    id="portal-@process.Id.ToString("N")"
+                                    class="workflow-portal workflow-portal--@process.LaneKey workflow-graph-node"
+                                    style="left:@(nodeStartLeft + (portalColumn * nodeColumnWidth) + portalColumnInset)px;top:@(laneTop + topRowOffset)px"
+                                    data-node-row="0"
+                                    data-node-column="@portalColumn"
+                                    data-lane-id="@process.Id"
+                                    data-inspector-template="process-template-@process.Id.ToString("N")">
+                                <span>Starts here</span>
+                                <strong>@portalTitle</strong>
+                                <small>@portalDetail</small>
+                                <b class="workflow-portal__count" data-live-key="portal-@process.Id.ToString("N")">@portalCountDetail</b>
+                            </button>
+
+                            @if (entryStep is not null)
+                            {
+                                <span class="workflow-edge-data"
+                                      data-edge-from="portal-@process.Id.ToString("N")"
+                                      data-edge-to="step-@entryStep.Id.ToString("N")"
+                                      data-edge-label=""
+                                      data-edge-kind="default"></span>
+                            }
+
+                            int edgeTrack = 0;
+                            @for (int stepIndex = 0; stepIndex < process.Steps.Count; stepIndex++)
+                            {
+                                WorkflowStepViewModel step = process.Steps[stepIndex];
+                                (int nodeRow, int nodeColumn) = stepLayout[step.Id];
+                                int nodeLeft = nodeStartLeft + (nodeColumn * nodeColumnWidth);
+                                int nodeTop = laneTop + topRowOffset + (nodeRow * nodeRowSpacing);
+                                bool hasBranches = step.Transitions.Count > 1;
+                                bool hasLoop = step.Transitions.Any(transition => transition.NextProcessStepId == step.Id);
+                                <button type="button"
+                                        id="step-@step.Id.ToString("N")"
+                                        class="workflow-node workflow-node--@process.LaneKey workflow-graph-node @(hasLoop ? "has-iteration" : "")"
+                                        style="left:@(nodeLeft)px;top:@(nodeTop)px"
+                                        data-step-id="@step.Id"
+                                        data-node-row="@nodeRow"
+                                        data-node-column="@nodeColumn"
+                                    data-lane-id="@process.Id"
+                                    data-inspector-template="step-template-@step.Id.ToString("N")">
+                                    @if (hasLoop)
+                                    {
+                                        <span class="workflow-node__iteration" title="This step can repeat" aria-label="Repeating step">↻</span>
+                                    }
+                                    <span class="workflow-node__meta"><b>@step.Sequence</b> @step.ActionType</span>
+                                    <strong>@step.Name</strong>
+                                    <small>@step.Objective</small>
+                                    <span class="workflow-node__footer" data-live-key="step-@step.Id.ToString("N")">
+                                        <em class="is-current">@step.CurrentInstances here</em>
+                                        @if (step.Health.Running > 0)
+                                        {
+                                            <em class="is-running">@step.Health.Running working</em>
+                                        }
+                                        else if (step.Health.Pending > 0)
+                                        {
+                                            <em>@step.Health.Pending waiting</em>
+                                        }
+                                        @if (hasBranches)
+                                        {
+                                            <em class="is-branching">@step.Transitions.Count routes</em>
+                                        }
+                                    </span>
+                                </button>
+
+                                @foreach (WorkflowTransitionViewModel transition in step.Transitions.Where(transition => transition.NextProcessStepId != step.Id))
+                                {
+                                    string edgeKind = transition.GraphTargetId.StartsWith("exit-", StringComparison.Ordinal)
+                                        ? "terminal"
+                                        : transition.GraphTargetId.StartsWith("portal-", StringComparison.Ordinal)
+                                            ? "handoff"
+                                            : transition.IsDefault ? "default" : "branch";
+                                    int edgeTrackIndex = edgeKind is "branch" or "terminal" ? edgeTrack++ : 0;
+                                    <span class="workflow-edge-data"
+                                          data-edge-from="step-@step.Id.ToString("N")"
+                                          data-edge-to="@transition.GraphTargetId"
+                                          data-edge-label="@transition.OutcomeKey"
+                                          data-edge-kind="@edgeKind"
+                                          data-edge-track="@edgeTrackIndex"></span>
+                                }
+                            }
+
+                            List<(WorkflowTransitionViewModel Transition, WorkflowStepViewModel Step)> exits = process.Steps
+                                .SelectMany(step => step.Transitions
+                                    .Where(transition => transition.GraphTargetId.StartsWith("exit-", StringComparison.Ordinal))
+                                    .Select(transition => (transition, step)))
+                                .ToList();
+                            HashSet<(int Row, int Column)> reservedExitCells = [];
+                            foreach (IGrouping<Guid, (WorkflowTransitionViewModel Transition, WorkflowStepViewModel Step)> exitGroup in exits.GroupBy(exit => exit.Step.Id))
+                            {
+                                (int sourceRow, int sourceColumn) = stepLayout[exitGroup.Key];
+                                int rightColumn = sourceColumn + 1;
+                                int leftColumn = sourceColumn - 1;
+                                bool hasFreeCellOnRight = !occupiedCells.Contains((sourceRow, rightColumn)) && !reservedExitCells.Contains((sourceRow, rightColumn));
+                                bool hasFreeCellOnLeft = leftColumn >= 0 && !occupiedCells.Contains((sourceRow, leftColumn)) && !reservedExitCells.Contains((sourceRow, leftColumn));
+                                bool placeOnRight = hasFreeCellOnRight && (!hasFreeCellOnLeft || sourceColumn > portalColumn);
+                                bool useTerminalShelf = !placeOnRight && !hasFreeCellOnLeft;
+                                int exitColumn = placeOnRight ? rightColumn : hasFreeCellOnLeft ? leftColumn : sourceColumn;
+                                int exitRow = sourceRow;
+                                if (!useTerminalShelf)
+                                    reservedExitCells.Add((exitRow, exitColumn));
+                                int exitCount = exitGroup.Count();
+                                int terminalGroupHeight = (exitCount * terminalNodeHeight) + ((exitCount - 1) * terminalNodeGap);
+                                int terminalGroupInset = Math.Max(0, (nodeHeight - terminalGroupHeight) / 2);
+                                int exitOrdinal = 0;
+                                foreach ((WorkflowTransitionViewModel Transition, WorkflowStepViewModel Step) exit in exitGroup)
+                                {
+                                    int exitLeft = nodeStartLeft + (exitColumn * nodeColumnWidth)
+                                        + (useTerminalShelf ? exitOrdinal * 204 : 0);
+                                    int exitTop = useTerminalShelf
+                                        ? laneTop + topRowOffset + (maximumNodeRow * nodeRowSpacing) + nodeHeight + 36
+                                        : laneTop + topRowOffset + (exitRow * nodeRowSpacing) + terminalGroupInset + (exitOrdinal * (terminalNodeHeight + terminalNodeGap));
+                                    <button type="button"
+                                            id="@exit.Transition.GraphTargetId"
+                                            class="workflow-end-node workflow-end-node--@process.LaneKey workflow-graph-node"
+                                            style="left:@(exitLeft)px;top:@(exitTop)px"
+                                            data-node-row="@(useTerminalShelf ? maximumNodeRow + 1 : exitRow)"
+                                            data-node-column="@exitColumn"
+                                            data-lane-id="@process.Id"
+                                            data-inspector-template="step-template-@exit.Step.Id.ToString("N")">
+                                        <span>@exit.Transition.OutcomeLabel</span>
+                                        <strong>@exit.Transition.DestinationLabel</strong>
+                                        <small data-live-key="exit-@exit.Transition.Id.ToString("N")">@exit.Transition.CurrentStateCount.ToString("N0") here</small>
+                                    </button>
+                                    exitOrdinal++;
+                                }
+                            }
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <aside class="workflow-inspector" id="workflowInspector" aria-label="Workflow details" aria-live="polite">
+                <header>
+                    <div>
+                        <span class="workflow-inspector__header-context" id="workflowInspectorContext">Workflow</span>
+                        <strong id="workflowInspectorHeading">Workflow details</strong>
+                    </div>
+                    <button type="button" data-inspector-close aria-label="Close details">×</button>
+                </header>
+                <div class="workflow-inspector__content" id="workflowInspectorContent">
+                    <div class="workflow-inspector__empty">
+                        <span aria-hidden="true">↗</span>
+                        <strong>Select a node</strong>
+                        <p>Inspect what the agent receives, what the step adds, how it changes viability, and every route the engine permits next.</p>
+                    </div>
+                </div>
+            </aside>
+        </div>
+    </section>
+
+    <div class="workflow-inspector-templates" hidden>
+        @foreach (WorkflowProcessViewModel process in Model.Processes)
+        {
+            <template id="process-template-@process.Id.ToString("N")"
+                      data-heading="@process.Name"
+                      data-context="@process.LaneLabel process · version @process.VersionNumber"
+                      data-lane="@process.LaneKey"
+                      data-live-template>
+                <section class="workflow-inspector__process workflow-inspector__process--@process.LaneKey">
+                    <p>@process.Description</p>
+                    <dl class="workflow-inspector__metrics">
+                        <div><dt>Active now</dt><dd>@process.ActiveInstances</dd></div>
+                        <div><dt>Completed</dt><dd>@process.CompletedInstances</dd></div>
+                        <div><dt>Steps</dt><dd>@process.Steps.Count</dd></div>
+                    </dl>
+                    <h3>Execution order</h3>
+                    <ol class="workflow-inspector__step-list">
+                        @foreach (WorkflowStepViewModel step in process.Steps.OrderBy(step => step.Sequence))
+                        {
+                            <li><button type="button" data-inspector-template="step-template-@step.Id.ToString("N")"><span>@step.Sequence</span><strong>@step.Name</strong><small>@step.ActionType</small></button></li>
+                        }
+                    </ol>
+                    <a class="secondary-action" href="/Admin/Process/Edit/@process.Id">Edit this definition</a>
+                </section>
+            </template>
+        }
+
+        @foreach (WorkflowProcessViewModel process in Model.Processes)
+        {
+            @foreach (WorkflowStepViewModel step in process.Steps)
+            {
+                <template id="step-template-@step.Id.ToString("N")"
+                          data-heading="@step.Name"
+                          data-context="@process.Name · @step.ActionType"
+                          data-lane="@process.LaneKey"
+                          data-live-template>
+                    <section class="workflow-inspector__step workflow-inspector__step--@process.LaneKey">
+                        <p class="workflow-inspector__objective">@step.Objective</p>
+
+                        <div class="workflow-inspector__health">
+                            <span><b>@step.CurrentInstances</b> here now</span>
+                            <span><b>@step.Health.Running</b> working</span>
+                            <span><b>@step.Health.Pending</b> waiting</span>
+                            <span class="@(step.Health.Overdue > 0 ? "has-warning" : "")"><b>@step.Health.Overdue</b> overdue</span>
+                            <span><b>@step.Health.Completed</b> done</span>
+                        </div>
+
+                        <dl class="workflow-inspector__contract">
+                            <div><dt>Agent receives</dt><dd class="preserve-lines">@step.TaskInstructionsTemplate</dd></div>
+                            <div><dt>Information required</dt><dd class="preserve-lines">@(string.IsNullOrWhiteSpace(step.RequiredFacts) ? "No formal prerequisite facts declared." : step.RequiredFacts)</dd></div>
+                            <div><dt>Information added</dt><dd class="preserve-lines">@(string.IsNullOrWhiteSpace(step.ProducedFacts) ? "The result is recorded in the company history; no named fact is declared." : step.ProducedFacts)</dd></div>
+                            <div><dt>Viability impact</dt><dd class="preserve-lines">@(string.IsNullOrWhiteSpace(step.ViabilityImpact) ? "No explicit viability impact declared." : step.ViabilityImpact)</dd></div>
+                            <div><dt>State on entry</dt><dd>@step.StateOnActivate</dd></div>
+                            <div><dt>Due</dt><dd>@(step.DueAfterDays == 0 && step.DueAfterHours == 0 ? "Immediately" : $"After {step.DueAfterDays} day(s), {step.DueAfterHours} hour(s)")</dd></div>
+                        </dl>
+
+                        @if (!string.IsNullOrWhiteSpace(step.QuestionSetTemplate))
+                        {
+                            <details class="workflow-inspector__questions"><summary>Expected answer shape</summary><p class="preserve-lines">@step.QuestionSetTemplate</p></details>
+                        }
+
+                        <h3>Permitted next routes</h3>
+                        <div class="workflow-inspector__routes">
+                            @if (step.Transitions.Count == 0)
+                            {
+                                <p class="workflow-inspector__warning">No transition is configured. The process cannot advance from this step.</p>
+                            }
+                            @foreach (WorkflowTransitionViewModel transition in step.Transitions)
+                            {
+                                <article class="@(transition.IsDefault ? "is-default" : "") @(transition.IsTerminal ? "is-terminal" : "")">
+                                    <header>
+                                        <code>@transition.OutcomeKey</code>
+                                        @if (transition.IsDefault)
+                                        {
+                                            <span>Default</span>
+                                        }
+                                    </header>
+                                    <strong>@transition.OutcomeLabel</strong>
+                                    <dl>
+                                        <div><dt>Follow when</dt><dd>The current task completes with outcome <code>@transition.OutcomeKey</code>.</dd></div>
+                                        <div><dt>Then</dt><dd>@transition.DestinationLabel</dd></div>
+                                        <div><dt>Engine effect</dt><dd>@transition.EffectLabel</dd></div>
+                                        <div><dt>Resulting state</dt><dd>@transition.ResultingState</dd></div>
+                                        <div><dt>Used</dt><dd>@transition.HistoricalCompletedCount.ToString("N0") completed task@(transition.HistoricalCompletedCount == 1 ? "" : "s") took this route.</dd></div>
+                                        @if (transition.CurrentStateCount > 0 || transition.IsTerminal || transition.GraphTargetId.StartsWith("portal-", StringComparison.Ordinal))
+                                        {
+                                            <div><dt>There now</dt><dd>@transition.CurrentStateCount.ToString("N0") compan@(transition.CurrentStateCount == 1 ? "y is" : "ies are") currently in the resulting state.</dd></div>
+                                        }
+                                    </dl>
+                                </article>
+                            }
+                        </div>
+                    </section>
+                </template>
+            }
+        }
+    </div>
+</main>
+
+<script>
+(() => {
+    const viewport = document.getElementById('workflowViewport');
+    const space = document.getElementById('workflowSpace');
+    const stage = document.getElementById('workflowStage');
+    const svg = document.getElementById('workflowConnectors');
+    const zoomOutput = document.getElementById('workflowZoom');
+    const inspector = document.getElementById('workflowInspector');
+    const inspectorHeading = document.getElementById('workflowInspectorHeading');
+    const inspectorContext = document.getElementById('workflowInspectorContext');
+    const inspectorContent = document.getElementById('workflowInspectorContent');
+    const refreshToggle = document.querySelector('[data-workflow-auto-refresh]');
+    const refreshStatus = document.getElementById('workflowRefreshStatus');
+    const stageWidth = Number(stage.dataset.width);
+    const stageHeight = Number(stage.dataset.height);
+    const svgNamespace = 'http://www.w3.org/2000/svg';
+    let scale = 1;
+    let dragging = false;
+    let dragStart = null;
+    let activeTemplateId = null;
+    let refreshInProgress = false;
+
+    function positionScaledStage() {
+        const scaledWidth = stageWidth * scale;
+        const horizontalInset = Math.max(0, (viewport.clientWidth - scaledWidth) / 2);
+        stage.style.left = `${horizontalInset}px`;
+        space.style.width = `${Math.max(viewport.clientWidth, scaledWidth + (horizontalInset * 2))}px`;
+        space.style.height = `${stageHeight * scale}px`;
+    }
+
+    function setScale(nextScale, preserveCentre = true) {
+        const previousScale = scale;
+        const centreX = (viewport.scrollLeft + viewport.clientWidth / 2) / previousScale;
+        const centreY = (viewport.scrollTop + viewport.clientHeight / 2) / previousScale;
+        scale = Math.max(.52, Math.min(1.35, nextScale));
+        stage.style.transform = `scale(${scale})`;
+        positionScaledStage();
+        zoomOutput.value = `${Math.round(scale * 100)}%`;
+        zoomOutput.textContent = zoomOutput.value;
+        if (preserveCentre) {
+            viewport.scrollLeft = Math.max(0, centreX * scale - viewport.clientWidth / 2);
+            viewport.scrollTop = Math.max(0, centreY * scale - viewport.clientHeight / 2);
+        }
+    }
+
+    function fitSurface() {
+        const horizontal = (viewport.clientWidth - 24) / stageWidth;
+        setScale(Math.min(.96, horizontal), false);
+        viewport.scrollTo({ left: 0, top: 0 });
+    }
+
+    function nodeCentre(node) {
+        return {
+            x: node.offsetLeft + node.offsetWidth / 2,
+            y: node.offsetTop + node.offsetHeight / 2
+        };
+    }
+
+    function chooseConnectorSides(edge, from, to) {
+        if (from === to) return { fromSide: 'left', toSide: 'top', route: 'loop' };
+        const fromCentre = nodeCentre(from);
+        const toCentre = nodeCentre(to);
+        const deltaX = toCentre.x - fromCentre.x;
+        const deltaY = toCentre.y - fromCentre.y;
+        const sameRow = from.dataset.nodeRow === to.dataset.nodeRow;
+        const sameColumn = from.dataset.nodeColumn === to.dataset.nodeColumn;
+
+        if (edge.kind === 'handoff') return Math.abs(deltaX) < 1
+            ? { fromSide: 'bottom', toSide: 'top', route: 'direct' }
+            : { fromSide: 'bottom', toSide: deltaX >= 0 ? 'left' : 'right', route: 'handoff' };
+
+        if (edge.kind === 'branch' && sameColumn && !sameRow)
+            return deltaY < 0
+                ? { fromSide: 'top', toSide: 'bottom', route: 'parallel-return' }
+                : { fromSide: 'left', toSide: 'left', route: 'side-channel' };
+
+        if (edge.kind === 'branch' && sameRow && deltaX < 0) {
+            const side = from.dataset.nodeRow === '0' ? 'bottom' : 'top';
+            return { fromSide: side, toSide: side, route: 'row-channel' };
+        }
+
+        if (sameRow || Math.abs(deltaX) > Math.abs(deltaY) * 1.25) {
+            return deltaX >= 0
+                ? { fromSide: 'right', toSide: 'left', route: 'horizontal' }
+                : { fromSide: 'left', toSide: 'right', route: 'horizontal' };
+        }
+
+        return deltaY >= 0
+            ? { fromSide: 'bottom', toSide: 'top', route: 'vertical' }
+            : { fromSide: 'top', toSide: 'bottom', route: 'vertical' };
+    }
+
+    function pointOnPort(node, side, rate) {
+        const left = node.offsetLeft;
+        const top = node.offsetTop;
+        const right = left + node.offsetWidth;
+        const bottom = top + node.offsetHeight;
+        if (side === 'top') return { x: left + node.offsetWidth * rate, y: top };
+        if (side === 'bottom') return { x: left + node.offsetWidth * rate, y: bottom };
+        if (side === 'left') return { x: left, y: top + node.offsetHeight * rate };
+        return { x: right, y: top + node.offsetHeight * rate };
+    }
+
+    function moveOut(point, side, distance) {
+        if (side === 'top') return { x: point.x, y: point.y - distance };
+        if (side === 'bottom') return { x: point.x, y: point.y + distance };
+        if (side === 'left') return { x: point.x - distance, y: point.y };
+        return { x: point.x + distance, y: point.y };
+    }
+
+    function compactPoints(points) {
+        const unique = points.filter((point, index) => index === 0
+            || point.x !== points[index - 1].x
+            || point.y !== points[index - 1].y);
+        const simplified = [];
+        unique.forEach(point => {
+            while (simplified.length >= 2) {
+                const previous = simplified[simplified.length - 1];
+                const beforePrevious = simplified[simplified.length - 2];
+                if ((beforePrevious.x === previous.x && previous.x === point.x)
+                    || (beforePrevious.y === previous.y && previous.y === point.y))
+                    simplified.pop();
+                else
+                    break;
+            }
+            simplified.push(point);
+        });
+        return simplified;
+    }
+
+    function pathFromPoints(points) {
+        return points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
+    }
+
+    function labelOnLongestSegment(points) {
+        let chosen = null;
+        for (let index = 1; index < points.length - 2; index++) {
+            const start = points[index];
+            const end = points[index + 1];
+            const length = Math.abs(end.x - start.x) + Math.abs(end.y - start.y);
+            if (!chosen || length > chosen.length) chosen = { start, end, length };
+        }
+        chosen ||= { start: points[0], end: points[points.length - 1], length: 0 };
+        const horizontal = chosen.start.y === chosen.end.y;
+        return {
+            x: (chosen.start.x + chosen.end.x) / 2 + (horizontal ? 0 : 7),
+            y: (chosen.start.y + chosen.end.y) / 2 + (horizontal ? -6 : 3),
+            anchor: horizontal ? 'middle' : 'start'
+        };
+    }
+
+    function connectorGeometry(plan) {
+        const start = pointOnPort(plan.from, plan.sides.fromSide, plan.fromRate);
+        const end = pointOnPort(plan.to, plan.sides.toSide, plan.toRate);
+        const startOut = moveOut(start, plan.sides.fromSide, 18);
+        const endOut = moveOut(end, plan.sides.toSide, 18);
+        let points;
+
+        if (plan.sides.route === 'direct' || plan.sides.route === 'parallel-return') {
+            points = [start, end];
+        } else if (plan.sides.route === 'handoff') {
+            const sourceLane = document.querySelector(`.workflow-lane[data-lane-id="${CSS.escape(plan.from.dataset.laneId)}"]`);
+            const laneCorridorY = sourceLane ? sourceLane.offsetTop + sourceLane.offsetHeight + 9 : startOut.y + 46;
+            const leftCorridorX = 18 + ((plan.track % 2) * 8);
+            points = [start, startOut, { x: startOut.x, y: laneCorridorY }, { x: leftCorridorX, y: laneCorridorY }, { x: leftCorridorX, y: endOut.y }, endOut, end];
+        } else if (plan.sides.fromSide === plan.sides.toSide) {
+            if (plan.sides.fromSide === 'left' || plan.sides.fromSide === 'right') {
+                const direction = plan.sides.fromSide === 'left' ? -1 : 1;
+                const corridorX = (direction < 0 ? Math.min(startOut.x, endOut.x) : Math.max(startOut.x, endOut.x))
+                    + direction * (6 + ((plan.track % 2) * 3));
+                points = [start, startOut, { x: corridorX, y: startOut.y }, { x: corridorX, y: endOut.y }, endOut, end];
+            } else {
+                const direction = plan.sides.fromSide === 'top' ? -1 : 1;
+                const corridorY = (direction < 0 ? Math.min(startOut.y, endOut.y) : Math.max(startOut.y, endOut.y))
+                    + direction * (9 + ((plan.track % 3) * 9));
+                points = [start, startOut, { x: startOut.x, y: corridorY }, { x: endOut.x, y: corridorY }, endOut, end];
+            }
+        } else if ((plan.sides.fromSide === 'left' || plan.sides.fromSide === 'right')
+            && (plan.sides.toSide === 'left' || plan.sides.toSide === 'right')) {
+            const middleX = (startOut.x + endOut.x) / 2;
+            points = [start, startOut, { x: middleX, y: startOut.y }, { x: middleX, y: endOut.y }, endOut, end];
+        } else if ((plan.sides.fromSide === 'top' || plan.sides.fromSide === 'bottom')
+            && (plan.sides.toSide === 'top' || plan.sides.toSide === 'bottom')) {
+            const verticalDistance = endOut.y - startOut.y;
+            const middleY = plan.kind === 'branch' && verticalDistance > 0
+                ? startOut.y + (verticalDistance * .32)
+                : (startOut.y + endOut.y) / 2 + (plan.kind === 'branch' ? ((plan.track % 3) - 1) * 7 : 0);
+            points = [start, startOut, { x: startOut.x, y: middleY }, { x: endOut.x, y: middleY }, endOut, end];
+        } else {
+            const elbow = plan.sides.fromSide === 'left' || plan.sides.fromSide === 'right'
+                ? { x: endOut.x, y: startOut.y }
+                : { x: startOut.x, y: endOut.y };
+            points = [start, startOut, elbow, endOut, end];
+        }
+
+        points = compactPoints(points);
+        const label = labelOnLongestSegment(points);
+        if (plan.kind === 'branch' && plan.sides.route === 'vertical' && plan.to.offsetTop > plan.from.offsetTop)
+            label.y = plan.from.offsetTop + plan.from.offsetHeight + 22;
+        if (plan.sides.route === 'side-channel')
+            label.y = Math.max(plan.from.offsetTop, plan.to.offsetTop) - 16;
+        if (plan.sides.route === 'parallel-return') {
+            label.x = start.x + 8;
+            label.y = (start.y + end.y) / 2 + 3;
+            label.anchor = 'start';
+        }
+        return { d: pathFromPoints(points), label };
+    }
+
+    function drawEdges() {
+        svg.querySelectorAll('.workflow-connector, .workflow-connector-label').forEach(item => item.remove());
+        const plans = [...document.querySelectorAll('.workflow-edge-data')].map((edge, index) => {
+            const from = document.getElementById(edge.dataset.edgeFrom);
+            const to = document.getElementById(edge.dataset.edgeTo);
+            if (!from || !to) return null;
+            const plan = {
+                edge,
+                from,
+                to,
+                index,
+                kind: edge.dataset.edgeKind,
+                track: Number(edge.dataset.edgeTrack || 0)
+            };
+            plan.sides = chooseConnectorSides(plan, from, to);
+            return plan;
+        }).filter(Boolean);
+
+        const portGroups = new Map();
+        plans.forEach(plan => {
+            [['from', plan.from, plan.sides.fromSide, nodeCentre(plan.to)], ['to', plan.to, plan.sides.toSide, nodeCentre(plan.from)]].forEach(([endName, node, side, other]) => {
+                const key = `${node.id}|${side}`;
+                const group = portGroups.get(key) || [];
+                group.push({ plan, endName, order: side === 'top' || side === 'bottom' ? other.x : other.y });
+                portGroups.set(key, group);
+            });
+        });
+        portGroups.forEach(group => {
+            group.sort((left, right) => left.order - right.order || left.plan.index - right.plan.index);
+            const straightDefaults = group.filter(port => {
+                const plan = port.plan;
+                const fromCentre = nodeCentre(plan.from);
+                const toCentre = nodeCentre(plan.to);
+                return plan.kind === 'default' && (
+                    plan.sides.route === 'direct'
+                    || (plan.sides.route === 'horizontal' && Math.abs(fromCentre.y - toCentre.y) < 1)
+                    || (plan.sides.route === 'vertical' && Math.abs(fromCentre.x - toCentre.x) < 1));
+            });
+
+            if (straightDefaults.length === 1 && group.length > 1) {
+                const preferred = straightDefaults[0];
+                preferred.plan[`${preferred.endName}Rate`] = .5;
+                const remaining = group.filter(port => port !== preferred);
+                remaining.forEach((port, index) => {
+                    const lowerSide = port.order < preferred.order;
+                    const rangeStart = lowerSide ? .16 : .68;
+                    const rangeEnd = lowerSide ? .32 : .84;
+                    const peers = remaining.filter(candidate => (candidate.order < preferred.order) === lowerSide);
+                    const peerIndex = peers.indexOf(port);
+                    const rate = peers.length === 1 ? (rangeStart + rangeEnd) / 2 : rangeStart + ((rangeEnd - rangeStart) * peerIndex / (peers.length - 1));
+                    port.plan[`${port.endName}Rate`] = rate;
+                });
+                return;
+            }
+
+            group.forEach((port, index) => {
+                port.plan[`${port.endName}Rate`] = group.length === 1 ? .5 : .18 + (.64 * index / (group.length - 1));
+            });
+        });
+
+        plans.forEach(plan => {
+            const geometry = connectorGeometry(plan);
+            const path = document.createElementNS(svgNamespace, 'path');
+            path.setAttribute('d', geometry.d);
+            path.setAttribute('class', `workflow-connector workflow-connector--${plan.kind}`);
+            path.classList.toggle('is-dimmed', plan.from.classList.contains('is-dimmed'));
+            path.dataset.edgeFrom = plan.edge.dataset.edgeFrom;
+            path.dataset.edgeTo = plan.edge.dataset.edgeTo;
+            path.setAttribute('marker-end', `url(#workflowArrow${plan.kind[0].toUpperCase()}${plan.kind.slice(1)})`);
+            svg.appendChild(path);
+
+            // Terminal cards already carry their outcome and destination. Repeating the
+            // same text on the short incoming edge obscures the branch at fit-to-screen.
+            if (plan.edge.dataset.edgeLabel && plan.kind !== 'default' && plan.kind !== 'terminal') {
+                const label = document.createElementNS(svgNamespace, 'text');
+                label.setAttribute('x', geometry.label.x);
+                label.setAttribute('y', geometry.label.y);
+                label.setAttribute('class', `workflow-connector-label workflow-connector-label--${plan.kind}`);
+                label.classList.toggle('is-dimmed', plan.from.classList.contains('is-dimmed'));
+                label.setAttribute('text-anchor', geometry.label.anchor);
+                label.textContent = plan.edge.dataset.edgeLabel;
+                svg.appendChild(label);
+            }
+        });
+    }
+
+    function showInspector(templateId, preserveScroll = false) {
+        const template = document.getElementById(templateId);
+        if (!template) return;
+        const previousScrollTop = inspectorContent.scrollTop;
+        activeTemplateId = templateId;
+        inspectorHeading.textContent = template.dataset.heading || 'Workflow details';
+        inspectorContext.textContent = template.dataset.context || 'Workflow';
+        inspector.dataset.lane = template.dataset.lane || '';
+        inspectorContent.replaceChildren(template.content.cloneNode(true));
+        inspectorContent.scrollTop = preserveScroll ? previousScrollTop : 0;
+        inspector.classList.add('is-open');
+        document.querySelectorAll('.workflow-graph-node.is-selected').forEach(item => item.classList.remove('is-selected'));
+        const selected = document.querySelector(`[data-inspector-template="${templateId}"]`);
+        selected?.classList.add('is-selected');
+    }
+
+    document.addEventListener('click', event => {
+        const drillDown = event.target.closest('[data-inspector-template]');
+        if (drillDown) {
+            showInspector(drillDown.dataset.inspectorTemplate);
+            return;
+        }
+        if (event.target.closest('[data-inspector-close]')) {
+            inspector.classList.remove('is-open');
+            activeTemplateId = null;
+            document.querySelectorAll('.workflow-graph-node.is-selected').forEach(item => item.classList.remove('is-selected'));
+        }
+    });
+
+    document.querySelectorAll('[data-workflow-zoom]').forEach(button => button.addEventListener('click', () => {
+        setScale(scale + (button.dataset.workflowZoom === 'in' ? .1 : -.1));
+    }));
+    document.querySelector('[data-workflow-fit]').addEventListener('click', fitSurface);
+
+    document.querySelectorAll('[data-focus-lane]').forEach(button => button.addEventListener('click', () => {
+        document.querySelectorAll('[data-focus-lane]').forEach(item => item.classList.toggle('is-active', item === button));
+        const laneId = button.dataset.focusLane;
+        document.querySelectorAll('[data-lane-id]').forEach(lane => lane.classList.toggle('is-dimmed', laneId !== 'all' && lane.dataset.laneId !== laneId));
+        document.querySelectorAll('.workflow-graph-node').forEach(node => {
+            const top = node.offsetTop;
+            const matchingLane = [...document.querySelectorAll('[data-lane-id]')].find(item => top >= item.offsetTop && top <= item.offsetTop + item.offsetHeight);
+            node.classList.toggle('is-dimmed', laneId !== 'all' && matchingLane?.dataset.laneId !== laneId);
+        });
+        drawEdges();
+        if (laneId === 'all') {
+            fitSurface();
+            return;
+        }
+        const lane = document.querySelector(`[data-lane-id="${laneId}"]`);
+        if (lane) {
+            setScale(Math.min(.95, (viewport.clientWidth - 24) / stageWidth), false);
+            viewport.scrollTo({ left: 0, top: Math.max(0, lane.offsetTop * scale - 16) });
+        }
+    }));
+
+    viewport.addEventListener('pointerdown', event => {
+        if (event.target.closest('button, summary, a')) return;
+        dragging = true;
+        dragStart = { x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
+        viewport.setPointerCapture(event.pointerId);
+        viewport.classList.add('is-panning');
+    });
+    viewport.addEventListener('pointermove', event => {
+        if (!dragging) return;
+        viewport.scrollLeft = dragStart.left - (event.clientX - dragStart.x);
+        viewport.scrollTop = dragStart.top - (event.clientY - dragStart.y);
+    });
+    viewport.addEventListener('pointerup', event => {
+        dragging = false;
+        viewport.releasePointerCapture(event.pointerId);
+        viewport.classList.remove('is-panning');
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+        positionScaledStage();
+        drawEdges();
+    });
+    resizeObserver.observe(stage);
+
+    async function refreshLiveState() {
+        if (!refreshToggle.checked || document.hidden || refreshInProgress) return;
+        refreshInProgress = true;
+        refreshStatus.textContent = 'Checking…';
+        try {
+            const response = await fetch(window.location.href, {
+                cache: 'no-store',
+                headers: { Accept: 'text/html', 'X-Workflow-Refresh': 'live-counts' }
+            });
+            if (!response.ok) throw new Error(`Refresh returned ${response.status}`);
+            const freshDocument = new DOMParser().parseFromString(await response.text(), 'text/html');
+
+            freshDocument.querySelectorAll('[data-live-key]').forEach(source => {
+                const key = source.dataset.liveKey;
+                const target = document.querySelector(`[data-live-key="${CSS.escape(key)}"]`);
+                if (!target) return;
+                target.className = source.className;
+                target.replaceChildren(...[...source.childNodes].map(node => node.cloneNode(true)));
+            });
+
+            freshDocument.querySelectorAll('template[data-live-template]').forEach(source => {
+                const target = document.getElementById(source.id);
+                if (!target) return;
+                target.innerHTML = source.innerHTML;
+            });
+
+            if (activeTemplateId && inspector.classList.contains('is-open'))
+                showInspector(activeTemplateId, true);
+
+            const generated = freshDocument.querySelector('[data-live-key="generated-at"]');
+            const time = generated?.textContent.match(/\d{2}:\d{2}:\d{2}/)?.[0];
+            refreshStatus.textContent = `Updated ${time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+        } catch (error) {
+            refreshStatus.textContent = 'Refresh failed · retrying';
+        } finally {
+            refreshInProgress = false;
+        }
+    }
+
+    const refreshPreferenceKey = 'crm.workflow.auto-refresh';
+    refreshToggle.checked = localStorage.getItem(refreshPreferenceKey) !== 'off';
+    refreshToggle.addEventListener('change', () => {
+        localStorage.setItem(refreshPreferenceKey, refreshToggle.checked ? 'on' : 'off');
+        refreshStatus.textContent = refreshToggle.checked ? 'Refresh enabled' : 'Refresh paused';
+        if (refreshToggle.checked) refreshLiveState();
+    });
+    window.setInterval(refreshLiveState, 10000);
+
+    requestAnimationFrame(() => {
+        drawEdges();
+        fitSurface();
+    });
+})();
+</script>

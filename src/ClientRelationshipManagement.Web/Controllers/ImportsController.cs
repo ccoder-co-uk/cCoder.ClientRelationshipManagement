@@ -8,13 +8,14 @@ using Microsoft.Extensions.Options;
 
 namespace ClientRelationshipManagement.Web.Controllers;
 
+[Route("Admin/Imports")]
 public sealed class ImportsController(
     IPlatformDbContextFactory dbContextFactory,
     IOptions<ImportWorkflowOptions> options,
     ICRMAuthInfo authInfo)
     : Controller
 {
-    [HttpGet]
+    [HttpGet("")]
     public async Task<IActionResult> Index()
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect)

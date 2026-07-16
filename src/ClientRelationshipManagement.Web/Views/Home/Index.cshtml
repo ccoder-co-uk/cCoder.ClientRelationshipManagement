@@ -9,35 +9,130 @@
             <div>
                 <h1>Action Board</h1>
             </div>
+            <div class="section-heading__actions">
+                <span class="dashboard-refresh-status" data-dashboard-refresh-status aria-live="polite">
+                    Live updates every 10 seconds
+                </span>
+                <form asp-action="SetAutoApproveProcessEmails" method="post" class="automation-switch-form">
+                    @Html.AntiForgeryToken()
+                    <label class="automation-switch">
+                        <span class="automation-switch__copy">
+                            <strong>Email auto-approval</strong>
+                            <small>Intent, spelling, grammar, and tone</small>
+                        </span>
+                        <input
+                            type="checkbox"
+                            name="enabled"
+                            value="true"
+                            checked="@Model.AutoApproveProcessEmails"
+                            onchange="this.form.submit()"
+                            aria-label="Automatically approve in-process emails" />
+                        <span class="automation-switch__track" aria-hidden="true"></span>
+                    </label>
+                </form>
+            </div>
         </div>
 
-        <div class="stats-rail stats-rail--primary">
-            <a class="metric-pill metric-link metric-pill--primary" href="/Clients">
-                <span>Total Clients</span>
-                <strong>@Model.TotalClients</strong>
-            </a>
-            <article class="metric-pill metric-pill--primary">
-                <span>Open Actions</span>
-                <strong>@Model.TotalOpenActions</strong>
-            </article>
-            <article class="metric-pill metric-pill--primary">
-                <span>Due Today</span>
-                <strong>@Model.DueTodayActions</strong>
-            </article>
-            <article class="metric-pill metric-pill--primary">
-                <span>Overdue</span>
-                <strong>@Model.OverdueActions</strong>
-            </article>
-        </div>
+        <div class="lane-stats-grid">
+            <section class="lane-stats lane-stats--lead">
+                <div class="lane-stats__heading">
+                    <span class="lane-stats__bar" aria-hidden="true"></span>
+                    <h2>Leads</h2>
+                    <a class="agent-health agent-health--@Model.LeadAgentHealth.Status" href="/Admin/Runs" data-agent-health="lead" title="@Model.LeadAgentHealth.Label" aria-label="@Model.LeadAgentHealth.Label"><span aria-hidden="true"></span></a>
+                </div>
+                <div class="lane-stats__metrics">
+                    <a class="metric-pill metric-link metric-pill--lane-lead" href="/Leads?scope=candidates">
+                        <span>Company Pool</span>
+                        <strong data-dashboard-stat="candidateCompanies">@Model.CandidateCompanies</strong>
+                    </a>
+                    <a class="metric-pill metric-link metric-pill--lane-lead" href="/Leads?scope=active">
+                        <span>Active Leads</span>
+                        <strong data-dashboard-stat="activeLeads">@Model.ActiveLeads</strong>
+                    </a>
+                    <a class="metric-pill metric-link metric-pill--lane-lead" href="/Leads?scope=suppressed">
+                        <span>Not Interested</span>
+                        <strong data-dashboard-stat="suppressedCompanies">@Model.SuppressedCompanies</strong>
+                    </a>
+                    <a class="metric-pill metric-link metric-pill--lane-lead" href="/Leads?tasks=open">
+                        <span>Open Actions</span>
+                        <strong data-dashboard-stat="leadOpenActions">@Model.LeadActions.Open</strong>
+                    </a>
+                    <a class="metric-pill metric-link metric-pill--lane-lead" href="/Leads?tasks=due-today">
+                        <span>Due Today</span>
+                        <strong data-dashboard-stat="leadDueTodayActions">@Model.LeadActions.DueToday</strong>
+                    </a>
+                    <a class="metric-pill metric-link metric-pill--lane-lead" href="/Leads?tasks=overdue">
+                        <span>Overdue</span>
+                        <strong data-dashboard-stat="leadOverdueActions">@Model.LeadActions.Overdue</strong>
+                    </a>
+                </div>
+            </section>
 
-        <div class="stats-rail stats-rail--states">
-            @foreach (ClientStateSummaryViewModel state in Model.ClientStateSummaries)
-            {
-                <a class="metric-pill metric-link metric-pill--state @state.AccentClass" href="@state.LinkUrl" title="@state.Tooltip">
-                    <span>@state.Label</span>
-                    <strong>@state.Count</strong>
-                </a>
-            }
+            <section class="lane-stats lane-stats--opportunity">
+                <div class="lane-stats__heading">
+                    <span class="lane-stats__bar" aria-hidden="true"></span>
+                    <h2>Opportunities</h2>
+                    <a class="agent-health agent-health--@Model.OpportunityAgentHealth.Status" href="/Admin/Runs" data-agent-health="opportunity" title="@Model.OpportunityAgentHealth.Label" aria-label="@Model.OpportunityAgentHealth.Label"><span aria-hidden="true"></span></a>
+                </div>
+                <div class="lane-stats__metrics">
+                    <a class="metric-pill metric-link metric-pill--lane-opportunity" href="/Opportunities?scope=active">
+                        <span>Open Pipeline</span>
+                        <strong data-dashboard-stat="activeOpportunities">@Model.ActiveOpportunities</strong>
+                    </a>
+                    @foreach (ClientStateSummaryViewModel state in Model.ClientStateSummaries.Where(item => item.Lane == "opportunity"))
+                    {
+                        <a class="metric-pill metric-link metric-pill--state @state.AccentClass" href="@state.LinkUrl" title="@state.Tooltip" data-dashboard-state="@state.Label.Replace(" ", string.Empty)">
+                            <span>@state.Label</span>
+                            <strong>@state.Count</strong>
+                        </a>
+                    }
+                    <a class="metric-pill metric-link metric-pill--lane-opportunity" href="/Opportunities?tasks=open">
+                        <span>Open Actions</span>
+                        <strong data-dashboard-stat="opportunityOpenActions">@Model.OpportunityActions.Open</strong>
+                    </a>
+                    <a class="metric-pill metric-link metric-pill--lane-opportunity" href="/Opportunities?tasks=due-today">
+                        <span>Due Today</span>
+                        <strong data-dashboard-stat="opportunityDueTodayActions">@Model.OpportunityActions.DueToday</strong>
+                    </a>
+                    <a class="metric-pill metric-link metric-pill--lane-opportunity" href="/Opportunities?tasks=overdue">
+                        <span>Overdue</span>
+                        <strong data-dashboard-stat="opportunityOverdueActions">@Model.OpportunityActions.Overdue</strong>
+                    </a>
+                </div>
+            </section>
+
+            <section class="lane-stats lane-stats--client">
+                <div class="lane-stats__heading">
+                    <span class="lane-stats__bar" aria-hidden="true"></span>
+                    <h2>Clients</h2>
+                    <a class="agent-health agent-health--@Model.ClientAgentHealth.Status" href="/Admin/Runs" data-agent-health="client" title="@Model.ClientAgentHealth.Label" aria-label="@Model.ClientAgentHealth.Label"><span aria-hidden="true"></span></a>
+                </div>
+                <div class="lane-stats__metrics">
+                    <a class="metric-pill metric-link metric-pill--lane-client" href="/Clients?scope=accounts">
+                        <span>Client Accounts</span>
+                        <strong data-dashboard-stat="totalClients">@Model.TotalClients</strong>
+                    </a>
+                    @foreach (ClientStateSummaryViewModel state in Model.ClientStateSummaries.Where(item => item.Lane == "client"))
+                    {
+                        <a class="metric-pill metric-link metric-pill--state @state.AccentClass" href="@state.LinkUrl" title="@state.Tooltip" data-dashboard-state="@state.Label.Replace(" ", string.Empty)">
+                            <span>@state.Label</span>
+                            <strong>@state.Count</strong>
+                        </a>
+                    }
+                    <a class="metric-pill metric-link metric-pill--lane-client" href="/Clients?tasks=open">
+                        <span>Open Actions</span>
+                        <strong data-dashboard-stat="clientOpenActions">@Model.ClientActions.Open</strong>
+                    </a>
+                    <a class="metric-pill metric-link metric-pill--lane-client" href="/Clients?tasks=due-today">
+                        <span>Due Today</span>
+                        <strong data-dashboard-stat="clientDueTodayActions">@Model.ClientActions.DueToday</strong>
+                    </a>
+                    <a class="metric-pill metric-link metric-pill--lane-client" href="/Clients?tasks=overdue">
+                        <span>Overdue</span>
+                        <strong data-dashboard-stat="clientOverdueActions">@Model.ClientActions.Overdue</strong>
+                    </a>
+                </div>
+            </section>
         </div>
     </section>
 
@@ -47,10 +142,7 @@
                 <h2>Top 5 scheduled actions</h2>
             </div>
             <div class="section-heading__actions">
-                @if (Model.AdditionalActionCount > 0)
-                {
-                    <span class="queue-count">+@Model.AdditionalActionCount more queued</span>
-                }
+                <span class="queue-count" data-dashboard-queue-count hidden="@(Model.AdditionalActionCount == 0 ? "hidden" : null)">+@Model.AdditionalActionCount more queued</span>
             </div>
         </div>
 
@@ -78,20 +170,16 @@
                         ? "View Lead Details"
                         : "View Client Details";
 
-                    <article class="todo-card @(todo.IsOverdue ? "is-overdue" : string.Empty)">
-                        <div class="todo-meta">
-                            <span class="todo-type">@todo.SourceLabel</span>
-                            <div class="todo-meta__actions">
-                                <a class="todo-detail-link" href="@todo.DetailUrl">@detailLinkText</a>
-                                <span class="todo-due">@todo.DueLabel</span>
-                            </div>
-                        </div>
-
+                    <article class="todo-card todo-card--@todo.Lane @(todo.IsOverdue ? "is-overdue" : string.Empty) @(todo.IsAgentWorking ? "is-agent-active" : string.Empty)" data-task-id="@todo.Id" aria-busy="@(todo.IsAgentWorking ? "true" : "false")">
                         <div class="todo-card__content">
                             <div class="todo-card__header">
                                 <h3><a href="@todo.DetailUrl">@todo.Title</a></h3>
+                                <span class="todo-type">@todo.SourceLabel</span>
                             </div>
-                            <p class="todo-context">@todo.Context</p>
+                            @if (todo.Lane != "opportunity")
+                            {
+                                <p class="todo-context">@todo.Context</p>
+                            }
                             <p class="todo-description">@todo.Description</p>
                             @if (todo.HasDraftEmail)
                             {
@@ -105,13 +193,20 @@
                             }
                         </div>
 
+                        <div class="todo-meta">
+                            <div class="todo-meta__actions">
+                                <a class="todo-detail-link" href="@todo.DetailUrl">@detailLinkText</a>
+                                <span class="todo-due">@todo.DueLabel</span>
+                            </div>
+                        </div>
+
                         <div class="todo-card__actions">
                             @if (todo.HasDraftEmail)
                             {
-                                <button type="button" class="secondary-action" data-open-dialog="draft-@todo.Id">Review Draft</button>
+                                <button type="button" class="secondary-action" data-open-dialog="draft-@todo.Id" data-task-control disabled="@todo.IsAgentWorking">Review Draft</button>
                             }
 
-                            <button type="button" class="secondary-action" data-open-dialog="progress-@todo.Id">Record Progress</button>
+                            <button type="button" class="secondary-action" data-open-dialog="progress-@todo.Id" data-task-control disabled="@todo.IsAgentWorking">Record Progress</button>
 
                             <dialog id="progress-@todo.Id" class="crm-dialog">
                                 <div class="crm-dialog__header">
@@ -309,6 +404,11 @@
                                 </dialog>
                             }
                         </div>
+
+                        <div class="todo-agent-status" hidden="@(!todo.IsAgentWorking ? "hidden" : null)" aria-live="polite">
+                            <span class="todo-agent-spinner" aria-hidden="true"></span>
+                            <strong>AI agent working</strong>
+                        </div>
                     </article>
                 }
             </div>
@@ -318,6 +418,150 @@
 
 <script>
     (() => {
+        const statsEndpoint = '@Url.Action("Stats", "Home")';
+        const numberFormatter = new Intl.NumberFormat();
+        const refreshStatus = document.querySelector("[data-dashboard-refresh-status]");
+        let currentQueueVersion = @Model.QueueVersion;
+        let refreshInFlight = false;
+        let reloadPending = false;
+        let refreshTimer;
+
+        const setStat = (name, value) => {
+            const element = document.querySelector(`[data-dashboard-stat="${name}"]`);
+            if (element) {
+                element.textContent = numberFormatter.format(value ?? 0);
+            }
+        };
+
+        const syncActiveTasks = (activeTaskIds) => {
+            const activeIds = new Set((activeTaskIds ?? []).map(String));
+            document.querySelectorAll("[data-task-id]").forEach((card) => {
+                const isActive = activeIds.has(card.dataset.taskId);
+                card.classList.toggle("is-agent-active", isActive);
+                card.setAttribute("aria-busy", isActive ? "true" : "false");
+                const status = card.querySelector(".todo-agent-status");
+                if (status) {
+                    status.hidden = !isActive;
+                }
+                card.querySelectorAll("[data-task-control]").forEach((control) => {
+                    control.disabled = isActive;
+                });
+            });
+        };
+
+        const syncAgentHealth = (lane, health) => {
+            const indicator = document.querySelector(`[data-agent-health="${lane}"]`);
+            if (!indicator || !health) {
+                return;
+            }
+
+            indicator.classList.remove("agent-health--unknown", "agent-health--healthy", "agent-health--degraded", "agent-health--failing");
+            indicator.classList.add(`agent-health--${health.status ?? "unknown"}`);
+            const label = health.status === "healthy"
+                ? `Agent healthy: all ${health.sampleSize} recent tasks succeeded`
+                : health.status === "degraded"
+                    ? `Agent needs attention: ${health.succeeded} of ${health.sampleSize} recent tasks succeeded`
+                    : health.status === "failing"
+                        ? `Agent failing: all ${health.sampleSize} recent tasks failed`
+                        : "Agent health unavailable: no completed tasks recorded for this lane";
+            indicator.title = label;
+            indicator.setAttribute("aria-label", label);
+        };
+
+        const refreshStats = async () => {
+            if (refreshInFlight || reloadPending) {
+                return;
+            }
+
+            refreshInFlight = true;
+            try {
+                const response = await fetch(`${statsEndpoint}?_=${Date.now()}`, {
+                    cache: "no-store",
+                    credentials: "same-origin",
+                    headers: { "X-Requested-With": "XMLHttpRequest" }
+                });
+
+                if (response.redirected || !response.ok || !response.headers.get("content-type")?.includes("application/json")) {
+                    throw new Error(response.redirected ? "session" : "request");
+                }
+
+                const stats = await response.json();
+                syncActiveTasks(stats.activeTaskIds);
+                syncAgentHealth("lead", stats.leadAgentHealth);
+                syncAgentHealth("opportunity", stats.opportunityAgentHealth);
+                syncAgentHealth("client", stats.clientAgentHealth);
+                if (stats.queueVersion !== currentQueueVersion) {
+                    currentQueueVersion = stats.queueVersion;
+                    reloadPending = true;
+                    window.clearInterval(refreshTimer);
+                    window.location.reload();
+                    return;
+                }
+
+                setStat("totalClients", stats.totalClients);
+                setStat("activeOpportunities", stats.activeOpportunities);
+                setStat("activeLeads", stats.activeLeads);
+                setStat("totalOpenActions", stats.totalOpenActions);
+                setStat("dueTodayActions", stats.dueTodayActions);
+                setStat("overdueActions", stats.overdueActions);
+                setStat("candidateCompanies", stats.candidateCompanies);
+                setStat("suppressedCompanies", stats.suppressedCompanies);
+                setStat("leadOpenActions", stats.leadActions?.open);
+                setStat("leadDueTodayActions", stats.leadActions?.dueToday);
+                setStat("leadOverdueActions", stats.leadActions?.overdue);
+                setStat("opportunityOpenActions", stats.opportunityActions?.open);
+                setStat("opportunityDueTodayActions", stats.opportunityActions?.dueToday);
+                setStat("opportunityOverdueActions", stats.opportunityActions?.overdue);
+                setStat("clientOpenActions", stats.clientActions?.open);
+                setStat("clientDueTodayActions", stats.clientActions?.dueToday);
+                setStat("clientOverdueActions", stats.clientActions?.overdue);
+
+                (stats.clientStates ?? []).forEach((state) => {
+                    const stateElement = document.querySelector(`[data-dashboard-state="${state.key}"] strong`);
+                    if (stateElement) {
+                        stateElement.textContent = numberFormatter.format(state.count ?? 0);
+                    }
+                });
+
+                const queueCount = document.querySelector("[data-dashboard-queue-count]");
+                if (queueCount) {
+                    queueCount.hidden = !stats.additionalActionCount;
+                    queueCount.textContent = `+${numberFormatter.format(stats.additionalActionCount ?? 0)} more queued`;
+                }
+
+                if (refreshStatus) {
+                    refreshStatus.textContent = `Updated ${new Date(stats.updatedOn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+                    refreshStatus.classList.remove("dashboard-refresh-status--error");
+                }
+            } catch (error) {
+                if (refreshStatus) {
+                    refreshStatus.textContent = error.message === "session"
+                        ? "Session expired — refresh to sign in"
+                        : "Live update delayed — retrying";
+                    refreshStatus.classList.add("dashboard-refresh-status--error");
+                }
+            } finally {
+                if (!reloadPending) {
+                    refreshInFlight = false;
+                }
+            }
+        };
+
+        refreshTimer = window.setInterval(refreshStats, 10_000);
+        refreshStats();
+        window.addEventListener("focus", refreshStats);
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "visible") {
+                refreshStats();
+            }
+        });
+        window.addEventListener("pageshow", (event) => {
+            if (event.persisted) {
+                window.location.reload();
+            }
+        });
+        window.addEventListener("pagehide", () => window.clearInterval(refreshTimer), { once: true });
+
         const openButtons = document.querySelectorAll("[data-open-dialog]");
         const closeButtons = document.querySelectorAll("[data-close-dialog]");
 

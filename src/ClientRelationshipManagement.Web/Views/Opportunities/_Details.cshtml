@@ -1,0 +1,34 @@
+@model ClientRelationshipManagement.Web.Models.Opportunities.OpportunityDetailsViewModel
+@{
+    string suffix = Model.Id.ToString("N");
+}
+
+<section class="company-detail" aria-label="Opportunity details for @Model.CompanyName">
+    <div class="company-detail__heading">
+        <div><h2>@Model.CompanyName</h2><p>@Model.CompanyNumber · @Model.RelationshipStatus · @Model.Stage</p></div>
+    </div>
+    <div class="tab-strip company-detail__tabs" role="tablist">
+        <button type="button" class="tab-strip__tab is-active" data-detail-tab="summary-@suffix" aria-selected="true">Opportunity evidence</button>
+        <button type="button" class="tab-strip__tab" data-detail-tab="activity-@suffix" aria-selected="false">Activity <span class="tab-strip__count">@Model.Activities.Count</span></button>
+        <button type="button" class="tab-strip__tab" data-detail-tab="tasks-@suffix" aria-selected="false">Process steps <span class="tab-strip__count">@Model.Tasks.Count</span></button>
+        <button type="button" class="tab-strip__tab" data-detail-tab="artifacts-@suffix" aria-selected="false">Artifact feed <span class="tab-strip__count">@Model.Artifacts.Count</span></button>
+    </div>
+    <section class="tab-panel" data-detail-panel="summary-@suffix">
+        <dl class="detail-summary-grid">
+            <div><dt>Stage</dt><dd>@Model.Stage</dd></div><div><dt>Primary contact</dt><dd>@(string.IsNullOrWhiteSpace(Model.PrimaryContact) ? "Not set" : Model.PrimaryContact)</dd></div><div><dt>Value / probability</dt><dd>@Model.EstimatedValue · @Model.Probability</dd></div>
+        </dl>
+        <div class="company-detail__notes detail-evidence"><strong>Opportunity summary</strong><p>@(string.IsNullOrWhiteSpace(Model.OpportunitySummary) ? "Not yet recorded." : Model.OpportunitySummary)</p></div>
+        <div class="company-detail__notes detail-evidence"><strong>Problem and value hypothesis</strong><p>@(string.IsNullOrWhiteSpace(Model.PainSummary) ? "Problem not yet recorded." : Model.PainSummary)</p><p>@(string.IsNullOrWhiteSpace(Model.ValueHypothesis) ? "Value hypothesis not yet recorded." : Model.ValueHypothesis)</p></div>
+        @if (!string.IsNullOrWhiteSpace(Model.DecisionProcess)) { <div class="company-detail__notes detail-evidence"><strong>Decision process</strong><p>@Model.DecisionProcess</p></div> }
+        @foreach (var evidence in Model.LeadEvidence) { <div class="company-detail__notes detail-evidence"><strong>Inherited lead evidence · @evidence.Status</strong><p>@evidence.Notes</p></div> }
+    </section>
+    <section class="tab-panel" data-detail-panel="activity-@suffix" hidden><div class="table-shell"><table class="crm-table"><thead><tr><th>When</th><th>Type</th><th>Summary</th><th>Outcome</th></tr></thead><tbody>
+        @if (Model.Activities.Count == 0) { <tr><td colspan="4">No contact activity has been recorded.</td></tr> } else { @foreach (var activity in Model.Activities) { <tr><td>@activity.OccurredOn.ToLocalTime().ToString("dd MMM yyyy HH:mm")</td><td>@activity.Type</td><td>@activity.Summary</td><td>@activity.Outcome</td></tr> } }
+    </tbody></table></div></section>
+    <section class="tab-panel" data-detail-panel="tasks-@suffix" hidden><div class="table-shell"><table class="crm-table"><thead><tr><th>Step</th><th>Task</th><th>State</th><th>Outcome</th><th>Due</th><th>Evidence</th></tr></thead><tbody>
+        @if (Model.Tasks.Count == 0) { <tr><td colspan="6">No opportunity process steps are recorded.</td></tr> } else { @foreach (var task in Model.Tasks) { <tr><td>@task.Step</td><td>@task.Title</td><td>@task.State</td><td>@task.Outcome</td><td>@task.DueOn.ToLocalTime().ToString("dd MMM yyyy HH:mm")</td><td class="detail-evidence">@task.Notes</td></tr> } }
+    </tbody></table></div></section>
+    <section class="tab-panel" data-detail-panel="artifacts-@suffix" hidden>
+        @if (Model.Artifacts.Count == 0) { <div class="empty-state empty-state--compact"><strong>No company-history artifacts yet.</strong><p>Inherited Lead evidence and process-step outcomes remain visible in the other tabs.</p></div> } else { <div class="company-history company-history--embedded">@foreach (var item in Model.Artifacts) { <article class="company-history__item company-history__item--opportunity"><time>@item.OccurredOn.ToLocalTime().ToString("dd MMM yyyy HH:mm")</time><div><div class="company-history__meta"><span>@item.EventType</span><span>@item.Confidence</span></div><h3>@item.Summary</h3><p class="detail-evidence">@item.Details</p></div></article> }</div> }
+    </section>
+</section>

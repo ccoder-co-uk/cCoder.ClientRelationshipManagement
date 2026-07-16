@@ -12,7 +12,6 @@ public class Company
     public string ContactEmailAddress { get; set; }
     public string ContactPhoneNumber { get; set; }
     public string WebsiteUrl { get; set; }
-    public string RegisteredOfficeText { get; set; }
     public string CreatedBy { get; set; }
     public string LastUpdatedBy { get; set; }
     public DateTimeOffset CreatedOn { get; set; }

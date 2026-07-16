@@ -40,20 +40,24 @@
                 </a>
 
                 <nav class="product-nav" aria-label="Primary">
-                    <a class="@(currentPath == "/" ? "is-active" : string.Empty)" href="/">Dashboard</a>
+                    <a class="@(currentPath.StartsWithSegments("/Companies") ? "is-active" : string.Empty)" href="/Companies">Companies</a>
                     <a class="@(currentPath.StartsWithSegments("/Leads") ? "is-active" : string.Empty)" href="/Leads">Leads</a>
                     <a class="@(currentPath.StartsWithSegments("/Opportunities") ? "is-active" : string.Empty)" href="/Opportunities">Opportunities</a>
                     <a class="@(currentPath.StartsWithSegments("/Clients") ? "is-active" : string.Empty)" href="/Clients">Clients</a>
                     <a class="@(currentPath.StartsWithSegments("/Documentation") ? "is-active" : string.Empty)" href="/Documentation">Documentation</a>
-                    <details class="product-nav__dropdown @((currentPath.StartsWithSegments("/Admin") || currentPath.StartsWithSegments("/Emails") || currentPath.StartsWithSegments("/Imports") || currentPath.StartsWithSegments("/Process")) ? "is-active" : string.Empty)">
-                        <summary>Admin</summary>
+                    <div class="product-nav__dropdown @(currentPath.StartsWithSegments("/Admin") ? "is-active" : string.Empty)">
+                        <a class="product-nav__trigger" href="/Admin" aria-haspopup="true">Admin</a>
                         <div class="product-nav__submenu">
-                            <a class="@(currentPath.StartsWithSegments("/Admin") ? "is-active" : string.Empty)" href="/Admin">Overview</a>
-                            <a class="@(currentPath.StartsWithSegments("/Emails") ? "is-active" : string.Empty)" href="/Emails">Emails</a>
-                            <a class="@(currentPath.StartsWithSegments("/Imports") ? "is-active" : string.Empty)" href="/Imports">Imports</a>
-                            <a class="@(currentPath.StartsWithSegments("/Process") ? "is-active" : string.Empty)" href="/Process">Process</a>
+                            <a class="@(currentPath.StartsWithSegments("/Admin/Messages") ? "is-active" : string.Empty)" href="/Admin/Messages">Agent messages</a>
+                            <a class="@(currentPath.StartsWithSegments("/Admin/Runs") ? "is-active" : string.Empty)" href="/Admin/Runs">Agent runs</a>
+                            <a class="@(currentPath.StartsWithSegments("/Admin/Emails") ? "is-active" : string.Empty)" href="/Admin/Emails">Emails</a>
+                            <a class="@(currentPath.StartsWithSegments("/Admin/Imports") ? "is-active" : string.Empty)" href="/Admin/Imports">Imports</a>
+                            <a class="@(currentPath.StartsWithSegments("/Admin/Process") ? "is-active" : string.Empty)" href="/Admin/Process">Process</a>
+                            <a class="@(currentPath.StartsWithSegments("/Admin/Process/Designer") ? "is-active" : string.Empty)" href="/Admin/Process/Designer">Process designer</a>
+                            <a class="@(currentPath.StartsWithSegments("/Admin/ProcessProposals") ? "is-active" : string.Empty)" href="/Admin/ProcessProposals">Process proposals</a>
+                            <a class="@(currentPath.StartsWithSegments("/Admin/Process/WorkflowModel") ? "is-active" : string.Empty)" href="/Admin/Process/WorkflowModel">Workflow model</a>
                         </div>
-                    </details>
+                    </div>
                 </nav>
 
                 @if (isAuthenticated)

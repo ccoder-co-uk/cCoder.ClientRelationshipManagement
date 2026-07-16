@@ -27,7 +27,12 @@ public sealed class ClientsController(
     [ValidateAntiForgeryToken]
     public IActionResult Create(ClientEditorViewModel _) => RedirectToAction("Index", "Leads");
 
-    public async Task<IActionResult> Index(string search = null, string status = null, string sort = "name")
+    public async Task<IActionResult> Index(
+        string search = null,
+        string status = null,
+        string sort = "name",
+        string scope = null,
+        string tasks = null)
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
@@ -39,11 +44,39 @@ public sealed class ClientsController(
         RelationshipStatus? parsedStatus = Enum.TryParse<RelationshipStatus>(status, true, out RelationshipStatus statusValue)
             ? statusValue
             : null;
+        string normalizedScope = scope?.Trim().ToLowerInvariant() ?? string.Empty;
+        string taskFilter = NormalizeTaskFilter(tasks);
+        DateTimeOffset today = new(DateTime.UtcNow.Date, TimeSpan.Zero);
+        DateTimeOffset tomorrow = today.AddDays(1);
 
-        List<ClientListProjection> rows = await context.TenantCompanyRelationships
+        IQueryable<PlatformEntities.TenantCompanyRelationship> relationshipQuery = context.TenantCompanyRelationships
             .AsNoTracking()
             .Include(relationship => relationship.Company)
-            .Where(relationship => !relationship.IsArchived && readableTenantIds.Contains(relationship.TenantId))
+            .Where(relationship => !relationship.IsArchived
+                && readableTenantIds.Contains(relationship.TenantId)
+                && relationship.ClientAccounts.Any(account => account.Status != ClientAccountStatus.Closed));
+
+        if (taskFilter.Length > 0)
+        {
+            relationshipQuery = taskFilter switch
+            {
+                "due-today" => relationshipQuery.Where(relationship => context.ProcessTasks.Any(task =>
+                    task.TenantCompanyRelationshipId == relationship.Id
+                    && task.ClientAccountId.HasValue
+                    && task.State == ProcessTaskState.Pending
+                    && task.DueOn >= today && task.DueOn < tomorrow)),
+                "overdue" => relationshipQuery.Where(relationship => context.ProcessTasks.Any(task =>
+                    task.TenantCompanyRelationshipId == relationship.Id
+                    && task.ClientAccountId.HasValue
+                    && task.State == ProcessTaskState.Pending && task.DueOn < today)),
+                _ => relationshipQuery.Where(relationship => context.ProcessTasks.Any(task =>
+                    task.TenantCompanyRelationshipId == relationship.Id
+                    && task.ClientAccountId.HasValue
+                    && task.State == ProcessTaskState.Pending))
+            };
+        }
+
+        List<ClientListProjection> rows = await relationshipQuery
             .Select(relationship => new ClientListProjection
             {
                 Id = relationship.Id,
@@ -103,6 +136,8 @@ public sealed class ClientsController(
             TotalClients = rows.Count,
             Search = search ?? string.Empty,
             StatusFilter = parsedStatus?.ToString() ?? string.Empty,
+            Scope = normalizedScope,
+            TaskFilter = taskFilter,
             Sort = sort ?? "name",
             StatusOptions = BuildStatusOptions(parsedStatus?.ToString()),
             SortOptions = BuildSortOptions(sort),
@@ -129,6 +164,14 @@ public sealed class ClientsController(
             ]
         });
     }
+
+    static string NormalizeTaskFilter(string value) => value?.Trim().ToLowerInvariant() switch
+    {
+        "due-today" => "due-today",
+        "overdue" => "overdue",
+        "open" => "open",
+        _ => string.Empty
+    };
 
     [HttpGet]
     public async Task<IActionResult> Edit(Guid id)
@@ -164,6 +207,16 @@ public sealed class ClientsController(
             return NotFound();
 
         PlatformEntities.Company company = relationship.Company;
+        PlatformEntities.ClientAccount clientAccount = await context.ClientAccounts
+            .Where(item => item.TenantCompanyRelationshipId == relationship.Id && item.Status != ClientAccountStatus.Closed)
+            .OrderByDescending(item => item.CreatedOn)
+            .FirstOrDefaultAsync();
+        PlatformEntities.RelationshipContact primaryContact = await context.RelationshipContacts
+            .Include(item => item.CompanyContact)
+            .Where(item => item.TenantCompanyRelationshipId == relationship.Id && item.Status == RelationshipContactStatus.Active)
+            .OrderByDescending(item => item.IsPrimary)
+            .ThenBy(item => item.CreatedOn)
+            .FirstOrDefaultAsync();
         DateTimeOffset now = DateTimeOffset.UtcNow;
         string currentUser = CurrentUserId;
 
@@ -177,6 +230,30 @@ public sealed class ClientsController(
         company.IsVerified = model.IsVerified;
         company.LastUpdatedBy = currentUser;
         company.LastUpdated = now;
+
+        if (primaryContact is not null)
+        {
+            primaryContact.IsPrimary = true;
+            primaryContact.CompanyContact.Name = model.PrimaryContactName.Trim();
+            primaryContact.CompanyContact.Position = Normalize(model.PrimaryContactPosition);
+            primaryContact.CompanyContact.EmailAddress = Normalize(model.ContactEmailAddress);
+            primaryContact.CompanyContact.PhoneNumber = Normalize(model.ContactPhoneNumber);
+            primaryContact.CompanyContact.IsPrimary = true;
+            primaryContact.CompanyContact.LastUpdatedBy = currentUser;
+            primaryContact.CompanyContact.LastUpdated = now;
+            primaryContact.LastUpdatedBy = currentUser;
+            primaryContact.LastUpdated = now;
+        }
+
+        if (clientAccount is not null)
+        {
+            clientAccount.Status = model.ClientAccountStatus;
+            clientAccount.AccountReference = Normalize(model.AccountReference);
+            clientAccount.ContractSignedOn = ToDateTimeOffset(model.ContractSignedOn);
+            clientAccount.GoLiveOn = ToDateTimeOffset(model.GoLiveOn);
+            clientAccount.LastUpdatedBy = currentUser;
+            clientAccount.LastUpdated = now;
+        }
 
         relationship.AccountOwnerDisplayName = Normalize(model.AccountOwner);
         relationship.AccountOwnerUserId ??= currentUser;
@@ -409,6 +486,19 @@ public sealed class ClientsController(
         if (relationship is null || !readableTenantIds.Contains(relationship.TenantId))
             return null;
 
+        PlatformEntities.ClientAccount clientAccount = await context.ClientAccounts
+            .AsNoTracking()
+            .Where(item => item.TenantCompanyRelationshipId == relationshipId && item.Status != ClientAccountStatus.Closed)
+            .OrderByDescending(item => item.CreatedOn)
+            .FirstOrDefaultAsync();
+        PlatformEntities.RelationshipContact primaryContact = await context.RelationshipContacts
+            .AsNoTracking()
+            .Include(item => item.CompanyContact)
+            .Where(item => item.TenantCompanyRelationshipId == relationshipId && item.Status == RelationshipContactStatus.Active)
+            .OrderByDescending(item => item.IsPrimary)
+            .ThenBy(item => item.CreatedOn)
+            .FirstOrDefaultAsync();
+
         List<PlatformEntities.Activity> activities = await context.Activities
             .AsNoTracking()
             .Where(activity => activity.TenantCompanyRelationshipId == relationshipId)
@@ -558,8 +648,10 @@ public sealed class ClientsController(
             SubmitLabel = "Save changes",
             CompanyName = postedModel?.CompanyName ?? CompanyNames.ResolvePreferredName(relationship.Company),
             TradingName = postedModel?.TradingName ?? relationship.Company.TradingName ?? string.Empty,
-            ContactEmailAddress = postedModel?.ContactEmailAddress ?? relationship.Company.ContactEmailAddress ?? string.Empty,
-            ContactPhoneNumber = postedModel?.ContactPhoneNumber ?? relationship.Company.ContactPhoneNumber ?? string.Empty,
+            ContactEmailAddress = postedModel?.ContactEmailAddress ?? primaryContact?.CompanyContact.EmailAddress ?? relationship.Company.ContactEmailAddress ?? string.Empty,
+            ContactPhoneNumber = postedModel?.ContactPhoneNumber ?? primaryContact?.CompanyContact.PhoneNumber ?? relationship.Company.ContactPhoneNumber ?? string.Empty,
+            PrimaryContactName = postedModel?.PrimaryContactName ?? primaryContact?.CompanyContact.Name ?? string.Empty,
+            PrimaryContactPosition = postedModel?.PrimaryContactPosition ?? primaryContact?.CompanyContact.Position ?? string.Empty,
             WebsiteUrl = postedModel?.WebsiteUrl ?? relationship.Company.WebsiteUrl ?? string.Empty,
             AccountOwner = postedModel?.AccountOwner ?? relationship.AccountOwnerDisplayName ?? string.Empty,
             LeadSource = postedModel?.LeadSource ?? relationship.LeadSource ?? string.Empty,
@@ -574,6 +666,10 @@ public sealed class ClientsController(
             Status = postedModel?.Status ?? relationship.Status,
             CurrentStage = postedModel?.CurrentStage ?? relationship.CurrentStage,
             Priority = postedModel?.Priority ?? relationship.Priority,
+            ClientAccountStatus = postedModel?.ClientAccountStatus ?? clientAccount?.Status ?? ClientAccountStatus.Onboarding,
+            AccountReference = postedModel?.AccountReference ?? clientAccount?.AccountReference ?? string.Empty,
+            ContractSignedOn = postedModel?.ContractSignedOn ?? clientAccount?.ContractSignedOn?.LocalDateTime.Date,
+            GoLiveOn = postedModel?.GoLiveOn ?? clientAccount?.GoLiveOn?.LocalDateTime.Date,
             StatusOptions = Enum.GetValues<RelationshipStatus>()
                 .Select(status => new SelectListItem(DisplayText.Humanize(status), status.ToString()))
                 .ToList(),
@@ -582,6 +678,10 @@ public sealed class ClientsController(
                 .ToList(),
             PriorityOptions = Enum.GetValues<RelationshipPriority>()
                 .Select(priority => new SelectListItem(DisplayText.Humanize(priority), priority.ToString()))
+                .ToList(),
+            ClientAccountStatusOptions = Enum.GetValues<ClientAccountStatus>()
+                .Where(status => status != ClientAccountStatus.Closed)
+                .Select(status => new SelectListItem(DisplayText.Humanize(status), status.ToString()))
                 .ToList(),
             ActivityTypeOptions = Enum.GetValues<ActivityType>()
                 .Select(type => new SelectListItem(DisplayText.Humanize(type), type.ToString()))
