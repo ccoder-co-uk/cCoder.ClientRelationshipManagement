@@ -17,6 +17,7 @@ namespace ClientRelationshipManagement.Web.Controllers;
 [Route("Admin/Emails")]
 public sealed class EmailsController(
     IOperationsCoordinationService operationsService,
+    IProcessCoordinationService processService,
     ISalesCoordinationService salesWorkspaceService,
     IEmailDraftWorkflowService emailDraftWorkflowService,
     WebAgentMessageService agentMessageService,
@@ -37,11 +38,20 @@ public sealed class EmailsController(
             ? stateValue
             : null;
 
+        IQueryable<cCoder.ClientRelationshipManagement.Platform.Models.Entities.ProcessTask> processTasks =
+            processService.RetrieveTasks();
         IQueryable<EmailRowProjection> query = operationsService.RetrieveAllEmails()
             .AsNoTracking()
             .Include(email => email.TenantCompanyRelationship)
                 .ThenInclude(relationship => relationship.Company)
             .Where(email => readableTenantIds.Contains(email.TenantCompanyRelationship.TenantId))
+            .Where(email =>
+                (email.State != EmailState.Draft
+                    && email.State != EmailState.Approved
+                    && email.State != EmailState.Sending
+                    && email.State != EmailState.Failed)
+                || !processTasks.Any(task => task.EmailId == email.Id)
+                || processTasks.Any(task => task.EmailId == email.Id && task.State == ProcessTaskState.Pending))
             .Select(email => new EmailRowProjection
             {
                 Id = email.Id,
@@ -148,6 +158,12 @@ public sealed class EmailsController(
         if (current is null)
             return NotFound();
 
+        if (!await IsEmailActionableAsync(request.EmailId, cancellationToken))
+        {
+            TempData["EmailsNotice"] = "That email belongs to completed or cancelled workflow work and cannot be approved.";
+            return RedirectToAction(nameof(Index));
+        }
+
         var saved = await emailDraftWorkflowService.SaveDraftAsync(new EmailDraftUpsertCommand
         {
             ClientId = request.ClientId,
@@ -219,13 +235,19 @@ public sealed class EmailsController(
 
     [HttpPost("Approve")]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Approve(ApproveEmailRequest request)
+    public async Task<IActionResult> Approve(ApproveEmailRequest request, CancellationToken cancellationToken)
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
         if (request.ClientId == Guid.Empty || request.EmailId == Guid.Empty)
             return RedirectToAction(nameof(Index));
+
+        if (!await IsEmailActionableAsync(request.EmailId, cancellationToken))
+        {
+            TempData["EmailsNotice"] = "That email belongs to completed or cancelled workflow work and cannot be approved.";
+            return RedirectToAction(nameof(Index));
+        }
 
         var email = await emailDraftWorkflowService.ApproveAsync(
             request.ClientId,
@@ -237,6 +259,14 @@ public sealed class EmailsController(
             : "Email approved for sending.";
 
         return RedirectToAction(nameof(Index));
+    }
+
+    async ValueTask<bool> IsEmailActionableAsync(Guid emailId, CancellationToken cancellationToken)
+    {
+        bool hasWorkflowTask = await processService.RetrieveTasks()
+            .AnyAsync(task => task.EmailId == emailId, cancellationToken);
+        return !hasWorkflowTask || await processService.RetrieveTasks()
+            .AnyAsync(task => task.EmailId == emailId && task.State == ProcessTaskState.Pending, cancellationToken);
     }
 
     [HttpPost("MarkSent")]

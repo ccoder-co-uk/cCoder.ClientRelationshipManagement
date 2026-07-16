@@ -2,6 +2,7 @@ using cCoder.Security;
 using cCoder.Security.Exposures;
 using ClientRelationshipManagement.Web.Configuration;
 using ClientRelationshipManagement.Web.Services.Migration;
+using ClientRelationshipManagement.Web.Services.Processes;
 
 namespace ClientRelationshipManagement.Web;
 
@@ -99,6 +100,11 @@ public class Program
             scope.ServiceProvider
                 .GetRequiredService<ICrmDatabaseInitialiser>()
                 .InitialiseAsync()
+                .GetAwaiter()
+                .GetResult();
+            scope.ServiceProvider
+                .GetRequiredService<IWorkflowAutomationService>()
+                .EnsureSeedProcessesAsync()
                 .GetAwaiter()
                 .GetResult();
         }

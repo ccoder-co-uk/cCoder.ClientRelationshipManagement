@@ -23,9 +23,6 @@ internal static class ProcessVersionMigration
                 && instance.State == ProcessInstanceState.Active)
             .ToListAsync(cancellationToken);
 
-        if (instances.Count == 0)
-            return 0;
-
         Dictionary<string, ProcessStep> liveSteps = await processes.RetrieveSteps()
             .Where(step => step.ProcessDefinitionId == liveDefinition.Id && step.IsActive)
             .ToDictionaryAsync(step => step.Key, StringComparer.OrdinalIgnoreCase, cancellationToken);
@@ -52,6 +49,21 @@ internal static class ProcessVersionMigration
                 && task.State == ProcessTaskState.Pending)
             .ToListAsync(cancellationToken);
 
+        EmailState[] cancellableEmailStates =
+        [
+            EmailState.Draft,
+            EmailState.Approved,
+            EmailState.Failed
+        ];
+        List<ProcessTask> obsoleteEmailTasks = await processes.RetrieveTasks()
+            .Include(task => task.ProcessStep)
+            .Include(task => task.Email)
+            .Where(task => obsoleteDefinitionIds.Contains(task.ProcessStep.ProcessDefinitionId)
+                && task.EmailId.HasValue
+                && task.Email != null
+                && cancellableEmailStates.Contains(task.Email.State))
+            .ToListAsync(cancellationToken);
+
         DateTimeOffset now = DateTimeOffset.UtcNow;
         foreach (ProcessTask task in pendingTasks)
         {
@@ -74,6 +86,19 @@ internal static class ProcessVersionMigration
                 task.Email.LastUpdatedBy = changedBy;
                 task.Email.LastUpdated = now;
             }
+        }
+
+        // A rejected or otherwise cancelled workflow task may still have a Draft email.
+        // Once its definition is superseded that email is no longer actionable and must
+        // not survive in the approval queue simply because the task was already terminal.
+        foreach (ProcessTask task in obsoleteEmailTasks)
+        {
+            task.Email!.State = EmailState.Cancelled;
+            task.Email.ApprovedBy = null;
+            task.Email.ApprovedOn = null;
+            task.Email.ScheduledSendTimeUtc = null;
+            task.Email.LastUpdatedBy = changedBy;
+            task.Email.LastUpdated = now;
         }
 
         foreach (ProcessInstance instance in instances)

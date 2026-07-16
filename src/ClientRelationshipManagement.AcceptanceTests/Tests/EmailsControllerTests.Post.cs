@@ -10,6 +10,42 @@ namespace ClientRelationshipManagement.AcceptanceTests.Tests;
 public sealed partial class EmailsControllerTests
 {
     [CRMAcceptanceFact]
+    public async Task CancelledWorkflowDraft_IsHiddenAndCannotBeApproved()
+    {
+        (Guid relationshipId, Guid opportunityId, _) = await SeedOpportunityWorkspaceAsync();
+        ProcessTask emailTask = await MoveOpportunityToEmailStepAsync(opportunityId);
+        Guid emailId = emailTask.EmailId!.Value;
+        string obsoleteSubject = Unique("Cancelled workflow draft");
+
+        await ExecuteInAdminContextAsync(async db =>
+        {
+            ProcessTask task = await db.ProcessTasks.SingleAsync(item => item.Id == emailTask.Id);
+            task.State = ProcessTaskState.Cancelled;
+            Email email = await db.Emails.SingleAsync(item => item.Id == emailId);
+            email.Subject = obsoleteSubject;
+            email.State = EmailState.Draft;
+            await db.SaveChangesAsync();
+        });
+
+        string html = await GetStringAsync($"/Admin/Emails?id={emailId}");
+        html.Should().NotContain(obsoleteSubject);
+
+        using HttpResponseMessage response = await PostFormWithAntiforgeryAsync(
+            "/Admin/Emails",
+            "/Admin/Emails/Approve",
+            new Dictionary<string, string>
+            {
+                ["ClientId"] = relationshipId.ToString(),
+                ["EmailId"] = emailId.ToString()
+            });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        Email unchanged = await QueryInAdminContextAsync(db => db.Emails.AsNoTracking()
+            .SingleAsync(item => item.Id == emailId));
+        unchanged.State.Should().Be(EmailState.Draft);
+    }
+
+    [CRMAcceptanceFact]
     public async Task Post_Reject_ArchivesEmailAndStartsApprovalConversationWithReason()
     {
         (Guid relationshipId, Guid opportunityId, _) = await SeedOpportunityWorkspaceAsync();

@@ -74,10 +74,43 @@ public sealed class WorkflowAutomationService(
         foreach (string tenantId in tenantIds.Where(tenantId => !string.IsNullOrWhiteSpace(tenantId)))
             await EnsureProcessContractsAsync(storage, tenantId, cancellationToken);
 
+        await CancelOrphanedDraftsFromArchivedStepsAsync(storage, tenantIds, cancellationToken);
         await MoveActiveInstancesToLiveDefinitionsAsync(storage, tenantIds, cancellationToken);
         await ReclassifyLegacyScoringRejectionsAsync(storage, cancellationToken);
         await storage.SaveAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    async ValueTask CancelOrphanedDraftsFromArchivedStepsAsync(
+        IWorkflowBroker storage,
+        IReadOnlyCollection<string> tenantIds,
+        CancellationToken cancellationToken)
+    {
+        EmailState[] cancellableStates = [EmailState.Draft, EmailState.Approved, EmailState.Failed];
+        List<PlatformEntities.ProcessTask> orphanedTasks = await storage.ProcessTasks
+            .Include(task => task.ProcessStep).ThenInclude(step => step.ProcessDefinition)
+            .Include(task => task.Email)
+            .Where(task => task.State != ProcessTaskState.Pending
+                && task.EmailId.HasValue
+                && task.Email != null
+                && cancellableStates.Contains(task.Email.State)
+                && task.ProcessStep.ProcessDefinition.LifecycleState == ProcessDefinitionLifecycleState.Archived
+                && tenantIds.Contains(task.ProcessStep.ProcessDefinition.TenantId))
+            .ToListAsync(cancellationToken);
+
+        if (orphanedTasks.Count == 0)
+            return;
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        foreach (PlatformEntities.ProcessTask task in orphanedTasks)
+        {
+            task.Email!.State = EmailState.Cancelled;
+            task.Email.ApprovedBy = null;
+            task.Email.ApprovedOn = null;
+            task.Email.ScheduledSendTimeUtc = null;
+            task.Email.LastUpdatedBy = CurrentUserId;
+            task.Email.LastUpdated = now;
+        }
     }
 
     async ValueTask MoveActiveInstancesToLiveDefinitionsAsync(
