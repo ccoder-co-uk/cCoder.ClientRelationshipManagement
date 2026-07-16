@@ -19,8 +19,11 @@ public sealed partial class ProcessControllerTests
         Guid sourceStepId = Guid.NewGuid();
         Guid instanceId = Guid.NewGuid();
         Guid taskId = Guid.NewGuid();
+        Guid cancelledTaskId = Guid.NewGuid();
+        Guid orphanedDraftId = Guid.NewGuid();
         string tenantId = Unique("migration-tenant");
         DateTimeOffset now = DateTimeOffset.UtcNow;
+        (Guid relationshipId, _, _) = await SeedOpportunityWorkspaceAsync();
 
         Fixture.Factory.GrantTenant(tenantId);
 
@@ -84,6 +87,36 @@ public sealed partial class ProcessControllerTests
                 CreatedOn = now,
                 LastUpdated = now
             });
+            db.Emails.Add(new Email
+            {
+                Id = orphanedDraftId,
+                TenantCompanyRelationshipId = relationshipId,
+                Subject = "Obsolete draft",
+                BodyText = "Content from the superseded process step.",
+                BodyHtml = "Content from the superseded process step.",
+                State = EmailState.Draft,
+                CreatedBy = Fixture.Settings.UserId,
+                LastUpdatedBy = Fixture.Settings.UserId,
+                CreatedOn = now,
+                LastUpdated = now
+            });
+            db.ProcessTasks.Add(new ProcessTask
+            {
+                Id = cancelledTaskId,
+                ProcessInstanceId = instanceId,
+                ProcessStepId = sourceStepId,
+                EmailId = orphanedDraftId,
+                ActionType = ProcessActionType.Email,
+                State = ProcessTaskState.Cancelled,
+                DueOn = now,
+                RenderedTitle = "Already cancelled email task",
+                RenderedEmailSubject = "Obsolete draft",
+                RenderedEmailBody = "Content from the superseded process step.",
+                CreatedBy = Fixture.Settings.UserId,
+                LastUpdatedBy = Fixture.Settings.UserId,
+                CreatedOn = now,
+                LastUpdated = now
+            });
             await db.SaveChangesAsync();
         });
 
@@ -109,7 +142,7 @@ public sealed partial class ProcessControllerTests
             await workflow.EnsureDefinitionCoverageAsync(activated.Id, CancellationToken.None);
         }
 
-        (ProcessInstance Instance, ProcessTask Task, ProcessTask NewTask, ProcessDefinition Source, ProcessStep LiveStep) result =
+        (ProcessInstance Instance, ProcessTask Task, ProcessTask NewTask, ProcessDefinition Source, ProcessStep LiveStep, Email OrphanedDraft) result =
             await QueryInAdminContextAsync(async db =>
             {
                 ProcessInstance instance = await db.ProcessInstances.AsNoTracking().SingleAsync(item => item.Id == instanceId);
@@ -119,7 +152,8 @@ public sealed partial class ProcessControllerTests
                     item.ProcessDefinitionId == activated.Id && item.Key == "stable-step");
                 ProcessTask newTask = await db.ProcessTasks.AsNoTracking().SingleAsync(item =>
                     item.ProcessInstanceId == instanceId && item.Id != taskId && item.State == ProcessTaskState.Pending);
-                return (instance, task, newTask, source, liveStep);
+                Email orphanedDraft = await db.Emails.AsNoTracking().SingleAsync(item => item.Id == orphanedDraftId);
+                return (instance, task, newTask, source, liveStep, orphanedDraft);
             });
 
         result.Instance.ProcessDefinitionId.Should().Be(activated.Id);
@@ -129,7 +163,22 @@ public sealed partial class ProcessControllerTests
         result.NewTask.RenderedTitle.Should().Be("Old task");
         result.Task.State.Should().Be(ProcessTaskState.Cancelled);
         result.Task.CompletionOutcomeKey.Should().Be("process-version-migrated");
+        result.OrphanedDraft.State.Should().Be(EmailState.Cancelled);
         result.Source.LifecycleState.Should().Be(ProcessDefinitionLifecycleState.Archived);
+
+        // Recreate the production legacy shape: the instance is already on the live
+        // definition, but its historical cancelled task still points at the old step.
+        await ExecuteInAdminContextAsync(async db =>
+        {
+            Email orphanedDraft = await db.Emails.SingleAsync(item => item.Id == orphanedDraftId);
+            orphanedDraft.State = EmailState.Draft;
+            await db.SaveChangesAsync();
+        });
+        await ExecuteWorkflowAsync(service => service.EnsureSeedProcessesAsync().AsTask());
+        Email healedOnStartup = await QueryInAdminContextAsync(db => db.Emails.AsNoTracking()
+            .SingleAsync(item => item.Id == orphanedDraftId));
+        healedOnStartup.State.Should().Be(EmailState.Cancelled);
+
         Fixture.Factory.RevokeTenant(tenantId);
     }
 

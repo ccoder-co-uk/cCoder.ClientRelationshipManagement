@@ -18,6 +18,7 @@ namespace ClientRelationshipManagement.Web.Controllers;
 public sealed class AdminController(
     DomainAgentMessageService agentMessageService,
     IOperationsCoordinationService operationsService,
+    IProcessCoordinationService processService,
     IProcessDraftService processDraftService,
     IProcessValidationService processValidationService,
     IWorkflowAutomationService workflowAutomationService,
@@ -33,7 +34,11 @@ public sealed class AdminController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        int pendingEmailApprovalCount = await operationsService.RetrieveAllEmails().CountAsync(item => item.State == EmailState.Draft);
+        int pendingEmailApprovalCount = await operationsService.RetrieveAllEmails().CountAsync(item =>
+            item.State == EmailState.Draft
+            && (!processService.RetrieveTasks().Any(task => task.EmailId == item.Id)
+                || processService.RetrieveTasks().Any(task =>
+                    task.EmailId == item.Id && task.State == ProcessTaskState.Pending)));
         int pendingMessageCount = await agentMessageService.RetrieveAll().CountAsync(item => item.State == AgentMessageState.Pending);
         int pendingProposalCount = await operationsService.RetrieveAllProcessDefinitions().CountAsync(
             item => item.LifecycleState == ProcessDefinitionLifecycleState.Draft);
