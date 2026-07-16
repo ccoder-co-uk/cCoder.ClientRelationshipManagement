@@ -1,4 +1,3 @@
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.ClientRelationshipManagement.Models.Security;
 using cCoder.Eventing;
@@ -12,12 +11,15 @@ using ClientRelationshipManagement.Web.Utilities;
 using System.Data;
 using System.Data.Common;
 using System.Text.RegularExpressions;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
+using ClientRelationshipManagement.Web.Brokers.Storages;
 using PlatformEntities = cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 
 namespace ClientRelationshipManagement.Web.Services.Processes;
 
 public sealed class WorkflowAutomationService(
-    IPlatformDbContextFactory dbContextFactory,
+    IWorkflowBroker storage,
+    IProcessCoordinationService processWorkspace,
     ICurrentUserMailProfileProvider currentUserMailProfileProvider,
     ICRMAuthInfo authInfo,
     IEventHub eventHub,
@@ -38,9 +40,8 @@ public sealed class WorkflowAutomationService(
 
     public async ValueTask EnsureSeedProcessesAsync(CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
-        await context.Database.ExecuteSqlRawAsync(
+        await using var transaction = await storage.BeginTransactionAsync(cancellationToken);
+        await storage.ExecuteSqlRawAsync(
             """
             EXEC sp_getapplock
                 @Resource = N'crm.process-seed',
@@ -55,36 +56,36 @@ public sealed class WorkflowAutomationService(
             DefaultTenantId,
             .. authInfo.ReadableTenants,
             .. authInfo.WriteableTenants,
-            .. await context.Leads.AsNoTracking().Select(lead => lead.TenantId).Distinct().ToListAsync(cancellationToken),
-            .. await context.TenantCompanyRelationships.AsNoTracking().Select(relationship => relationship.TenantId).Distinct().ToListAsync(cancellationToken)
+            .. await storage.Leads.AsNoTracking().Select(lead => lead.TenantId).Distinct().ToListAsync(cancellationToken),
+            .. await storage.TenantCompanyRelationships.AsNoTracking().Select(relationship => relationship.TenantId).Distinct().ToListAsync(cancellationToken)
         ];
 
-        await ArchiveDuplicateActiveDefinitionsAsync(context, tenantIds, cancellationToken);
+        await ArchiveDuplicateActiveDefinitionsAsync(storage, tenantIds, cancellationToken);
 
         foreach (string tenantId in tenantIds.Where(tenantId => !string.IsNullOrWhiteSpace(tenantId)))
         {
-            await EnsureLeadProcessAsync(context, tenantId, cancellationToken);
-            await EnsureOpportunityProcessAsync(context, tenantId, cancellationToken);
-            await EnsureClientProcessAsync(context, tenantId, cancellationToken);
+            await EnsureLeadProcessAsync(storage, tenantId, cancellationToken);
+            await EnsureOpportunityProcessAsync(storage, tenantId, cancellationToken);
+            await EnsureClientProcessAsync(storage, tenantId, cancellationToken);
         }
 
-        await context.SaveChangesAsync(cancellationToken);
+        await storage.SaveAsync(cancellationToken);
 
         foreach (string tenantId in tenantIds.Where(tenantId => !string.IsNullOrWhiteSpace(tenantId)))
-            await EnsureProcessContractsAsync(context, tenantId, cancellationToken);
+            await EnsureProcessContractsAsync(storage, tenantId, cancellationToken);
 
-        await MoveActiveInstancesToLiveDefinitionsAsync(context, tenantIds, cancellationToken);
-        await ReclassifyLegacyScoringRejectionsAsync(context, cancellationToken);
-        await context.SaveChangesAsync(cancellationToken);
+        await MoveActiveInstancesToLiveDefinitionsAsync(storage, tenantIds, cancellationToken);
+        await ReclassifyLegacyScoringRejectionsAsync(storage, cancellationToken);
+        await storage.SaveAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 
     async ValueTask MoveActiveInstancesToLiveDefinitionsAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         IReadOnlyCollection<string> tenantIds,
         CancellationToken cancellationToken)
     {
-        List<PlatformEntities.ProcessDefinition> definitions = await context.ProcessDefinitions
+        List<PlatformEntities.ProcessDefinition> definitions = await storage.ProcessDefinitions
             .Where(definition => tenantIds.Contains(definition.TenantId))
             .OrderByDescending(definition => definition.IsDefault)
             .ThenByDescending(definition => definition.VersionNumber)
@@ -99,7 +100,7 @@ public sealed class WorkflowAutomationService(
                 continue;
 
             await ProcessVersionMigration.MoveActiveInstancesAsync(
-                context,
+                processWorkspace,
                 liveDefinition,
                 [.. lane.Where(definition => definition.Id != liveDefinition.Id
                         && definition.LifecycleState == ProcessDefinitionLifecycleState.Archived)
@@ -107,21 +108,22 @@ public sealed class WorkflowAutomationService(
                 CurrentUserId,
                 cancellationToken);
         }
+
+        await processWorkspace.SaveAsync(cancellationToken);
     }
 
     public async ValueTask<int> ReschedulePendingTasksForStepAsync(
         Guid processStepId,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        PlatformEntities.ProcessStep step = await context.ProcessSteps
+        PlatformEntities.ProcessStep step = await storage.ProcessSteps
             .AsNoTracking()
             .FirstOrDefaultAsync(item => item.Id == processStepId, cancellationToken);
 
         if (step is null)
             return 0;
 
-        List<PlatformEntities.ProcessTask> pendingTasks = await context.ProcessTasks
+        List<PlatformEntities.ProcessTask> pendingTasks = await storage.ProcessTasks
             .Where(item => item.ProcessStepId == processStepId && item.State == ProcessTaskState.Pending)
             .ToListAsync(cancellationToken);
         DateTimeOffset now = DateTimeOffset.UtcNow;
@@ -143,7 +145,7 @@ public sealed class WorkflowAutomationService(
         }
 
         if (rescheduled > 0)
-            await context.SaveChangesAsync(cancellationToken);
+            await storage.SaveAsync(cancellationToken);
 
         return rescheduled;
     }
@@ -152,15 +154,14 @@ public sealed class WorkflowAutomationService(
         Guid agentMessageId,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
         RelatedEmailDraftSource source = await ResolveRelatedEmailDraftSourceAsync(
-            context,
+            storage,
             agentMessageId,
             cancellationToken);
         if (source is null)
             return null;
 
-        await context.SaveChangesAsync(cancellationToken);
+        await storage.SaveAsync(cancellationToken);
         return MapRelatedEmailDraftContext(source);
     }
 
@@ -168,10 +169,9 @@ public sealed class WorkflowAutomationService(
         Guid agentMessageId,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        await using var transaction = await storage.BeginTransactionAsync(cancellationToken);
         RelatedEmailDraftSource source = await ResolveRelatedEmailDraftSourceAsync(
-            context,
+            storage,
             agentMessageId,
             cancellationToken);
         if (source is null)
@@ -195,7 +195,7 @@ public sealed class WorkflowAutomationService(
         foreach (PlatformEntities.ProcessTask task in source.Tasks)
         {
             TaskRenderContext renderContext = await BuildTaskRenderContextAsync(
-                context,
+                storage,
                 task.LeadId,
                 task.TenantCompanyRelationshipId,
                 task.OpportunityId,
@@ -254,7 +254,7 @@ public sealed class WorkflowAutomationService(
             }
 
             PlatformEntities.Activity activity = email.MaterialId.HasValue
-                ? await context.Activities.FirstOrDefaultAsync(
+                ? await storage.Activities.FirstOrDefaultAsync(
                     item => item.MaterialId == email.MaterialId.Value,
                     cancellationToken)
                 : null;
@@ -269,7 +269,7 @@ public sealed class WorkflowAutomationService(
             updatedEmailIds.Add(email.Id);
         }
 
-        context.AgentMessageEntries.Add(new PlatformEntities.AgentMessageEntry
+        storage.Add(new PlatformEntities.AgentMessageEntry
         {
             Id = Guid.NewGuid(),
             AgentMessageId = source.Message.Id,
@@ -282,7 +282,7 @@ public sealed class WorkflowAutomationService(
         });
         source.Message.LastUpdatedBy = CurrentUserId;
         source.Message.LastUpdated = now;
-        await context.SaveChangesAsync(cancellationToken);
+        await storage.SaveAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
         return new RelatedEmailDraftRefreshResult(
@@ -296,25 +296,24 @@ public sealed class WorkflowAutomationService(
         Guid processDefinitionId,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        List<PlatformEntities.ProcessInstance> instances = await context.ProcessInstances
+        List<PlatformEntities.ProcessInstance> instances = await storage.ProcessInstances
             .Where(instance => instance.ProcessDefinitionId == processDefinitionId
                 && instance.State == ProcessInstanceState.Active)
             .ToListAsync(cancellationToken);
 
         foreach (PlatformEntities.ProcessInstance instance in instances)
-            await EnsurePendingTaskAsync(context, instance, cancellationToken);
+            await EnsurePendingTaskAsync(storage, instance, cancellationToken);
 
-        await context.SaveChangesAsync(cancellationToken);
+        await storage.SaveAsync(cancellationToken);
         return instances.Count;
     }
 
     async ValueTask<RelatedEmailDraftSource> ResolveRelatedEmailDraftSourceAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         Guid agentMessageId,
         CancellationToken cancellationToken)
     {
-        PlatformEntities.AgentMessage message = await context.AgentMessages
+        PlatformEntities.AgentMessage message = await storage.AgentMessages
             .Include(item => item.Email).ThenInclude(item => item.TenantCompanyRelationship).ThenInclude(item => item.Company)
             .Include(item => item.Email).ThenInclude(item => item.CompanyContact)
             .Include(item => item.Email).ThenInclude(item => item.Opportunity)
@@ -331,12 +330,12 @@ public sealed class WorkflowAutomationService(
             throw new UnauthorizedAccessException("The agent cannot inspect email drafts for this tenant.");
 
         PlatformEntities.ProcessTask provenanceTask = message.ProcessTaskId.HasValue
-            ? await context.ProcessTasks
+            ? await storage.ProcessTasks
                 .Include(item => item.ProcessStep)
                 .Include(item => item.ProcessInstance).ThenInclude(item => item.ProcessDefinition)
                 .FirstOrDefaultAsync(item => item.Id == message.ProcessTaskId.Value, cancellationToken)
             : null;
-        provenanceTask ??= await context.ProcessTasks
+        provenanceTask ??= await storage.ProcessTasks
             .Include(item => item.ProcessStep)
             .Include(item => item.ProcessInstance).ThenInclude(item => item.ProcessDefinition)
             .OrderByDescending(item => item.CreatedOn)
@@ -344,9 +343,39 @@ public sealed class WorkflowAutomationService(
 
         Guid? definitionId = provenanceTask?.ProcessInstance?.ProcessDefinitionId ?? message.ProcessDefinitionId;
         PlatformEntities.ProcessDefinition sourceDefinition = definitionId.HasValue
-            ? await context.ProcessDefinitions.FirstOrDefaultAsync(item => item.Id == definitionId.Value, cancellationToken)
+            ? await storage.ProcessDefinitions.FirstOrDefaultAsync(item => item.Id == definitionId.Value, cancellationToken)
             : null;
-        sourceDefinition ??= await context.ProcessDefinitions
+        if (sourceDefinition is null)
+        {
+            List<PlatformEntities.ProcessDefinition> activeDefinitions = await storage.ProcessDefinitions
+                .AsNoTracking()
+                .Include(item => item.Steps)
+                .Where(item => item.TenantId == tenantId
+                    && item.IsActive
+                    && item.LifecycleState == ProcessDefinitionLifecycleState.Active)
+                .ToListAsync(cancellationToken);
+            List<PlatformEntities.ProcessDefinition> subjectMatches = activeDefinitions
+                .Where(definition => definition.Steps.Any(step =>
+                    step.IsActive
+                    && step.ActionType == ProcessActionType.Email
+                    && string.Equals(
+                        WorkflowTemplateRenderer.Render(
+                            step.EmailSubjectTemplate,
+                            null,
+                            message.Email.TenantCompanyRelationship?.Company,
+                            message.Email.CompanyContact,
+                            message.Email.TenantCompanyRelationship,
+                            message.Email.Opportunity,
+                            message.Email.ClientAccount,
+                            DateTimeOffset.UtcNow,
+                            null)?.Trim(),
+                        message.Email.Subject?.Trim(),
+                        StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+            if (subjectMatches.Count == 1)
+                sourceDefinition = subjectMatches[0];
+        }
+        sourceDefinition ??= await storage.ProcessDefinitions
             .Where(item => item.TenantId == tenantId
                 && item.IsActive
                 && item.LifecycleState == ProcessDefinitionLifecycleState.Active
@@ -359,7 +388,7 @@ public sealed class WorkflowAutomationService(
             throw new InvalidOperationException("CRM could not identify the live process that produced the rejected email.");
 
         Guid familyId = sourceDefinition.FamilyId ?? sourceDefinition.Id;
-        PlatformEntities.ProcessDefinition liveDefinition = await context.ProcessDefinitions
+        PlatformEntities.ProcessDefinition liveDefinition = await storage.ProcessDefinitions
             .Where(item => (item.Id == familyId || item.FamilyId == familyId || item.Id == sourceDefinition.Id)
                 && item.IsActive
                 && item.LifecycleState == ProcessDefinitionLifecycleState.Active)
@@ -368,18 +397,18 @@ public sealed class WorkflowAutomationService(
             ?? sourceDefinition;
 
         string stepKey = message.ProcessStepId.HasValue
-            ? await context.ProcessSteps.Where(item => item.Id == message.ProcessStepId.Value)
+            ? await storage.ProcessSteps.Where(item => item.Id == message.ProcessStepId.Value)
                 .Select(item => item.Key).FirstOrDefaultAsync(cancellationToken)
             : provenanceTask?.ProcessStep?.Key;
         PlatformEntities.ProcessStep liveStep = !string.IsNullOrWhiteSpace(stepKey)
-            ? await context.ProcessSteps.FirstOrDefaultAsync(
+            ? await storage.ProcessSteps.FirstOrDefaultAsync(
                 item => item.ProcessDefinitionId == liveDefinition.Id && item.Key == stepKey,
                 cancellationToken)
             : null;
 
         if (liveStep is null)
         {
-            List<PlatformEntities.ProcessStep> emailSteps = await context.ProcessSteps
+            List<PlatformEntities.ProcessStep> emailSteps = await storage.ProcessSteps
                 .Where(item => item.ProcessDefinitionId == liveDefinition.Id
                     && item.IsActive
                     && item.ActionType == ProcessActionType.Email)
@@ -419,12 +448,12 @@ public sealed class WorkflowAutomationService(
         message.LastUpdatedBy = CurrentUserId;
         message.LastUpdated = DateTimeOffset.UtcNow;
 
-        Guid[] familyDefinitionIds = await context.ProcessDefinitions
+        Guid[] familyDefinitionIds = await storage.ProcessDefinitions
             .Where(item => item.Id == familyId || item.FamilyId == familyId || item.Id == liveDefinition.Id)
             .Select(item => item.Id)
             .ToArrayAsync(cancellationToken);
         EmailState[] eligibleStates = [EmailState.Draft, EmailState.Approved, EmailState.Failed];
-        List<PlatformEntities.ProcessTask> tasks = await context.ProcessTasks
+        List<PlatformEntities.ProcessTask> tasks = await storage.ProcessTasks
             .Include(item => item.ProcessStep)
             .Include(item => item.ProcessInstance)
             .Include(item => item.Email).ThenInclude(item => item.Material)
@@ -438,7 +467,7 @@ public sealed class WorkflowAutomationService(
             .OrderBy(item => item.CreatedOn)
             .ToListAsync(cancellationToken);
 
-        PlatformEntities.AgentMessage correctionMessage = await context.AgentMessages
+        PlatformEntities.AgentMessage correctionMessage = await storage.AgentMessages
             .AsNoTracking()
             .Include(item => item.Email)
             .Where(item => item.CorrelationKey == $"approval:replacement-email:{message.Id}"
@@ -451,7 +480,7 @@ public sealed class WorkflowAutomationService(
                 : null;
 
         TaskRenderContext sourceRenderContext = await BuildTaskRenderContextAsync(
-            context,
+            storage,
             provenanceTask?.LeadId,
             message.Email.TenantCompanyRelationshipId,
             message.Email.OpportunityId ?? message.OpportunityId,
@@ -514,14 +543,14 @@ public sealed class WorkflowAutomationService(
             RecipientEmailContentValidator.ContainsInternalDraftingGuidance(task.Email.BodyText ?? task.Email.BodyHtml))) ]);
 
     async ValueTask EnsureProcessContractsAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         string tenantId,
         CancellationToken cancellationToken)
     {
-        await EnsureRequiredEvidenceStepsAsync(context, tenantId, cancellationToken);
-        await context.SaveChangesAsync(cancellationToken);
+        await EnsureRequiredEvidenceStepsAsync(storage, tenantId, cancellationToken);
+        await storage.SaveAsync(cancellationToken);
 
-        List<PlatformEntities.ProcessStep> steps = await context.ProcessSteps
+        List<PlatformEntities.ProcessStep> steps = await storage.ProcessSteps
             .Where(step =>
                 step.ProcessDefinition.TenantId == tenantId
                 && step.ProcessDefinition.IsActive
@@ -545,11 +574,11 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask EnsureRequiredEvidenceStepsAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         string tenantId,
         CancellationToken cancellationToken)
     {
-        List<PlatformEntities.ProcessDefinition> definitions = await context.ProcessDefinitions
+        List<PlatformEntities.ProcessDefinition> definitions = await storage.ProcessDefinitions
             .Where(definition => definition.TenantId == tenantId && definition.IsActive)
             .Include(definition => definition.Steps)
                 .ThenInclude(step => step.OutgoingTransitions)
@@ -569,10 +598,10 @@ public sealed class WorkflowAutomationService(
                     "Record the strongest available evidence for employee count, annual revenue, and scale band. Use known registry, accounts, website, and existing CRM evidence only. Never guess: record unknown where evidence is unavailable, include the source, and give a confidence level.",
                     null, null, null,
                     "Employee count: integer or unknown.\nAnnual revenue: amount and currency or unknown.\nScale band: enterprise, large, medium, small, micro, or unknown.\nEvidence: concise source description.\nConfidence: high, medium, or low.");
-                context.ProcessSteps.Add(scale);
+                storage.Add(scale);
                 foreach (PlatformEntities.ProcessTransition transition in activity.OutgoingTransitions.Where(item => item.NextProcessStepId == quality.Id))
                     transition.NextProcessStepId = scale.Id;
-                context.ProcessTransitions.Add(NewTransition(scale, quality, "scale-assessed", "Company scale assessed", true, ProcessTransitionEffect.None));
+                storage.Add(NewTransition(scale, quality, "scale-assessed", "Company scale assessed", true, ProcessTransitionEffect.None));
             }
         }
 
@@ -586,7 +615,7 @@ public sealed class WorkflowAutomationService(
 
                 if (qualify.OutgoingTransitions.All(transition => transition.OutcomeKey != "deferred"))
                 {
-                    context.ProcessTransitions.Add(NewTransition(
+                    storage.Add(NewTransition(
                         qualify,
                         null,
                         "deferred",
@@ -611,13 +640,13 @@ public sealed class WorkflowAutomationService(
                     "Using only the company history and the confirmed response, write a compact factual summary of what the contact wants, the pain or need, why our offer could help, and the evidence that they are interested in at least a demo. Mark unknown commercial values as unknown; do not invent them.",
                     null, null, null,
                     "Opportunity summary: two sentences maximum.\nPain or need: one sentence or unknown.\nValue hypothesis: one sentence or unknown.\nDemo interest evidence: exact concise evidence.\nEstimated annual value: amount or unknown.\nConfidence: high, medium, or low.");
-                context.ProcessSteps.Add(summary);
+                storage.Add(summary);
 
                 foreach (PlatformEntities.ProcessStep step in opportunity.Steps)
                 foreach (PlatformEntities.ProcessTransition transition in step.OutgoingTransitions.Where(item => item.NextProcessStepId == handoff.Id))
                     transition.NextProcessStepId = summary.Id;
 
-                context.ProcessTransitions.Add(NewTransition(summary, handoff, "summary-ready", "Opportunity brief ready", true, ProcessTransitionEffect.None));
+                storage.Add(NewTransition(summary, handoff, "summary-ready", "Opportunity brief ready", true, ProcessTransitionEffect.None));
             }
         }
 
@@ -635,17 +664,17 @@ public sealed class WorkflowAutomationService(
                     null, null, null,
                     "Service scope: concise agreed scope or unknown.\nKey contacts: names and responsibilities.\nReview cadence: interval or unknown.\nCommitments and risks: concise list or none known.\nConfidence: high, medium, or low.");
                 review.IsEntryPoint = false;
-                context.ProcessSteps.Add(baseline);
-                context.ProcessTransitions.Add(NewTransition(baseline, review, "baseline-recorded", "Client baseline recorded", true, ProcessTransitionEffect.None));
+                storage.Add(baseline);
+                storage.Add(NewTransition(baseline, review, "baseline-recorded", "Client baseline recorded", true, ProcessTransitionEffect.None));
             }
         }
     }
 
     async ValueTask ReclassifyLegacyScoringRejectionsAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         CancellationToken cancellationToken)
     {
-        List<PlatformEntities.Lead> candidates = await context.Leads
+        List<PlatformEntities.Lead> candidates = await storage.Leads
             .Include(lead => lead.Company)
             .Where(lead => lead.Status == LeadStatus.Rejected
                 && lead.Company != null
@@ -777,45 +806,43 @@ public sealed class WorkflowAutomationService(
     {
         await EnsureSeedProcessesAsync(cancellationToken);
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
 
-        await NormaliseImportedCompanyNamesAsync(context, cancellationToken);
-        await NormaliseImportedEmailStatesAsync(context, opportunityId, clientAccountId, cancellationToken);
+        await NormaliseImportedCompanyNamesAsync(storage, cancellationToken);
+        await NormaliseImportedEmailStatesAsync(storage, opportunityId, clientAccountId, cancellationToken);
 
-        List<PlatformEntities.Lead> leads = await context.Leads
+        List<PlatformEntities.Lead> leads = await storage.Leads
             .Where(leadId.HasValue ? lead => lead.Id == leadId.Value : _ => true)
             .OrderBy(lead => lead.CreatedOn)
             .ToListAsync(cancellationToken);
 
-        List<PlatformEntities.Opportunity> opportunities = await context.Opportunities
+        List<PlatformEntities.Opportunity> opportunities = await storage.Opportunities
             .Where(opportunityId.HasValue ? opportunity => opportunity.Id == opportunityId.Value : _ => true)
             .OrderBy(opportunity => opportunity.CreatedOn)
             .ToListAsync(cancellationToken);
 
-        List<PlatformEntities.ClientAccount> clientAccounts = await context.ClientAccounts
+        List<PlatformEntities.ClientAccount> clientAccounts = await storage.ClientAccounts
             .Where(clientAccountId.HasValue ? clientAccount => clientAccount.Id == clientAccountId.Value : _ => true)
             .OrderBy(clientAccount => clientAccount.CreatedOn)
             .ToListAsync(cancellationToken);
 
         foreach (PlatformEntities.Lead lead in leads)
-            await EnsureLeadCoverageAsync(context, lead, forceCreate, cancellationToken);
+            await EnsureLeadCoverageAsync(storage, lead, forceCreate, cancellationToken);
 
         foreach (PlatformEntities.Opportunity opportunity in opportunities)
-            await EnsureOpportunityCoverageAsync(context, opportunity, forceCreate, cancellationToken);
+            await EnsureOpportunityCoverageAsync(storage, opportunity, forceCreate, cancellationToken);
 
         foreach (PlatformEntities.ClientAccount clientAccount in clientAccounts)
-            await EnsureClientCoverageAsync(context, clientAccount, forceCreate, cancellationToken);
+            await EnsureClientCoverageAsync(storage, clientAccount, forceCreate, cancellationToken);
 
-        await context.SaveChangesAsync(cancellationToken);
-        await SynchroniseCurrentTasksAsync(context, cancellationToken);
+        await storage.SaveAsync(cancellationToken);
+        await SynchroniseCurrentTasksAsync(storage, cancellationToken);
     }
 
     public async ValueTask<int> ReevaluateDeferredLeadsAsync(
         string tenantId,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        List<PlatformEntities.Lead> leads = await context.Leads
+        List<PlatformEntities.Lead> leads = await storage.Leads
             .Where(lead => lead.TenantId == tenantId && lead.Status == LeadStatus.Deferred)
             .ToListAsync(cancellationToken);
         foreach (PlatformEntities.Lead lead in leads)
@@ -823,10 +850,10 @@ public sealed class WorkflowAutomationService(
             lead.Status = LeadStatus.Imported;
             lead.LastUpdatedBy = CurrentUserId;
             lead.LastUpdated = DateTimeOffset.UtcNow;
-            await EnsureLeadCoverageAsync(context, lead, true, cancellationToken);
+            await EnsureLeadCoverageAsync(storage, lead, true, cancellationToken);
         }
 
-        await context.SaveChangesAsync(cancellationToken);
+        await storage.SaveAsync(cancellationToken);
         return leads.Count;
     }
 
@@ -834,9 +861,8 @@ public sealed class WorkflowAutomationService(
         ProcessTaskCompletionCommand command,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
 
-        PlatformEntities.ProcessTask task = await context.ProcessTasks
+        PlatformEntities.ProcessTask task = await storage.ProcessTasks
             .Include(item => item.ProcessInstance)
             .Include(item => item.ProcessStep)
             .FirstOrDefaultAsync(
@@ -846,16 +872,15 @@ public sealed class WorkflowAutomationService(
         if (task is null)
             return null;
 
-        await CompleteTaskAsync(context, task, command.OutcomeKey, command.CompletionNote, cancellationToken);
-        await context.SaveChangesAsync(cancellationToken);
+        await CompleteTaskAsync(storage, task, command.OutcomeKey, command.CompletionNote, cancellationToken);
+        await storage.SaveAsync(cancellationToken);
         return task;
     }
 
     public async ValueTask<bool> CompleteEmailTaskAsync(Guid emailId, CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
 
-        PlatformEntities.ProcessTask task = await context.ProcessTasks
+        PlatformEntities.ProcessTask task = await storage.ProcessTasks
             .Include(item => item.ProcessInstance)
             .Include(item => item.ProcessStep)
             .FirstOrDefaultAsync(
@@ -865,32 +890,32 @@ public sealed class WorkflowAutomationService(
         if (task is null)
             return false;
 
-        await CompleteTaskAsync(context, task, "sent", "Email sent.", cancellationToken);
-        await context.SaveChangesAsync(cancellationToken);
+        await CompleteTaskAsync(storage, task, "sent", "Email sent.", cancellationToken);
+        await storage.SaveAsync(cancellationToken);
         return true;
     }
 
     async ValueTask EnsureLeadCoverageAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.Lead lead,
         bool forceCreate,
         CancellationToken cancellationToken)
     {
-        PlatformEntities.ProcessInstance activeInstance = await context.ProcessInstances
+        PlatformEntities.ProcessInstance activeInstance = await storage.ProcessInstances
             .FirstOrDefaultAsync(
                 item => item.LeadId == lead.Id && item.State == ProcessInstanceState.Active,
                 cancellationToken);
 
         if (lead.Status is LeadStatus.Deferred or LeadStatus.Rejected or LeadStatus.Converted)
         {
-            await CloseActiveInstanceAsync(context, activeInstance, lead.Status.ToString(), cancellationToken);
+            await CloseActiveInstanceAsync(storage, activeInstance, lead.Status.ToString(), cancellationToken);
             return;
         }
 
         if (activeInstance is null)
         {
-            PlatformEntities.ProcessDefinition definition = await GetDefaultDefinitionAsync(context, lead.TenantId, ProcessScopeType.Lead, cancellationToken);
-            PlatformEntities.ProcessStep entryStep = await GetEntryStepAsync(context, definition.Id, cancellationToken);
+            PlatformEntities.ProcessDefinition definition = await GetDefaultDefinitionAsync(storage, lead.TenantId, ProcessScopeType.Lead, cancellationToken);
+            PlatformEntities.ProcessStep entryStep = await GetEntryStepAsync(storage, definition.Id, cancellationToken);
             if (entryStep is null)
                 return;
 
@@ -908,45 +933,45 @@ public sealed class WorkflowAutomationService(
                 LastUpdated = DateTimeOffset.UtcNow
             };
 
-            context.ProcessInstances.Add(activeInstance);
+            storage.Add(activeInstance);
         }
 
-        if (!forceCreate && await context.ProcessTasks.AnyAsync(
+        if (!forceCreate && await storage.ProcessTasks.AnyAsync(
                 item => item.ProcessInstanceId == activeInstance.Id && item.State == ProcessTaskState.Pending,
                 cancellationToken))
         {
             return;
         }
 
-        await EnsurePendingTaskAsync(context, activeInstance, cancellationToken);
+        await EnsurePendingTaskAsync(storage, activeInstance, cancellationToken);
     }
 
     async ValueTask EnsureOpportunityCoverageAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.Opportunity opportunity,
         bool forceCreate,
         CancellationToken cancellationToken)
     {
-        PlatformEntities.ProcessInstance activeInstance = await context.ProcessInstances
+        PlatformEntities.ProcessInstance activeInstance = await storage.ProcessInstances
             .FirstOrDefaultAsync(
                 item => item.OpportunityId == opportunity.Id && item.State == ProcessInstanceState.Active,
                 cancellationToken);
 
         if (opportunity.Stage is SalesPipelineStage.Won or SalesPipelineStage.Lost)
         {
-            await CloseActiveInstanceAsync(context, activeInstance, opportunity.Stage.ToString(), cancellationToken);
+            await CloseActiveInstanceAsync(storage, activeInstance, opportunity.Stage.ToString(), cancellationToken);
             return;
         }
 
         if (activeInstance is null)
         {
-            string tenantId = await context.TenantCompanyRelationships
+            string tenantId = await storage.TenantCompanyRelationships
                 .Where(relationship => relationship.Id == opportunity.TenantCompanyRelationshipId)
                 .Select(relationship => relationship.TenantId)
                 .FirstOrDefaultAsync(cancellationToken);
 
-            PlatformEntities.ProcessDefinition definition = await GetDefaultDefinitionAsync(context, tenantId, ProcessScopeType.Opportunity, cancellationToken);
-            PlatformEntities.ProcessStep inferredStep = await ResolveOpportunityStepAsync(context, definition.Id, opportunity, cancellationToken);
+            PlatformEntities.ProcessDefinition definition = await GetDefaultDefinitionAsync(storage, tenantId, ProcessScopeType.Opportunity, cancellationToken);
+            PlatformEntities.ProcessStep inferredStep = await ResolveOpportunityStepAsync(storage, definition.Id, opportunity, cancellationToken);
             if (inferredStep is null)
                 return;
 
@@ -965,50 +990,50 @@ public sealed class WorkflowAutomationService(
                 LastUpdated = DateTimeOffset.UtcNow
             };
 
-            context.ProcessInstances.Add(activeInstance);
+            storage.Add(activeInstance);
         }
 
-        bool reconciled = await ReconcileOpportunityWorkflowAsync(context, activeInstance, opportunity, cancellationToken);
+        bool reconciled = await ReconcileOpportunityWorkflowAsync(storage, activeInstance, opportunity, cancellationToken);
 
         if (reconciled)
-            await context.SaveChangesAsync(cancellationToken);
+            await storage.SaveAsync(cancellationToken);
 
-        if (!forceCreate && await context.ProcessTasks.AnyAsync(
+        if (!forceCreate && await storage.ProcessTasks.AnyAsync(
                 item => item.ProcessInstanceId == activeInstance.Id && item.State == ProcessTaskState.Pending,
                 cancellationToken))
         {
             return;
         }
 
-        await EnsurePendingTaskAsync(context, activeInstance, cancellationToken);
+        await EnsurePendingTaskAsync(storage, activeInstance, cancellationToken);
     }
 
     async ValueTask EnsureClientCoverageAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.ClientAccount clientAccount,
         bool forceCreate,
         CancellationToken cancellationToken)
     {
-        PlatformEntities.ProcessInstance activeInstance = await context.ProcessInstances
+        PlatformEntities.ProcessInstance activeInstance = await storage.ProcessInstances
             .FirstOrDefaultAsync(
                 item => item.ClientAccountId == clientAccount.Id && item.State == ProcessInstanceState.Active,
                 cancellationToken);
 
         if (clientAccount.Status == ClientAccountStatus.Closed)
         {
-            await CloseActiveInstanceAsync(context, activeInstance, clientAccount.Status.ToString(), cancellationToken);
+            await CloseActiveInstanceAsync(storage, activeInstance, clientAccount.Status.ToString(), cancellationToken);
             return;
         }
 
         if (activeInstance is null)
         {
-            string tenantId = await context.TenantCompanyRelationships
+            string tenantId = await storage.TenantCompanyRelationships
                 .Where(relationship => relationship.Id == clientAccount.TenantCompanyRelationshipId)
                 .Select(relationship => relationship.TenantId)
                 .FirstOrDefaultAsync(cancellationToken);
 
-            PlatformEntities.ProcessDefinition definition = await GetDefaultDefinitionAsync(context, tenantId, ProcessScopeType.ClientAccount, cancellationToken);
-            PlatformEntities.ProcessStep entryStep = await GetEntryStepAsync(context, definition.Id, cancellationToken);
+            PlatformEntities.ProcessDefinition definition = await GetDefaultDefinitionAsync(storage, tenantId, ProcessScopeType.ClientAccount, cancellationToken);
+            PlatformEntities.ProcessStep entryStep = await GetEntryStepAsync(storage, definition.Id, cancellationToken);
             if (entryStep is null)
                 return;
 
@@ -1027,58 +1052,58 @@ public sealed class WorkflowAutomationService(
                 LastUpdated = DateTimeOffset.UtcNow
             };
 
-            context.ProcessInstances.Add(activeInstance);
+            storage.Add(activeInstance);
         }
 
-        if (!forceCreate && await context.ProcessTasks.AnyAsync(
+        if (!forceCreate && await storage.ProcessTasks.AnyAsync(
                 item => item.ProcessInstanceId == activeInstance.Id && item.State == ProcessTaskState.Pending,
                 cancellationToken))
         {
             return;
         }
 
-        await EnsurePendingTaskAsync(context, activeInstance, cancellationToken);
+        await EnsurePendingTaskAsync(storage, activeInstance, cancellationToken);
     }
 
     async ValueTask EnsurePendingTaskAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.ProcessInstance instance,
         CancellationToken cancellationToken)
     {
-        PlatformEntities.ProcessTask existingTask = await context.ProcessTasks
+        PlatformEntities.ProcessTask existingTask = await storage.ProcessTasks
             .FirstOrDefaultAsync(
                 item => item.ProcessInstanceId == instance.Id && item.State == ProcessTaskState.Pending,
                 cancellationToken);
 
         if (existingTask is not null)
         {
-            await RefreshPendingTaskAsync(context, existingTask, cancellationToken);
+            await RefreshPendingTaskAsync(storage, existingTask, cancellationToken);
             instance.CurrentProcessTaskId = existingTask.Id;
             instance.LastUpdatedBy = CurrentUserId;
             instance.LastUpdated = DateTimeOffset.UtcNow;
             return;
         }
 
-        PlatformEntities.ProcessStep step = await context.ProcessSteps
+        PlatformEntities.ProcessStep step = await storage.ProcessSteps
             .FirstOrDefaultAsync(item => item.Id == instance.CurrentProcessStepId, cancellationToken);
 
         if (step is null)
             return;
 
-        PlatformEntities.ProcessTask task = await CreateTaskForStepAsync(context, instance, step, cancellationToken);
+        PlatformEntities.ProcessTask task = await CreateTaskForStepAsync(storage, instance, step, cancellationToken);
         // A brand-new instance and its first task form a database FK cycle if both sides are
         // populated in one batch. Persist that pair with a null current-task pointer first,
         // then establish the pointer in the caller's normal save. Existing instances can link
         // the new task immediately.
-        if (context.Entry(instance).State == EntityState.Added)
-            await context.SaveChangesAsync(cancellationToken);
+        if (storage.IsAdded(instance))
+            await storage.SaveAsync(cancellationToken);
         instance.CurrentProcessTaskId = task.Id;
         instance.LastUpdatedBy = CurrentUserId;
         instance.LastUpdated = DateTimeOffset.UtcNow;
     }
 
     async ValueTask ArchiveDuplicateActiveDefinitionsAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         IEnumerable<string> tenantIds,
         CancellationToken cancellationToken)
     {
@@ -1094,7 +1119,7 @@ public sealed class WorkflowAutomationService(
 
         HashSet<Guid> activeDefinitionIds =
         [
-            .. await context.ProcessInstances
+            .. await storage.ProcessInstances
                 .AsNoTracking()
                 .Where(item => item.State == ProcessInstanceState.Active)
                 .Select(item => item.ProcessDefinitionId)
@@ -1102,7 +1127,7 @@ public sealed class WorkflowAutomationService(
                 .ToListAsync(cancellationToken)
         ];
 
-        List<PlatformEntities.ProcessDefinition> activeDefinitions = await context.ProcessDefinitions
+        List<PlatformEntities.ProcessDefinition> activeDefinitions = await storage.ProcessDefinitions
             .Where(item =>
                 tenantIdArray.Contains(item.TenantId)
                 && (item.LifecycleState == ProcessDefinitionLifecycleState.Active || item.IsActive))
@@ -1139,10 +1164,10 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask SynchroniseCurrentTasksAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         CancellationToken cancellationToken)
     {
-        List<PlatformEntities.ProcessInstance> instancesNeedingCurrentTask = await context.ProcessInstances
+        List<PlatformEntities.ProcessInstance> instancesNeedingCurrentTask = await storage.ProcessInstances
             .Where(item => item.State == ProcessInstanceState.Active && item.CurrentProcessTaskId == null)
             .ToListAsync(cancellationToken);
 
@@ -1151,7 +1176,7 @@ public sealed class WorkflowAutomationService(
 
         foreach (PlatformEntities.ProcessInstance instance in instancesNeedingCurrentTask)
         {
-            PlatformEntities.ProcessTask pendingTask = await context.ProcessTasks
+            PlatformEntities.ProcessTask pendingTask = await storage.ProcessTasks
                 .Where(item => item.ProcessInstanceId == instance.Id && item.State == ProcessTaskState.Pending)
                 .OrderBy(item => item.DueOn)
                 .FirstOrDefaultAsync(cancellationToken);
@@ -1164,19 +1189,19 @@ public sealed class WorkflowAutomationService(
             instance.LastUpdated = DateTimeOffset.UtcNow;
         }
 
-        await context.SaveChangesAsync(cancellationToken);
+        await storage.SaveAsync(cancellationToken);
     }
 
     async ValueTask NormaliseImportedEmailStatesAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         Guid? opportunityId,
         Guid? clientAccountId,
         CancellationToken cancellationToken)
     {
-        if (!await EmailTableExistsAsync(context, cancellationToken))
+        if (!await EmailTableExistsAsync(storage, cancellationToken))
             return;
 
-        IQueryable<PlatformEntities.Email> query = context.Emails;
+        IQueryable<PlatformEntities.Email> query = storage.Emails;
 
         if (opportunityId.HasValue)
             query = query.Where(item => item.OpportunityId == opportunityId.Value);
@@ -1201,7 +1226,7 @@ public sealed class WorkflowAutomationService(
 
         Dictionary<Guid, PlatformEntities.Material> materialsById = materialIds.Count == 0
             ? []
-            : await context.Materials
+            : await storage.Materials
                 .Where(item => materialIds.Contains(item.Id))
                 .ToDictionaryAsync(item => item.Id, cancellationToken);
 
@@ -1234,10 +1259,10 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask NormaliseImportedCompanyNamesAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         CancellationToken cancellationToken)
     {
-        List<PlatformEntities.Company> companies = await context.Companies
+        List<PlatformEntities.Company> companies = await storage.Companies
             .Where(item => item.TradingName != null && EF.Functions.Like(item.SourceSystem, "legacy%"))
             .ToListAsync(cancellationToken);
 
@@ -1265,10 +1290,10 @@ public sealed class WorkflowAutomationService(
     }
 
     static async ValueTask<bool> EmailTableExistsAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         CancellationToken cancellationToken)
     {
-        DbConnection connection = context.Database.GetDbConnection();
+        DbConnection connection = storage.GetDbConnection();
         bool shouldClose = connection.State != ConnectionState.Open;
 
         if (shouldClose)
@@ -1300,16 +1325,16 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask<bool> ReconcileOpportunityWorkflowAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.ProcessInstance activeInstance,
         PlatformEntities.Opportunity opportunity,
         CancellationToken cancellationToken)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        PlatformEntities.TenantCompanyRelationship relationship = await context.TenantCompanyRelationships
+        PlatformEntities.TenantCompanyRelationship relationship = await storage.TenantCompanyRelationships
             .FirstOrDefaultAsync(item => item.Id == opportunity.TenantCompanyRelationshipId, cancellationToken);
 
-        bool hasSentEmail = await HasSentOpportunityEmailAsync(context, opportunity, cancellationToken);
+        bool hasSentEmail = await HasSentOpportunityEmailAsync(storage, opportunity, cancellationToken);
         bool relationshipChanged = false;
         bool opportunityChanged = false;
         bool workflowChanged = false;
@@ -1349,7 +1374,7 @@ public sealed class WorkflowAutomationService(
             Touch(relationship, now);
 
         PlatformEntities.ProcessStep inferredStep = await ResolveOpportunityStepAsync(
-            context,
+            storage,
             activeInstance.ProcessDefinitionId,
             opportunity,
             cancellationToken);
@@ -1357,7 +1382,7 @@ public sealed class WorkflowAutomationService(
         if (inferredStep is null)
             return workflowChanged;
 
-        List<PlatformEntities.ProcessTask> pendingTasks = await context.ProcessTasks
+        List<PlatformEntities.ProcessTask> pendingTasks = await storage.ProcessTasks
             .Where(item => item.ProcessInstanceId == activeInstance.Id && item.State == ProcessTaskState.Pending)
             .ToListAsync(cancellationToken);
 
@@ -1394,14 +1419,14 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask<PlatformEntities.ProcessTask> CreateTaskForStepAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.ProcessInstance instance,
         PlatformEntities.ProcessStep step,
         CancellationToken cancellationToken)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
         TaskRenderContext renderContext = await BuildTaskRenderContextAsync(
-            context,
+            storage,
             instance.LeadId,
             instance.TenantCompanyRelationshipId,
             instance.OpportunityId,
@@ -1443,7 +1468,7 @@ public sealed class WorkflowAutomationService(
             LastUpdated = now
         };
 
-        context.ProcessTasks.Add(task);
+        storage.Add(task);
 
         if (step.ActionType == ProcessActionType.Email && renderContext.Relationship is not null)
         {
@@ -1477,7 +1502,7 @@ public sealed class WorkflowAutomationService(
                 LastUpdated = now
             };
 
-            context.Materials.Add(material);
+            storage.Add(material);
 
             PlatformEntities.Email email = new()
             {
@@ -1503,14 +1528,14 @@ public sealed class WorkflowAutomationService(
                 LastUpdated = now
             };
 
-            context.Emails.Add(email);
+            storage.Add(email);
             task.EmailId = email.Id;
 
             if (!string.IsNullOrWhiteSpace(email.ToAddresses))
             {
                 foreach (string address in SplitAddresses(email.ToAddresses))
                 {
-                    context.EmailRecipients.Add(new PlatformEntities.EmailRecipient
+                    storage.Add(new PlatformEntities.EmailRecipient
                     {
                         Id = Guid.NewGuid(),
                         EmailId = email.Id,
@@ -1544,11 +1569,11 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask RefreshPendingTaskAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.ProcessTask task,
         CancellationToken cancellationToken)
     {
-        PlatformEntities.ProcessStep step = await context.ProcessSteps
+        PlatformEntities.ProcessStep step = await storage.ProcessSteps
             .FirstOrDefaultAsync(item => item.Id == task.ProcessStepId, cancellationToken);
 
         if (step is null)
@@ -1556,7 +1581,7 @@ public sealed class WorkflowAutomationService(
 
         DateTimeOffset now = DateTimeOffset.UtcNow;
         TaskRenderContext renderContext = await BuildTaskRenderContextAsync(
-            context,
+            storage,
             task.LeadId,
             task.TenantCompanyRelationshipId,
             task.OpportunityId,
@@ -1587,7 +1612,7 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask<TaskRenderContext> BuildTaskRenderContextAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         Guid? leadId,
         Guid? tenantCompanyRelationshipId,
         Guid? opportunityId,
@@ -1595,28 +1620,28 @@ public sealed class WorkflowAutomationService(
         CancellationToken cancellationToken)
     {
         PlatformEntities.Lead lead = leadId.HasValue
-            ? await context.Leads.FirstOrDefaultAsync(item => item.Id == leadId.Value, cancellationToken)
+            ? await storage.Leads.FirstOrDefaultAsync(item => item.Id == leadId.Value, cancellationToken)
             : null;
         PlatformEntities.TenantCompanyRelationship relationship = tenantCompanyRelationshipId.HasValue
-            ? await context.TenantCompanyRelationships.FirstOrDefaultAsync(item => item.Id == tenantCompanyRelationshipId.Value, cancellationToken)
+            ? await storage.TenantCompanyRelationships.FirstOrDefaultAsync(item => item.Id == tenantCompanyRelationshipId.Value, cancellationToken)
             : null;
         PlatformEntities.Opportunity opportunity = opportunityId.HasValue
-            ? await context.Opportunities.FirstOrDefaultAsync(item => item.Id == opportunityId.Value, cancellationToken)
+            ? await storage.Opportunities.FirstOrDefaultAsync(item => item.Id == opportunityId.Value, cancellationToken)
             : null;
         PlatformEntities.ClientAccount clientAccount = clientAccountId.HasValue
-            ? await context.ClientAccounts.FirstOrDefaultAsync(item => item.Id == clientAccountId.Value, cancellationToken)
+            ? await storage.ClientAccounts.FirstOrDefaultAsync(item => item.Id == clientAccountId.Value, cancellationToken)
             : null;
 
         Guid? companyId = lead?.CompanyId ?? relationship?.CompanyId;
 
         PlatformEntities.Company company = companyId.HasValue
-            ? await context.Companies
+            ? await storage.Companies
                 .Include(item => item.RegisteredAddress)
                 .FirstOrDefaultAsync(item => item.Id == companyId.Value, cancellationToken)
             : null;
-        PlatformEntities.CompanyContact contact = await ResolvePreferredContactAsync(context, lead, relationship, opportunity, cancellationToken);
+        PlatformEntities.CompanyContact contact = await ResolvePreferredContactAsync(storage, lead, relationship, opportunity, cancellationToken);
         PlatformEntities.Activity latestInboundActivity = tenantCompanyRelationshipId.HasValue
-            ? await context.Activities
+            ? await storage.Activities
                 .AsNoTracking()
                 .Where(item => item.TenantCompanyRelationshipId == tenantCompanyRelationshipId.Value
                     && item.Direction == ActivityDirection.Inbound)
@@ -1640,22 +1665,22 @@ public sealed class WorkflowAutomationService(
             WorkflowTemplateRenderer.Render(step.QuestionSetTemplate, renderContext.Lead, renderContext.Company, renderContext.Contact, renderContext.Relationship, renderContext.Opportunity, renderContext.ClientAccount, now, renderContext.LatestInboundActivity));
 
     async ValueTask CompleteTaskAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.ProcessTask task,
         string outcomeKey,
         string completionNote,
         CancellationToken cancellationToken)
     {
         PlatformEntities.ProcessInstance instance = task.ProcessInstance
-            ?? await context.ProcessInstances.FirstAsync(item => item.Id == task.ProcessInstanceId, cancellationToken);
+            ?? await storage.ProcessInstances.FirstAsync(item => item.Id == task.ProcessInstanceId, cancellationToken);
         PlatformEntities.ProcessStep step = task.ProcessStep
-            ?? await context.ProcessSteps.FirstAsync(item => item.Id == task.ProcessStepId, cancellationToken);
+            ?? await storage.ProcessSteps.FirstAsync(item => item.Id == task.ProcessStepId, cancellationToken);
 
         if (instance.State == ProcessInstanceState.Active
             && instance.CurrentProcessTaskId is null
             && instance.CurrentProcessStepId == step.Id)
         {
-            int pendingTaskCount = await context.ProcessTasks.CountAsync(
+            int pendingTaskCount = await storage.ProcessTasks.CountAsync(
                 item => item.ProcessInstanceId == instance.Id && item.State == ProcessTaskState.Pending,
                 cancellationToken);
             if (pendingTaskCount == 1)
@@ -1675,19 +1700,19 @@ public sealed class WorkflowAutomationService(
         }
 
         PlatformEntities.Lead lead = task.LeadId.HasValue
-            ? await context.Leads.FirstOrDefaultAsync(item => item.Id == task.LeadId.Value, cancellationToken)
+            ? await storage.Leads.FirstOrDefaultAsync(item => item.Id == task.LeadId.Value, cancellationToken)
             : null;
         PlatformEntities.TenantCompanyRelationship relationship = task.TenantCompanyRelationshipId.HasValue
-            ? await context.TenantCompanyRelationships.FirstOrDefaultAsync(item => item.Id == task.TenantCompanyRelationshipId.Value, cancellationToken)
+            ? await storage.TenantCompanyRelationships.FirstOrDefaultAsync(item => item.Id == task.TenantCompanyRelationshipId.Value, cancellationToken)
             : null;
         PlatformEntities.Opportunity opportunity = task.OpportunityId.HasValue
-            ? await context.Opportunities.FirstOrDefaultAsync(item => item.Id == task.OpportunityId.Value, cancellationToken)
+            ? await storage.Opportunities.FirstOrDefaultAsync(item => item.Id == task.OpportunityId.Value, cancellationToken)
             : null;
         PlatformEntities.ClientAccount clientAccount = task.ClientAccountId.HasValue
-            ? await context.ClientAccounts.FirstOrDefaultAsync(item => item.Id == task.ClientAccountId.Value, cancellationToken)
+            ? await storage.ClientAccounts.FirstOrDefaultAsync(item => item.Id == task.ClientAccountId.Value, cancellationToken)
             : null;
 
-        List<PlatformEntities.ProcessTransition> transitions = await context.ProcessTransitions
+        List<PlatformEntities.ProcessTransition> transitions = await storage.ProcessTransitions
             .Where(item => item.ProcessStepId == task.ProcessStepId)
             .OrderByDescending(item => item.IsDefaultOutcome)
             .ThenBy(item => item.OutcomeLabel)
@@ -1697,7 +1722,7 @@ public sealed class WorkflowAutomationService(
         PlatformEntities.ProcessStep nextStep = null;
         if (!transition.IsTerminal && transition.NextProcessStepId.HasValue)
         {
-            nextStep = await context.ProcessSteps.FirstOrDefaultAsync(
+            nextStep = await storage.ProcessSteps.FirstOrDefaultAsync(
                 item => item.Id == transition.NextProcessStepId.Value
                     && item.ProcessDefinitionId == step.ProcessDefinitionId
                     && item.IsActive,
@@ -1719,16 +1744,16 @@ public sealed class WorkflowAutomationService(
         task.LastUpdatedBy = CurrentUserId;
         task.LastUpdated = now;
 
-        await ApplyCompletionNoteUpdatesAsync(context, task, step, task.CompletionNotes, relationship, opportunity, now, cancellationToken);
-        await RecordCompletionActivityAsync(context, task, relationship, opportunity, clientAccount, now, cancellationToken);
-        await ApplyTransitionEffectAsync(context, transition, lead, relationship, opportunity, clientAccount, now, cancellationToken);
-        await RecordCompanyHistoryAsync(context, task, step, instance, transition, lead, relationship, clientAccount, now, cancellationToken);
+        await ApplyCompletionNoteUpdatesAsync(storage, task, step, task.CompletionNotes, relationship, opportunity, now, cancellationToken);
+        await RecordCompletionActivityAsync(storage, task, relationship, opportunity, clientAccount, now, cancellationToken);
+        await ApplyTransitionEffectAsync(storage, transition, lead, relationship, opportunity, clientAccount, now, cancellationToken);
+        await RecordCompanyHistoryAsync(storage, task, step, instance, transition, lead, relationship, clientAccount, now, cancellationToken);
 
         loggingBroker.LogInformation(
             "Completed scheduled task for {RecordName} to {TaskTitle} with outcome {OutcomeKey}.",
             ResolveWorkflowRecordName(
                 lead,
-                await ResolveCompanyAsync(context, lead, relationship, cancellationToken),
+                await ResolveCompanyAsync(storage, lead, relationship, cancellationToken),
                 relationship,
                 opportunity,
                 clientAccount),
@@ -1745,14 +1770,14 @@ public sealed class WorkflowAutomationService(
             instance.LastUpdatedBy = CurrentUserId;
             instance.LastUpdated = now;
 
-            await context.SaveChangesAsync(cancellationToken);
+            await storage.SaveAsync(cancellationToken);
 
             if (transition.Effect == ProcessTransitionEffect.QualifyLeadAndCreateOpportunity && lead?.OpportunityId is Guid opportunityId)
                 await EnsureCoverageAsync(opportunityId: opportunityId, forceCreate: true, cancellationToken: cancellationToken);
 
             if (transition.Effect == ProcessTransitionEffect.CreateClientAccount && opportunity?.TenantCompanyRelationshipId is Guid relationshipId)
             {
-                PlatformEntities.ClientAccount newClientAccount = await context.ClientAccounts
+                PlatformEntities.ClientAccount newClientAccount = await storage.ClientAccounts
                     .OrderByDescending(account => account.CreatedOn)
                     .FirstOrDefaultAsync(
                         account => account.TenantCompanyRelationshipId == relationshipId
@@ -1772,7 +1797,7 @@ public sealed class WorkflowAutomationService(
         instance.LastUpdated = now;
 
         PlatformEntities.ProcessTask nextTask = await CreateTaskForStepAsync(
-            context,
+            storage,
             instance,
             nextStep,
             cancellationToken);
@@ -1780,7 +1805,7 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask RecordCompletionActivityAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.ProcessTask task,
         PlatformEntities.TenantCompanyRelationship relationship,
         PlatformEntities.Opportunity opportunity,
@@ -1798,7 +1823,7 @@ public sealed class WorkflowAutomationService(
             OpportunityId = opportunity?.Id,
             ClientAccountId = clientAccount?.Id,
             MaterialId = task.EmailId.HasValue
-                ? await context.Emails
+                ? await storage.Emails
                     .Where(email => email.Id == task.EmailId.Value)
                     .Select(email => email.MaterialId)
                     .FirstOrDefaultAsync(cancellationToken)
@@ -1823,11 +1848,11 @@ public sealed class WorkflowAutomationService(
             LastUpdated = now
         };
 
-        context.Activities.Add(activity);
+        storage.Add(activity);
     }
 
     static async ValueTask RecordCompanyHistoryAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.ProcessTask task,
         PlatformEntities.ProcessStep step,
         PlatformEntities.ProcessInstance instance,
@@ -1841,7 +1866,7 @@ public sealed class WorkflowAutomationService(
         Guid? companyId = lead?.CompanyId ?? relationship?.CompanyId;
         if (!companyId.HasValue && clientAccount is not null)
         {
-            companyId = await context.TenantCompanyRelationships
+            companyId = await storage.TenantCompanyRelationships
                 .Where(item => item.Id == clientAccount.TenantCompanyRelationshipId)
                 .Select(item => (Guid?)item.CompanyId)
                 .FirstOrDefaultAsync(cancellationToken);
@@ -1861,7 +1886,7 @@ public sealed class WorkflowAutomationService(
 
         foreach (string factKey in facts)
         {
-            context.CompanyHistory.Add(new PlatformEntities.CompanyHistoryItem
+            storage.Add(new PlatformEntities.CompanyHistoryItem
             {
                 Id = Guid.NewGuid(),
                 CompanyId = companyId.Value,
@@ -1905,7 +1930,7 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask ApplyCompletionNoteUpdatesAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.ProcessTask task,
         PlatformEntities.ProcessStep step,
         string completionNote,
@@ -1940,24 +1965,24 @@ public sealed class WorkflowAutomationService(
             && string.IsNullOrWhiteSpace(routeDetails.PhoneNumber))
         {
             if (hasChanges)
-                await context.SaveChangesAsync(cancellationToken);
+                await storage.SaveAsync(cancellationToken);
 
             return;
         }
 
-        PlatformEntities.Company company = await context.Companies
+        PlatformEntities.Company company = await storage.Companies
             .FirstOrDefaultAsync(item => item.Id == relationship.CompanyId, cancellationToken);
 
         if (company is null)
         {
             if (hasChanges)
-                await context.SaveChangesAsync(cancellationToken);
+                await storage.SaveAsync(cancellationToken);
 
             return;
         }
 
         PlatformEntities.CompanyContact companyContact = await ResolveOrCreateCompanyContactFromRouteAsync(
-            context,
+            storage,
             company,
             relationship.Id,
             routeDetails,
@@ -1966,7 +1991,7 @@ public sealed class WorkflowAutomationService(
             cancellationToken);
 
         PlatformEntities.RelationshipContact relationshipContact = await UpsertPrimaryRelationshipContactAsync(
-            context,
+            storage,
             relationship.Id,
             companyContact,
             routeDetails.OpeningAngle,
@@ -1982,11 +2007,11 @@ public sealed class WorkflowAutomationService(
         if (!string.IsNullOrWhiteSpace(routeDetails.PhoneNumber))
             company.ContactPhoneNumber = routeDetails.PhoneNumber;
 
-        await context.SaveChangesAsync(cancellationToken);
+        await storage.SaveAsync(cancellationToken);
     }
 
     async ValueTask ApplyTransitionEffectAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.ProcessTransition transition,
         PlatformEntities.Lead lead,
         PlatformEntities.TenantCompanyRelationship relationship,
@@ -2010,14 +2035,14 @@ public sealed class WorkflowAutomationService(
         switch (transition.Effect)
         {
             case ProcessTransitionEffect.QualifyLeadAndCreateOpportunity:
-                await QualifyLeadAsync(context, lead, now, cancellationToken);
+                await QualifyLeadAsync(storage, lead, now, cancellationToken);
                 break;
 
             case ProcessTransitionEffect.RejectLead:
                 if (lead is not null)
                 {
                     lead.Status = LeadStatus.Rejected;
-                    await SuppressCompanyAsync(context, lead.CompanyId, $"Lead rejected: {transition.OutcomeLabel}", now, cancellationToken);
+                    await SuppressCompanyAsync(storage, lead.CompanyId, $"Lead rejected: {transition.OutcomeLabel}", now, cancellationToken);
                 }
                 break;
 
@@ -2027,7 +2052,7 @@ public sealed class WorkflowAutomationService(
                 break;
 
             case ProcessTransitionEffect.CreateClientAccount:
-                await CreateClientAccountAsync(context, relationship, opportunity, now, cancellationToken);
+                await CreateClientAccountAsync(storage, relationship, opportunity, now, cancellationToken);
                 break;
 
             case ProcessTransitionEffect.CloseOpportunityAsWon:
@@ -2043,7 +2068,7 @@ public sealed class WorkflowAutomationService(
                 if (relationship is not null)
                 {
                     relationship.Status = RelationshipStatus.Disqualified;
-                    await SuppressCompanyAsync(context, relationship.CompanyId, $"Opportunity closed: {transition.OutcomeLabel}", now, cancellationToken);
+                    await SuppressCompanyAsync(storage, relationship.CompanyId, $"Opportunity closed: {transition.OutcomeLabel}", now, cancellationToken);
                 }
                 break;
 
@@ -2062,7 +2087,7 @@ public sealed class WorkflowAutomationService(
     }
 
     static async ValueTask SuppressCompanyAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         Guid? companyId,
         string reason,
         DateTimeOffset now,
@@ -2071,7 +2096,7 @@ public sealed class WorkflowAutomationService(
         if (!companyId.HasValue)
             return;
 
-        PlatformEntities.Company company = await context.Companies
+        PlatformEntities.Company company = await storage.Companies
             .FirstOrDefaultAsync(item => item.Id == companyId.Value, cancellationToken);
         if (company is null)
             return;
@@ -2083,7 +2108,7 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask QualifyLeadAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.Lead lead,
         DateTimeOffset now,
         CancellationToken cancellationToken)
@@ -2091,12 +2116,12 @@ public sealed class WorkflowAutomationService(
         if (lead is null)
             return;
 
-        PlatformEntities.Company company = await context.Companies
+        PlatformEntities.Company company = await storage.Companies
             .FirstOrDefaultAsync(item => item.Id == lead.CompanyId, cancellationToken)
             ?? throw new InvalidOperationException($"Lead '{lead.Id}' does not reference a valid company.");
 
         PlatformEntities.TenantCompanyRelationship relationship = lead.TenantCompanyRelationshipId.HasValue
-            ? await context.TenantCompanyRelationships.FirstOrDefaultAsync(item => item.Id == lead.TenantCompanyRelationshipId.Value, cancellationToken)
+            ? await storage.TenantCompanyRelationships.FirstOrDefaultAsync(item => item.Id == lead.TenantCompanyRelationshipId.Value, cancellationToken)
             : null;
 
         if (relationship is null)
@@ -2119,12 +2144,12 @@ public sealed class WorkflowAutomationService(
                 LastUpdated = now
             };
 
-            context.TenantCompanyRelationships.Add(relationship);
-            await context.SaveChangesAsync(cancellationToken);
+            storage.Add(relationship);
+            await storage.SaveAsync(cancellationToken);
             lead.TenantCompanyRelationshipId = relationship.Id;
         }
 
-        List<PlatformEntities.LeadContact> leadContacts = await context.LeadContacts
+        List<PlatformEntities.LeadContact> leadContacts = await storage.LeadContacts
             .Where(item => item.LeadId == lead.Id)
             .OrderByDescending(item => item.IsPrimary)
             .ThenBy(item => item.CreatedOn)
@@ -2132,17 +2157,17 @@ public sealed class WorkflowAutomationService(
 
         foreach (PlatformEntities.LeadContact leadContact in leadContacts)
         {
-            PlatformEntities.CompanyContact companyContact = await ResolveOrCreateCompanyContactAsync(context, company.Id, leadContact, now, cancellationToken);
-            await ResolveOrCreateRelationshipContactAsync(context, relationship.Id, companyContact.Id, leadContact, now, cancellationToken);
+            PlatformEntities.CompanyContact companyContact = await ResolveOrCreateCompanyContactAsync(storage, company.Id, leadContact, now, cancellationToken);
+            await ResolveOrCreateRelationshipContactAsync(storage, relationship.Id, companyContact.Id, leadContact, now, cancellationToken);
         }
 
         PlatformEntities.Opportunity opportunity = lead.OpportunityId.HasValue
-            ? await context.Opportunities.FirstOrDefaultAsync(item => item.Id == lead.OpportunityId.Value, cancellationToken)
+            ? await storage.Opportunities.FirstOrDefaultAsync(item => item.Id == lead.OpportunityId.Value, cancellationToken)
             : null;
 
         if (opportunity is null)
         {
-            PlatformEntities.RelationshipContact primaryContact = await context.RelationshipContacts
+            PlatformEntities.RelationshipContact primaryContact = await storage.RelationshipContacts
                 .Where(item => item.TenantCompanyRelationshipId == relationship.Id)
                 .OrderByDescending(item => item.IsPrimary)
                 .ThenBy(item => item.CreatedOn)
@@ -2163,8 +2188,8 @@ public sealed class WorkflowAutomationService(
                 LastUpdated = now
             };
 
-            context.Opportunities.Add(opportunity);
-            await context.SaveChangesAsync(cancellationToken);
+            storage.Add(opportunity);
+            await storage.SaveAsync(cancellationToken);
             lead.OpportunityId = opportunity.Id;
         }
 
@@ -2174,7 +2199,7 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask CreateClientAccountAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.TenantCompanyRelationship relationship,
         PlatformEntities.Opportunity opportunity,
         DateTimeOffset now,
@@ -2183,7 +2208,7 @@ public sealed class WorkflowAutomationService(
         if (relationship is null || opportunity is null)
             return;
 
-        PlatformEntities.ClientAccount existing = await context.ClientAccounts
+        PlatformEntities.ClientAccount existing = await storage.ClientAccounts
             .FirstOrDefaultAsync(
                 item => item.TenantCompanyRelationshipId == relationship.Id
                     && item.WonOpportunityId == opportunity.Id,
@@ -2205,7 +2230,7 @@ public sealed class WorkflowAutomationService(
             LastUpdated = now
         };
 
-        context.ClientAccounts.Add(clientAccount);
+        storage.Add(clientAccount);
         relationship.Status = RelationshipStatus.Onboarding;
         opportunity.Stage = SalesPipelineStage.Won;
 
@@ -2227,7 +2252,7 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask<PlatformEntities.CompanyContact> ResolvePreferredContactAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.Lead lead,
         PlatformEntities.TenantCompanyRelationship relationship,
         PlatformEntities.Opportunity opportunity,
@@ -2235,7 +2260,7 @@ public sealed class WorkflowAutomationService(
     {
         if (opportunity?.PrimaryRelationshipContactId is Guid primaryRelationshipContactId)
         {
-            return await context.RelationshipContacts
+            return await storage.RelationshipContacts
                 .Where(item => item.Id == primaryRelationshipContactId)
                 .Select(item => item.CompanyContact)
                 .FirstOrDefaultAsync(cancellationToken);
@@ -2243,7 +2268,7 @@ public sealed class WorkflowAutomationService(
 
         if (relationship is not null)
         {
-            PlatformEntities.RelationshipContact relationshipContact = await context.RelationshipContacts
+            PlatformEntities.RelationshipContact relationshipContact = await storage.RelationshipContacts
                 .Include(item => item.CompanyContact)
                 .Where(item => item.TenantCompanyRelationshipId == relationship.Id)
                 .OrderByDescending(item => item.IsPrimary)
@@ -2256,27 +2281,27 @@ public sealed class WorkflowAutomationService(
 
         if (lead is not null)
         {
-            PlatformEntities.LeadContact leadContact = await context.LeadContacts
+            PlatformEntities.LeadContact leadContact = await storage.LeadContacts
                 .Where(item => item.LeadId == lead.Id)
                 .OrderByDescending(item => item.IsPrimary)
                 .ThenBy(item => item.CreatedOn)
                 .FirstOrDefaultAsync(cancellationToken);
 
             if (leadContact is not null)
-                return await ResolveOrCreateCompanyContactAsync(context, lead.CompanyId, leadContact, DateTimeOffset.UtcNow, cancellationToken);
+                return await ResolveOrCreateCompanyContactAsync(storage, lead.CompanyId, leadContact, DateTimeOffset.UtcNow, cancellationToken);
         }
 
         return null;
     }
 
     async ValueTask<PlatformEntities.CompanyContact> ResolveOrCreateCompanyContactAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         Guid companyId,
         PlatformEntities.LeadContact leadContact,
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        PlatformEntities.CompanyContact existing = await context.CompanyContacts
+        PlatformEntities.CompanyContact existing = await storage.CompanyContacts
             .FirstOrDefaultAsync(
                 item => item.CompanyId == companyId
                     && item.EmailAddress == leadContact.EmailAddress
@@ -2304,13 +2329,13 @@ public sealed class WorkflowAutomationService(
             LastUpdated = now
         };
 
-        context.CompanyContacts.Add(companyContact);
-        await context.SaveChangesAsync(cancellationToken);
+        storage.Add(companyContact);
+        await storage.SaveAsync(cancellationToken);
         return companyContact;
     }
 
     async ValueTask<PlatformEntities.CompanyContact> ResolveOrCreateCompanyContactFromRouteAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.Company company,
         Guid relationshipId,
         RouteConfirmationDetails routeDetails,
@@ -2318,7 +2343,7 @@ public sealed class WorkflowAutomationService(
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        IQueryable<PlatformEntities.CompanyContact> query = context.CompanyContacts.Where(item => item.CompanyId == company.Id);
+        IQueryable<PlatformEntities.CompanyContact> query = storage.CompanyContacts.Where(item => item.CompanyId == company.Id);
 
         PlatformEntities.CompanyContact existing = null;
 
@@ -2367,26 +2392,26 @@ public sealed class WorkflowAutomationService(
             LastUpdated = now
         };
 
-        context.CompanyContacts.Add(companyContact);
+        storage.Add(companyContact);
         return companyContact;
     }
 
     async ValueTask ResolveOrCreateRelationshipContactAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         Guid relationshipId,
         Guid companyContactId,
         PlatformEntities.LeadContact leadContact,
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        bool exists = await context.RelationshipContacts.AnyAsync(
+        bool exists = await storage.RelationshipContacts.AnyAsync(
             item => item.TenantCompanyRelationshipId == relationshipId && item.CompanyContactId == companyContactId,
             cancellationToken);
 
         if (exists)
             return;
 
-        context.RelationshipContacts.Add(new PlatformEntities.RelationshipContact
+        storage.Add(new PlatformEntities.RelationshipContact
         {
             Id = Guid.NewGuid(),
             TenantCompanyRelationshipId = relationshipId,
@@ -2401,11 +2426,11 @@ public sealed class WorkflowAutomationService(
             LastUpdated = now
         });
 
-        await context.SaveChangesAsync(cancellationToken);
+        await storage.SaveAsync(cancellationToken);
     }
 
     async ValueTask<PlatformEntities.RelationshipContact> UpsertPrimaryRelationshipContactAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         Guid relationshipId,
         PlatformEntities.CompanyContact companyContact,
         string openingAngle,
@@ -2413,7 +2438,7 @@ public sealed class WorkflowAutomationService(
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        List<PlatformEntities.RelationshipContact> existingContacts = await context.RelationshipContacts
+        List<PlatformEntities.RelationshipContact> existingContacts = await storage.RelationshipContacts
             .Where(item => item.TenantCompanyRelationshipId == relationshipId)
             .ToListAsync(cancellationToken);
 
@@ -2450,7 +2475,7 @@ public sealed class WorkflowAutomationService(
             LastUpdated = now
         };
 
-        context.RelationshipContacts.Add(relationshipContact);
+        storage.Add(relationshipContact);
         return relationshipContact;
     }
 
@@ -2548,14 +2573,14 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask<PlatformEntities.ProcessDefinition> GetDefaultDefinitionAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         string tenantId,
         ProcessScopeType scopeType,
         CancellationToken cancellationToken)
     {
         string resolvedTenantId = string.IsNullOrWhiteSpace(tenantId) ? DefaultTenantId : tenantId;
 
-        return await context.ProcessDefinitions
+        return await storage.ProcessDefinitions
             .Where(item => item.TenantId == resolvedTenantId && item.ScopeType == scopeType && item.IsActive)
             .OrderByDescending(item => item.IsDefault)
             .ThenBy(item => item.Name)
@@ -2563,22 +2588,22 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask<PlatformEntities.ProcessStep> GetEntryStepAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         Guid definitionId,
         CancellationToken cancellationToken) =>
-        await context.ProcessSteps
+        await storage.ProcessSteps
             .Where(item => item.ProcessDefinitionId == definitionId && item.IsActive)
             .OrderByDescending(item => item.IsEntryPoint)
             .ThenBy(item => item.Sequence)
             .FirstOrDefaultAsync(cancellationToken);
 
     async ValueTask<PlatformEntities.ProcessStep> ResolveOpportunityStepAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         Guid definitionId,
         PlatformEntities.Opportunity opportunity,
         CancellationToken cancellationToken)
     {
-        List<PlatformEntities.ProcessStep> steps = await context.ProcessSteps
+        List<PlatformEntities.ProcessStep> steps = await storage.ProcessSteps
             .Where(item => item.ProcessDefinitionId == definitionId && item.IsActive)
             .OrderBy(item => item.Sequence)
             .ToListAsync(cancellationToken);
@@ -2595,15 +2620,15 @@ public sealed class WorkflowAutomationService(
             .ThenBy(item => item.Sequence)
             .First();
 
-        bool hasSentEmail = await HasSentOpportunityEmailAsync(context, opportunity, cancellationToken);
+        bool hasSentEmail = await HasSentOpportunityEmailAsync(storage, opportunity, cancellationToken);
         bool hasPendingProposalTask = await HasPendingOpportunityTaskForStepAsync(
-            context,
+            storage,
             opportunity.Id,
             definitionId,
             "send-proposal",
             cancellationToken);
         bool hasPendingContractTask = await HasPendingOpportunityTaskForStepAsync(
-            context,
+            storage,
             opportunity.Id,
             definitionId,
             "send-contract",
@@ -2640,12 +2665,12 @@ public sealed class WorkflowAutomationService(
     }
 
     static Task<bool> HasPendingOpportunityTaskForStepAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         Guid opportunityId,
         Guid processDefinitionId,
         string stepKey,
         CancellationToken cancellationToken)
-        => context.ProcessTasks
+        => storage.ProcessTasks
             .AnyAsync(
                 item => item.OpportunityId == opportunityId
                     && item.State == ProcessTaskState.Pending
@@ -2654,18 +2679,18 @@ public sealed class WorkflowAutomationService(
                 cancellationToken);
 
     async ValueTask<bool> HasSentOpportunityEmailAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.Opportunity opportunity,
         CancellationToken cancellationToken)
     {
-        if (await context.Emails.AnyAsync(
+        if (await storage.Emails.AnyAsync(
                 item => item.OpportunityId == opportunity.Id && item.State == EmailState.Sent,
                 cancellationToken))
         {
             return true;
         }
 
-        bool hasSiblingOpportunities = await context.Opportunities.AnyAsync(
+        bool hasSiblingOpportunities = await storage.Opportunities.AnyAsync(
             item => item.TenantCompanyRelationshipId == opportunity.TenantCompanyRelationshipId
                 && item.Id != opportunity.Id,
             cancellationToken);
@@ -2673,7 +2698,7 @@ public sealed class WorkflowAutomationService(
         if (hasSiblingOpportunities)
             return false;
 
-        return await context.Emails.AnyAsync(
+        return await storage.Emails.AnyAsync(
             item => item.TenantCompanyRelationshipId == opportunity.TenantCompanyRelationshipId
                 && item.OpportunityId == null
                 && item.ClientAccountId == null
@@ -2705,7 +2730,7 @@ public sealed class WorkflowAutomationService(
     }
 
     static async ValueTask CloseActiveInstanceAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.ProcessInstance activeInstance,
         string outcomeKey,
         CancellationToken cancellationToken)
@@ -2713,7 +2738,7 @@ public sealed class WorkflowAutomationService(
         if (activeInstance is null)
             return;
 
-        List<PlatformEntities.ProcessTask> pendingTasks = await context.ProcessTasks
+        List<PlatformEntities.ProcessTask> pendingTasks = await storage.ProcessTasks
             .Where(item => item.ProcessInstanceId == activeInstance.Id && item.State == ProcessTaskState.Pending)
             .ToListAsync(cancellationToken);
 
@@ -2737,13 +2762,14 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask EnsureLeadProcessAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         string tenantId,
         CancellationToken cancellationToken)
     {
-        PlatformEntities.ProcessDefinition existingDefinition = await context.ProcessDefinitions.FirstOrDefaultAsync(
+        PlatformEntities.ProcessDefinition existingDefinition = await storage.ProcessDefinitions.FirstOrDefaultAsync(
                 item => item.TenantId == tenantId
                     && item.ScopeType == ProcessScopeType.Lead
+                    && item.Name == "Lead Generation"
                     && (item.LifecycleState == ProcessDefinitionLifecycleState.Active || item.IsActive),
                 cancellationToken);
 
@@ -2754,14 +2780,14 @@ public sealed class WorkflowAutomationService(
                 "Lead Generation",
                 "Move a raw lead through bounded identity, activity, data-quality, and commercial-fit checks before creating an opportunity or rejecting it cleanly.");
 
-            bool hasBoundedStages = await context.ProcessSteps.AnyAsync(
+            bool hasBoundedStages = await storage.ProcessSteps.AnyAsync(
                 item => item.ProcessDefinitionId == existingDefinition.Id
                     && item.Key == "company-activity"
                     && item.IsActive,
                 cancellationToken);
 
             if (!hasBoundedStages)
-                await UpgradeLeadProcessToBoundedStagesAsync(context, existingDefinition, cancellationToken);
+                await UpgradeLeadProcessToBoundedStagesAsync(storage, existingDefinition, cancellationToken);
 
             return;
         }
@@ -2825,10 +2851,10 @@ public sealed class WorkflowAutomationService(
             null,
             "Identity coherent: yes or no.\nKnown active: yes, no, or uncertain.\nRecorded fit score: integer.\nDecision: qualified, deferred, or rejected.\nRule explanation: one sentence.");
 
-        context.ProcessDefinitions.Add(definition);
+        storage.Add(definition);
         definition.FamilyId = definition.Id;
-        context.ProcessSteps.AddRange(research, describeActivity, verify, assessFit, qualify);
-        context.ProcessTransitions.AddRange(
+        storage.AddRange(research, describeActivity, verify, assessFit, qualify);
+        storage.AddRange(
             NewTransition(research, describeActivity, "identity-checked", "Registry identity checked", true, ProcessTransitionEffect.None),
             NewTransition(describeActivity, verify, "activity-described", "Company activity described", true, ProcessTransitionEffect.None),
             NewTransition(verify, assessFit, "quality-assessed", "Record quality assessed", true, ProcessTransitionEffect.None),
@@ -2839,11 +2865,11 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask UpgradeLeadProcessToBoundedStagesAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.ProcessDefinition definition,
         CancellationToken cancellationToken)
     {
-        List<PlatformEntities.ProcessStep> existingSteps = await context.ProcessSteps
+        List<PlatformEntities.ProcessStep> existingSteps = await storage.ProcessSteps
             .Where(item => item.ProcessDefinitionId == definition.Id)
             .ToListAsync(cancellationToken);
 
@@ -2883,13 +2909,13 @@ public sealed class WorkflowAutomationService(
             "Identity coherent: yes or no.\nKnown active: yes, no, or uncertain.\nRecorded fit score: integer.\nDecision: qualified, deferred, or rejected.\nRule explanation: one sentence.", now);
 
         List<Guid> upgradedStepIds = [research.Id, verify.Id, qualify.Id];
-        List<PlatformEntities.ProcessTransition> oldTransitions = await context.ProcessTransitions
+        List<PlatformEntities.ProcessTransition> oldTransitions = await storage.ProcessTransitions
             .Where(item => upgradedStepIds.Contains(item.ProcessStepId))
             .ToListAsync(cancellationToken);
-        context.ProcessTransitions.RemoveRange(oldTransitions);
+        storage.RemoveRange(oldTransitions);
 
-        context.ProcessSteps.AddRange(describeActivity, assessFit);
-        context.ProcessTransitions.AddRange(
+        storage.AddRange(describeActivity, assessFit);
+        storage.AddRange(
             NewTransition(research, describeActivity, "identity-checked", "Registry identity checked", true, ProcessTransitionEffect.None),
             NewTransition(describeActivity, verify, "activity-described", "Company activity described", true, ProcessTransitionEffect.None),
             NewTransition(verify, assessFit, "quality-assessed", "Record quality assessed", true, ProcessTransitionEffect.None),
@@ -2898,7 +2924,7 @@ public sealed class WorkflowAutomationService(
             NewTransition(qualify, null, "deferred", "Defer until qualification criteria change", true, ProcessTransitionEffect.DeferLead, true),
             NewTransition(qualify, null, "rejected", "Reject lead", false, ProcessTransitionEffect.RejectLead, true));
 
-        List<PlatformEntities.ProcessTask> pendingTasks = await context.ProcessTasks
+        List<PlatformEntities.ProcessTask> pendingTasks = await storage.ProcessTasks
             .Where(item => item.State == ProcessTaskState.Pending && upgradedStepIds.Contains(item.ProcessStepId))
             .ToListAsync(cancellationToken);
 
@@ -2908,7 +2934,7 @@ public sealed class WorkflowAutomationService(
                 : task.ProcessStepId == verify.Id ? verify
                 : qualify;
             TaskRenderContext renderContext = await BuildTaskRenderContextAsync(
-                context, task.LeadId, task.TenantCompanyRelationshipId, task.OpportunityId, task.ClientAccountId, cancellationToken);
+                storage, task.LeadId, task.TenantCompanyRelationshipId, task.OpportunityId, task.ClientAccountId, cancellationToken);
             TaskRenderValues rendered = RenderTaskValues(step, renderContext, now);
             task.ActionType = step.ActionType;
             task.RenderedTitle = rendered.Title;
@@ -2942,11 +2968,11 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask EnsureOpportunityProcessAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         string tenantId,
         CancellationToken cancellationToken)
     {
-        PlatformEntities.ProcessDefinition existingDefinition = await context.ProcessDefinitions.FirstOrDefaultAsync(
+        PlatformEntities.ProcessDefinition existingDefinition = await storage.ProcessDefinitions.FirstOrDefaultAsync(
                 item => item.TenantId == tenantId
                     && item.ScopeType == ProcessScopeType.Opportunity
                     && (item.LifecycleState == ProcessDefinitionLifecycleState.Active || item.IsActive),
@@ -2954,7 +2980,7 @@ public sealed class WorkflowAutomationService(
 
         if (existingDefinition is not null)
         {
-            bool isCurrentHandoffProcess = await context.ProcessSteps.AnyAsync(
+            bool isCurrentHandoffProcess = await storage.ProcessSteps.AnyAsync(
                 item => item.ProcessDefinitionId == existingDefinition.Id
                     && item.Key == "handoff-account-owner"
                     && item.IsActive,
@@ -2977,7 +3003,7 @@ public sealed class WorkflowAutomationService(
         }
 
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        int versionNumber = await context.ProcessDefinitions
+        int versionNumber = await storage.ProcessDefinitions
             .Where(item => item.TenantId == tenantId && item.ScopeType == ProcessScopeType.Opportunity)
             .Select(item => (int?)item.VersionNumber)
             .MaxAsync(cancellationToken) ?? 0;
@@ -3048,10 +3074,10 @@ public sealed class WorkflowAutomationService(
             null,
             "Has the demo taken place?\nAre commercials and contract terms agreed?\nShould this organisation become a client?");
 
-        context.ProcessDefinitions.Add(definition);
+        storage.Add(definition);
         definition.FamilyId ??= definition.Id;
-        context.ProcessSteps.AddRange(confirmRoute, introEmail, reviewResponse, followUpCall, handoffToAccountOwner, accountOwnerDecision);
-        context.ProcessTransitions.AddRange(
+        storage.AddRange(confirmRoute, introEmail, reviewResponse, followUpCall, handoffToAccountOwner, accountOwnerDecision);
+        storage.AddRange(
             NewTransition(confirmRoute, introEmail, "ready", "Route confirmed", true, ProcessTransitionEffect.None),
             NewTransition(introEmail, reviewResponse, "sent", "Email sent", true, ProcessTransitionEffect.None),
             NewTransition(reviewResponse, handoffToAccountOwner, "demo-interest", "Positive response and demo interest", false, ProcessTransitionEffect.None),
@@ -3067,11 +3093,11 @@ public sealed class WorkflowAutomationService(
     }
 
     async ValueTask EnsureClientProcessAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         string tenantId,
         CancellationToken cancellationToken)
     {
-        PlatformEntities.ProcessDefinition existingDefinition = await context.ProcessDefinitions.FirstOrDefaultAsync(
+        PlatformEntities.ProcessDefinition existingDefinition = await storage.ProcessDefinitions.FirstOrDefaultAsync(
                 item => item.TenantId == tenantId
                     && item.ScopeType == ProcessScopeType.ClientAccount
                     && (item.LifecycleState == ProcessDefinitionLifecycleState.Active || item.IsActive),
@@ -3079,29 +3105,29 @@ public sealed class WorkflowAutomationService(
 
         if (existingDefinition is not null)
         {
-            bool hasInstances = await context.ProcessInstances.AnyAsync(
+            bool hasInstances = await storage.ProcessInstances.AnyAsync(
                 item => item.ProcessDefinitionId == existingDefinition.Id,
                 cancellationToken);
 
             if (!hasInstances)
             {
-                List<PlatformEntities.ProcessStep> oldSteps = await context.ProcessSteps
+                List<PlatformEntities.ProcessStep> oldSteps = await storage.ProcessSteps
                     .Where(item => item.ProcessDefinitionId == existingDefinition.Id)
                     .ToListAsync(cancellationToken);
                 List<Guid> oldStepIds = [.. oldSteps.Select(item => item.Id)];
                 List<PlatformEntities.ProcessTransition> oldTransitions = oldStepIds.Count == 0
                     ? []
-                    : await context.ProcessTransitions
+                    : await storage.ProcessTransitions
                         .Where(item => oldStepIds.Contains(item.ProcessStepId))
                         .ToListAsync(cancellationToken);
 
-                context.ProcessTransitions.RemoveRange(oldTransitions);
-                context.ProcessSteps.RemoveRange(oldSteps);
+                storage.RemoveRange(oldTransitions);
+                storage.RemoveRange(oldSteps);
                 NormalizeSeedDefinitionMetadata(
                     existingDefinition,
                     "Client Maintenance",
                     "Schedule regular client status reviews so relationship health, risks, and next actions stay current.");
-                AddClientMaintenanceSteps(context, existingDefinition);
+                AddClientMaintenanceSteps(storage, existingDefinition);
                 return;
             }
 
@@ -3140,9 +3166,9 @@ public sealed class WorkflowAutomationService(
             LastUpdated = now
         };
 
-        context.ProcessDefinitions.Add(definition);
+        storage.Add(definition);
         definition.FamilyId = definition.Id;
-        AddClientMaintenanceSteps(context, definition);
+        AddClientMaintenanceSteps(storage, definition);
     }
 
     void NormalizeSeedDefinitionMetadata(
@@ -3162,7 +3188,7 @@ public sealed class WorkflowAutomationService(
     }
 
     static void AddClientMaintenanceSteps(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.ProcessDefinition definition)
     {
         PlatformEntities.ProcessStep review = NewStep(
@@ -3184,8 +3210,8 @@ public sealed class WorkflowAutomationService(
             null,
             "Is the client satisfied?\nHas delivery or scope changed?\nAre there risks or expansion opportunities?\nWho owns the next action?");
 
-        context.ProcessSteps.Add(review);
-        context.ProcessTransitions.Add(
+        storage.Add(review);
+        storage.Add(
             NewTransition(
                 review,
                 review,
@@ -3309,7 +3335,7 @@ public sealed class WorkflowAutomationService(
         current >= proposed ? current : proposed;
 
     async ValueTask<PlatformEntities.Company> ResolveCompanyAsync(
-        PlatformDbContext context,
+        IWorkflowBroker storage,
         PlatformEntities.Lead lead,
         PlatformEntities.TenantCompanyRelationship relationship,
         CancellationToken cancellationToken)
@@ -3321,7 +3347,7 @@ public sealed class WorkflowAutomationService(
         if (relationship?.Company is not null && relationship.Company.Id == companyId.Value)
             return relationship.Company;
 
-        return await context.Companies.FirstOrDefaultAsync(item => item.Id == companyId.Value, cancellationToken);
+        return await storage.Companies.FirstOrDefaultAsync(item => item.Id == companyId.Value, cancellationToken);
     }
 
     static string ResolveWorkflowRecordName(
@@ -3373,7 +3399,7 @@ public sealed class WorkflowAutomationService(
             ? "system"
             : authInfo.SSOUserId;
 
-    static void Touch(PlatformEntities.AuditableEntity entity, DateTimeOffset now)
+    static void Touch(PlatformEntities.ICrmEntity entity, DateTimeOffset now)
     {
         if (entity is null)
             return;

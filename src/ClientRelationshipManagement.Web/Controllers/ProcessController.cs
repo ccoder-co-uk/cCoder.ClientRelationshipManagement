@@ -1,5 +1,5 @@
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using cCoder.ClientRelationshipManagement.Models.Security;
 using cCoder.Security.Objects;
 using ClientRelationshipManagement.Web.Models.Process;
@@ -14,7 +14,8 @@ namespace ClientRelationshipManagement.Web.Controllers;
 
 [Route("Admin/Process")]
 public sealed class ProcessController(
-    IPlatformDbContextFactory dbContextFactory,
+    IProcessCoordinationService processWorkspace,
+    ISalesCoordinationService salesWorkspace,
     IWorkflowAutomationService workflowAutomationService,
     IProcessValidationService processValidationService,
     ICRMAuthInfo authInfo)
@@ -28,8 +29,7 @@ public sealed class ProcessController(
 
         await workflowAutomationService.EnsureSeedProcessesAsync();
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        return View(await CreateIndexModelAsync(context));
+        return View(await CreateIndexModelAsync());
     }
 
     [HttpGet("Designer")]
@@ -40,9 +40,7 @@ public sealed class ProcessController(
 
         await workflowAutomationService.EnsureSeedProcessesAsync(cancellationToken);
         IReadOnlyCollection<string> tenantIds = GetReadableTenantIds();
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-
-        List<PlatformEntities.ProcessDefinition> definitions = await context.ProcessDefinitions
+        List<PlatformEntities.ProcessDefinition> definitions = await processWorkspace.RetrieveDefinitions()
             .AsNoTracking()
             .Where(item => tenantIds.Contains(item.TenantId) && item.IsActive)
             .Include(item => item.Steps.Where(step => step.IsActive))
@@ -54,7 +52,7 @@ public sealed class ProcessController(
         DateTimeOffset now = DateTimeOffset.UtcNow;
         List<ProcessDesignerStepHealthRow> healthRows = stepIds.Count == 0
             ? []
-            : await context.ProcessTasks
+            : await processWorkspace.RetrieveTasks()
                 .AsNoTracking()
                 .Where(item => stepIds.Contains(item.ProcessStepId))
                 .GroupBy(item => item.ProcessStepId)
@@ -142,9 +140,7 @@ public sealed class ProcessController(
         Response.Headers.Pragma = "no-cache";
         await workflowAutomationService.EnsureSeedProcessesAsync(cancellationToken);
         IReadOnlyCollection<string> tenantIds = GetReadableTenantIds();
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-
-        List<PlatformEntities.ProcessDefinition> definitions = await context.ProcessDefinitions
+        List<PlatformEntities.ProcessDefinition> definitions = await processWorkspace.RetrieveDefinitions()
             .AsNoTracking()
             .Where(item => tenantIds.Contains(item.TenantId)
                 && item.IsActive
@@ -159,7 +155,7 @@ public sealed class ProcessController(
         List<Guid> definitionIds = [.. definitions.Select(item => item.Id)];
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
-        List<WorkflowStepIdentityProjection> stepIdentities = await context.ProcessSteps
+        List<WorkflowStepIdentityProjection> stepIdentities = await processWorkspace.RetrieveSteps()
             .AsNoTracking()
             .Where(step => tenantIds.Contains(step.ProcessDefinition.TenantId)
                 && step.ProcessDefinition.LifecycleState != ProcessDefinitionLifecycleState.Draft)
@@ -178,7 +174,7 @@ public sealed class ProcessController(
 
         List<WorkflowStepHealthProjection> healthRows = historicalStepIds.Count == 0
             ? []
-            : await context.ProcessTasks
+            : await processWorkspace.RetrieveTasks()
                 .AsNoTracking()
                 .Where(item => historicalStepIds.Contains(item.ProcessStepId))
                 .GroupBy(item => item.ProcessStepId)
@@ -220,7 +216,7 @@ public sealed class ProcessController(
                 },
                 StringComparer.OrdinalIgnoreCase);
 
-        List<WorkflowLaneInstanceProjection> instanceRows = await context.ProcessInstances
+        List<WorkflowLaneInstanceProjection> instanceRows = await processWorkspace.RetrieveInstances()
             .AsNoTracking()
             .Where(item => tenantIds.Contains(item.ProcessDefinition.TenantId)
                 && item.ProcessDefinition.LifecycleState != ProcessDefinitionLifecycleState.Draft)
@@ -238,7 +234,7 @@ public sealed class ProcessController(
 
         List<WorkflowCurrentStepProjection> currentStepRows = definitionIds.Count == 0
             ? []
-            : await context.ProcessInstances
+            : await processWorkspace.RetrieveInstances()
                 .AsNoTracking()
                 .Where(item => definitionIds.Contains(item.ProcessDefinitionId)
                     && item.State == ProcessInstanceState.Active)
@@ -261,7 +257,7 @@ public sealed class ProcessController(
 
         List<WorkflowTransitionOutcomeProjection> outcomeRows = historicalStepIds.Count == 0
             ? []
-            : await context.ProcessTasks
+            : await processWorkspace.RetrieveTasks()
                 .AsNoTracking()
                 .Where(item => historicalStepIds.Contains(item.ProcessStepId)
                     && item.State == ProcessTaskState.Completed
@@ -280,7 +276,7 @@ public sealed class ProcessController(
             .GroupBy(row => LogicalOutcomeKey(stepIdentityById[row.StepId], row.OutcomeKey), StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.Sum(item => item.Count), StringComparer.OrdinalIgnoreCase);
 
-        List<WorkflowLeadCompanyProjection> leadRows = await context.Leads
+        List<WorkflowLeadCompanyProjection> leadRows = await salesWorkspace.RetrieveLeads()
             .AsNoTracking()
             .Where(lead => tenantIds.Contains(lead.TenantId))
             .Select(lead => new WorkflowLeadCompanyProjection
@@ -294,7 +290,7 @@ public sealed class ProcessController(
             .GroupBy(item => item.CompanyId)
             .ToDictionary(group => group.Key, group => group.OrderByDescending(item => item.LastUpdated).First());
 
-        List<WorkflowOpportunityCompanyProjection> opportunityRows = await context.Opportunities
+        List<WorkflowOpportunityCompanyProjection> opportunityRows = await salesWorkspace.RetrieveOpportunities()
             .AsNoTracking()
             .Where(opportunity => tenantIds.Contains(opportunity.TenantCompanyRelationship.TenantId))
             .Select(opportunity => new WorkflowOpportunityCompanyProjection
@@ -308,7 +304,7 @@ public sealed class ProcessController(
             .GroupBy(item => item.CompanyId)
             .ToDictionary(group => group.Key, group => group.OrderByDescending(item => item.LastUpdated).First());
 
-        List<WorkflowClientCompanyProjection> clientRows = await context.ClientAccounts
+        List<WorkflowClientCompanyProjection> clientRows = await salesWorkspace.RetrieveClientAccounts()
             .AsNoTracking()
             .Where(client => tenantIds.Contains(client.TenantCompanyRelationship.TenantId))
             .Select(client => new WorkflowClientCompanyProjection
@@ -322,7 +318,7 @@ public sealed class ProcessController(
             .GroupBy(item => item.CompanyId)
             .ToDictionary(group => group.Key, group => group.OrderByDescending(item => item.LastUpdated).First());
 
-        HashSet<Guid> relationshipCompanyIds = await context.TenantCompanyRelationships
+        HashSet<Guid> relationshipCompanyIds = await salesWorkspace.RetrieveRelationships()
             .AsNoTracking()
             .Where(relationship => tenantIds.Contains(relationship.TenantId))
             .Select(relationship => relationship.CompanyId)
@@ -347,15 +343,15 @@ public sealed class ProcessController(
             .. latestClients.Keys
         ];
 
-        long totalCompanies = await context.Companies.AsNoTracking().LongCountAsync(cancellationToken);
-        long candidateCompanies = await context.Companies.AsNoTracking()
+        long totalCompanies = await salesWorkspace.RetrieveCompanies().AsNoTracking().LongCountAsync(cancellationToken);
+        long candidateCompanies = await salesWorkspace.RetrieveCompanies().AsNoTracking()
             .LongCountAsync(company => !company.IsProspectingSuppressed
                 && !company.Relationships.Any()
-                && !context.Leads.Any(lead => lead.CompanyId == company.Id), cancellationToken);
-        long excludedCompanies = await context.Companies.AsNoTracking()
+                && !salesWorkspace.RetrieveLeads().Any(lead => lead.CompanyId == company.Id), cancellationToken);
+        long excludedCompanies = await salesWorkspace.RetrieveCompanies().AsNoTracking()
             .LongCountAsync(company => company.IsProspectingSuppressed
                 && !company.Relationships.Any()
-                && !context.Leads.Any(lead => lead.CompanyId == company.Id), cancellationToken);
+                && !salesWorkspace.RetrieveLeads().Any(lead => lead.CompanyId == company.Id), cancellationToken);
         long unclassifiedCompanies = Math.Max(
             0,
             totalCompanies - candidateCompanies - excludedCompanies - visibleLifecycleCompanyIds.Count);
@@ -602,13 +598,12 @@ public sealed class ProcessController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        PlatformEntities.ProcessDefinition definition = await context.ProcessDefinitions
+        PlatformEntities.ProcessDefinition definition = await processWorkspace.RetrieveWritableDefinitions()
             .FirstOrDefaultAsync(item => item.Id == request.ProcessDefinitionId, cancellationToken);
         if (definition is null || !GetWriteableTenantIds().Contains(definition.TenantId))
             return NotFound();
 
-        List<PlatformEntities.ProcessStep> steps = await context.ProcessSteps
+        List<PlatformEntities.ProcessStep> steps = await processWorkspace.RetrieveSteps()
             .Where(item => item.ProcessDefinitionId == definition.Id && item.IsActive)
             .ToListAsync(cancellationToken);
         if (request.StepIds.Count != steps.Count || request.StepIds.Distinct().Count() != steps.Count
@@ -624,7 +619,7 @@ public sealed class ProcessController(
             step.LastUpdated = now;
         }
 
-        await context.SaveChangesAsync(cancellationToken);
+        await processWorkspace.SaveAsync(cancellationToken);
         return Ok();
     }
 
@@ -635,13 +630,12 @@ public sealed class ProcessController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        PlatformEntities.ProcessDefinition definition = await context.ProcessDefinitions
+        PlatformEntities.ProcessDefinition definition = await processWorkspace.RetrieveWritableDefinitions()
             .FirstOrDefaultAsync(item => item.Id == request.ProcessDefinitionId, cancellationToken);
         if (definition is null || !GetWriteableTenantIds().Contains(definition.TenantId))
             return NotFound();
 
-        List<PlatformEntities.ProcessStep> steps = await context.ProcessSteps
+        List<PlatformEntities.ProcessStep> steps = await processWorkspace.RetrieveSteps()
             .Where(item => item.ProcessDefinitionId == definition.Id
                 && (item.Id == request.FromStepId || item.Id == request.ToStepId)
                 && item.IsActive)
@@ -649,7 +643,7 @@ public sealed class ProcessController(
         if (steps.Count != 2 || request.FromStepId == request.ToStepId)
             return BadRequest("Both steps must be active steps in the same lane.");
 
-        bool exists = await context.ProcessTransitions.AnyAsync(item =>
+        bool exists = await processWorkspace.RetrieveTransitions().AnyAsync(item =>
             item.ProcessStepId == request.FromStepId && item.NextProcessStepId == request.ToStepId,
             cancellationToken);
         if (exists)
@@ -658,8 +652,8 @@ public sealed class ProcessController(
         PlatformEntities.ProcessStep from = steps.First(item => item.Id == request.FromStepId);
         PlatformEntities.ProcessStep to = steps.First(item => item.Id == request.ToStepId);
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        bool hasOutgoing = await context.ProcessTransitions.AnyAsync(item => item.ProcessStepId == from.Id, cancellationToken);
-        context.ProcessTransitions.Add(new PlatformEntities.ProcessTransition
+        bool hasOutgoing = await processWorkspace.RetrieveTransitions().AnyAsync(item => item.ProcessStepId == from.Id, cancellationToken);
+        processWorkspace.Add(new PlatformEntities.ProcessTransition
         {
             Id = Guid.NewGuid(),
             ProcessStepId = from.Id,
@@ -675,7 +669,7 @@ public sealed class ProcessController(
             CreatedOn = now,
             LastUpdated = now
         });
-        await context.SaveChangesAsync(cancellationToken);
+        await processWorkspace.SaveAsync(cancellationToken);
         return Ok();
     }
 
@@ -687,8 +681,7 @@ public sealed class ProcessController(
 
         await workflowAutomationService.EnsureSeedProcessesAsync();
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        ProcessEditPageViewModel model = await CreateEditModelAsync(context, id);
+        ProcessEditPageViewModel model = await CreateEditModelAsync(id);
         return model is null ? NotFound() : View(model);
     }
 
@@ -699,17 +692,16 @@ public sealed class ProcessController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
         string tenantId = ResolveTenantId(request.TenantId);
 
         PlatformEntities.ProcessDefinition definition = request.Id.HasValue
-            ? await context.ProcessDefinitions.FirstOrDefaultAsync(item => item.Id == request.Id.Value)
+            ? await processWorkspace.RetrieveWritableDefinitions().FirstOrDefaultAsync(item => item.Id == request.Id.Value)
             : null;
 
         if (definition is not null
             && definition.IsActive
             && !request.IsActive
-            && await context.ProcessInstances.AnyAsync(item =>
+            && await processWorkspace.RetrieveInstances().AnyAsync(item =>
                 item.ProcessDefinitionId == definition.Id && item.State == ProcessInstanceState.Active))
         {
             TempData["ProcessNotice"] = "This is the live graph and cannot be deactivated while companies are following it. Publish an approved replacement version instead.";
@@ -717,7 +709,7 @@ public sealed class ProcessController(
         }
 
         if (request.IsActive
-            && await context.ProcessDefinitions.AnyAsync(item =>
+            && await processWorkspace.RetrieveDefinitions().AnyAsync(item =>
                 item.Id != (request.Id ?? Guid.Empty)
                 && item.TenantId == tenantId
                 && item.ScopeType == request.ScopeType
@@ -744,7 +736,7 @@ public sealed class ProcessController(
                 CreatedOn = DateTimeOffset.UtcNow,
             };
 
-            context.ProcessDefinitions.Add(definition);
+            processWorkspace.Add(definition);
             definition.FamilyId = definition.Id;
         }
 
@@ -762,7 +754,7 @@ public sealed class ProcessController(
 
         if (definition.IsDefault)
         {
-            List<PlatformEntities.ProcessDefinition> otherDefaults = await context.ProcessDefinitions
+            List<PlatformEntities.ProcessDefinition> otherDefaults = await processWorkspace.RetrieveWritableDefinitions()
                 .Where(item =>
                     item.Id != definition.Id
                     && item.TenantId == tenantId
@@ -778,7 +770,7 @@ public sealed class ProcessController(
             }
         }
 
-        await context.SaveChangesAsync();
+        await processWorkspace.SaveAsync();
 
         TempData["ProcessNotice"] = request.Id.HasValue
             ? "Process updated."
@@ -793,37 +785,36 @@ public sealed class ProcessController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        PlatformEntities.ProcessDefinition definition = await context.ProcessDefinitions
+        PlatformEntities.ProcessDefinition definition = await processWorkspace.RetrieveWritableDefinitions()
             .FirstOrDefaultAsync(item => item.Id == id);
 
         if (definition is null || !GetWriteableTenantIds().Contains(definition.TenantId))
             return NotFound();
 
-        bool hasInstances = await context.ProcessInstances.AnyAsync(item => item.ProcessDefinitionId == id);
+        bool hasInstances = await processWorkspace.RetrieveInstances().AnyAsync(item => item.ProcessDefinitionId == id);
         if (hasInstances)
         {
             TempData["ProcessNotice"] = "This process is already in use and cannot be deleted.";
             return RedirectToAction(nameof(Index));
         }
 
-        List<Guid> stepIds = await context.ProcessSteps
+        List<Guid> stepIds = await processWorkspace.RetrieveSteps()
             .Where(item => item.ProcessDefinitionId == id)
             .Select(item => item.Id)
             .ToListAsync();
 
-        List<PlatformEntities.ProcessTransition> transitions = await context.ProcessTransitions
+        List<PlatformEntities.ProcessTransition> transitions = await processWorkspace.RetrieveTransitions()
             .Where(item => stepIds.Contains(item.ProcessStepId))
             .ToListAsync();
 
-        List<PlatformEntities.ProcessStep> steps = await context.ProcessSteps
+        List<PlatformEntities.ProcessStep> steps = await processWorkspace.RetrieveSteps()
             .Where(item => item.ProcessDefinitionId == id)
             .ToListAsync();
 
-        context.ProcessTransitions.RemoveRange(transitions);
-        context.ProcessSteps.RemoveRange(steps);
-        context.ProcessDefinitions.Remove(definition);
-        await context.SaveChangesAsync();
+        processWorkspace.Delete(transitions);
+        processWorkspace.Delete(steps);
+        processWorkspace.Delete(definition);
+        await processWorkspace.SaveAsync();
 
         TempData["ProcessNotice"] = "Process deleted.";
         return RedirectToAction(nameof(Index));
@@ -836,15 +827,14 @@ public sealed class ProcessController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        PlatformEntities.ProcessDefinition definition = await context.ProcessDefinitions
+        PlatformEntities.ProcessDefinition definition = await processWorkspace.RetrieveWritableDefinitions()
             .FirstOrDefaultAsync(item => item.Id == request.ProcessDefinitionId);
 
         if (definition is null || !GetWriteableTenantIds().Contains(definition.TenantId))
             return NotFound();
 
         PlatformEntities.ProcessStep step = request.Id.HasValue
-            ? await context.ProcessSteps.FirstOrDefaultAsync(item => item.Id == request.Id.Value)
+            ? await processWorkspace.RetrieveSteps().FirstOrDefaultAsync(item => item.Id == request.Id.Value)
             : null;
         bool isExistingStep = step is not null;
         bool dueOffsetChanged = isExistingStep
@@ -853,7 +843,7 @@ public sealed class ProcessController(
         if (isExistingStep
             && step.IsActive
             && !request.IsActive
-            && await context.ProcessInstances.AnyAsync(item =>
+            && await processWorkspace.RetrieveInstances().AnyAsync(item =>
                 item.CurrentProcessStepId == step.Id && item.State == ProcessInstanceState.Active))
         {
             TempData["ProcessNotice"] = "This node has active companies and cannot be disabled. Publish a replacement graph with a safe mapping for the active work.";
@@ -869,7 +859,7 @@ public sealed class ProcessController(
                 CreatedOn = DateTimeOffset.UtcNow,
             };
 
-            context.ProcessSteps.Add(step);
+            processWorkspace.Add(step);
         }
 
         step.ProcessDefinitionId = request.ProcessDefinitionId;
@@ -900,7 +890,7 @@ public sealed class ProcessController(
 
         if (step.IsEntryPoint)
         {
-            List<PlatformEntities.ProcessStep> otherEntrySteps = await context.ProcessSteps
+            List<PlatformEntities.ProcessStep> otherEntrySteps = await processWorkspace.RetrieveSteps()
                 .Where(item =>
                     item.Id != step.Id
                     && item.ProcessDefinitionId == request.ProcessDefinitionId
@@ -915,7 +905,7 @@ public sealed class ProcessController(
             }
         }
 
-        await context.SaveChangesAsync();
+        await processWorkspace.SaveAsync();
 
         int rescheduledTaskCount = dueOffsetChanged
             ? await workflowAutomationService.ReschedulePendingTasksForStepAsync(step.Id)
@@ -943,21 +933,20 @@ public sealed class ProcessController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        PlatformEntities.ProcessStep step = await context.ProcessSteps
+        PlatformEntities.ProcessStep step = await processWorkspace.RetrieveSteps()
             .FirstOrDefaultAsync(item => item.Id == id);
 
         if (step is null)
             return NotFound();
 
-        PlatformEntities.ProcessDefinition definition = await context.ProcessDefinitions
+        PlatformEntities.ProcessDefinition definition = await processWorkspace.RetrieveWritableDefinitions()
             .FirstOrDefaultAsync(item => item.Id == step.ProcessDefinitionId);
 
         if (definition is null || !GetWriteableTenantIds().Contains(definition.TenantId))
             return NotFound();
 
-        bool hasUsage = await context.ProcessTasks.AnyAsync(item => item.ProcessStepId == id)
-            || await context.ProcessInstances.AnyAsync(item => item.CurrentProcessStepId == id);
+        bool hasUsage = await processWorkspace.RetrieveTasks().AnyAsync(item => item.ProcessStepId == id)
+            || await processWorkspace.RetrieveInstances().AnyAsync(item => item.CurrentProcessStepId == id);
 
         if (hasUsage)
         {
@@ -965,13 +954,13 @@ public sealed class ProcessController(
             return RedirectToAction(nameof(Edit), new { id = step.ProcessDefinitionId });
         }
 
-        List<PlatformEntities.ProcessTransition> transitions = await context.ProcessTransitions
+        List<PlatformEntities.ProcessTransition> transitions = await processWorkspace.RetrieveTransitions()
             .Where(item => item.ProcessStepId == id || item.NextProcessStepId == id)
             .ToListAsync();
 
-        context.ProcessTransitions.RemoveRange(transitions);
-        context.ProcessSteps.Remove(step);
-        await context.SaveChangesAsync();
+        processWorkspace.Delete(transitions);
+        processWorkspace.Delete(step);
+        await processWorkspace.SaveAsync();
 
         TempData["ProcessNotice"] = "Process step deleted.";
         return RedirectToAction(nameof(Edit), new { id = step.ProcessDefinitionId });
@@ -984,22 +973,21 @@ public sealed class ProcessController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        PlatformEntities.ProcessStep step = await context.ProcessSteps
+        PlatformEntities.ProcessStep step = await processWorkspace.RetrieveSteps()
             .AsNoTracking()
             .FirstOrDefaultAsync(item => item.Id == request.ProcessStepId);
 
         if (step is null)
             return RedirectToAction(nameof(Index));
 
-        PlatformEntities.ProcessDefinition definition = await context.ProcessDefinitions
+        PlatformEntities.ProcessDefinition definition = await processWorkspace.RetrieveWritableDefinitions()
             .FirstOrDefaultAsync(item => item.Id == step.ProcessDefinitionId);
 
         if (definition is null || !GetWriteableTenantIds().Contains(definition.TenantId))
             return NotFound();
 
         PlatformEntities.ProcessTransition transition = request.Id.HasValue
-            ? await context.ProcessTransitions.FirstOrDefaultAsync(item => item.Id == request.Id.Value)
+            ? await processWorkspace.RetrieveTransitions().FirstOrDefaultAsync(item => item.Id == request.Id.Value)
             : null;
 
         if (transition is null)
@@ -1011,7 +999,7 @@ public sealed class ProcessController(
                 CreatedOn = DateTimeOffset.UtcNow,
             };
 
-            context.ProcessTransitions.Add(transition);
+            processWorkspace.Add(transition);
         }
 
         bool isTerminal = request.IsTerminal || !request.NextProcessIdIsSupplied();
@@ -1031,7 +1019,7 @@ public sealed class ProcessController(
 
         if (transition.IsDefaultOutcome)
         {
-            List<PlatformEntities.ProcessTransition> otherDefaults = await context.ProcessTransitions
+            List<PlatformEntities.ProcessTransition> otherDefaults = await processWorkspace.RetrieveTransitions()
                 .Where(item => item.Id != transition.Id && item.ProcessStepId == request.ProcessStepId && item.IsDefaultOutcome)
                 .ToListAsync();
 
@@ -1043,7 +1031,7 @@ public sealed class ProcessController(
             }
         }
 
-        await context.SaveChangesAsync();
+        await processWorkspace.SaveAsync();
 
         TempData["ProcessNotice"] = request.Id.HasValue
             ? "Transition updated."
@@ -1058,27 +1046,26 @@ public sealed class ProcessController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        PlatformEntities.ProcessTransition transition = await context.ProcessTransitions
+        PlatformEntities.ProcessTransition transition = await processWorkspace.RetrieveTransitions()
             .FirstOrDefaultAsync(item => item.Id == id);
 
         if (transition is null)
             return NotFound();
 
-        PlatformEntities.ProcessStep step = await context.ProcessSteps
+        PlatformEntities.ProcessStep step = await processWorkspace.RetrieveSteps()
             .FirstOrDefaultAsync(item => item.Id == transition.ProcessStepId);
 
         if (step is null)
             return RedirectToAction(nameof(Index));
 
-        PlatformEntities.ProcessDefinition definition = await context.ProcessDefinitions
+        PlatformEntities.ProcessDefinition definition = await processWorkspace.RetrieveWritableDefinitions()
             .FirstOrDefaultAsync(item => item.Id == step.ProcessDefinitionId);
 
         if (definition is null || !GetWriteableTenantIds().Contains(definition.TenantId))
             return NotFound();
 
-        context.ProcessTransitions.Remove(transition);
-        await context.SaveChangesAsync();
+        processWorkspace.Delete(transition);
+        await processWorkspace.SaveAsync();
 
         TempData["ProcessNotice"] = "Transition deleted.";
         return RedirectToAction(nameof(Edit), new { id = step.ProcessDefinitionId });
@@ -1094,9 +1081,9 @@ public sealed class ProcessController(
         return RedirectToAction("Login", "Account", new { returnUrl });
     }
 
-    async Task<ProcessIndexPageViewModel> CreateIndexModelAsync(PlatformDbContext context)
+    async Task<ProcessIndexPageViewModel> CreateIndexModelAsync()
     {
-        List<PlatformEntities.ProcessDefinition> definitions = await context.ProcessDefinitions
+        List<PlatformEntities.ProcessDefinition> definitions = await processWorkspace.RetrieveDefinitions()
             .AsNoTracking()
             .Where(item =>
                 GetReadableTenantIds().Contains(item.TenantId)
@@ -1132,23 +1119,23 @@ public sealed class ProcessController(
         };
     }
 
-    async Task<ProcessEditPageViewModel> CreateEditModelAsync(PlatformDbContext context, Guid id)
+    async Task<ProcessEditPageViewModel> CreateEditModelAsync(Guid id)
     {
-        PlatformEntities.ProcessDefinition definition = await context.ProcessDefinitions
+        PlatformEntities.ProcessDefinition definition = await processWorkspace.RetrieveDefinitions()
             .AsNoTracking()
             .FirstOrDefaultAsync(item => item.Id == id);
 
         if (definition is null || !GetReadableTenantIds().Contains(definition.TenantId))
             return null;
 
-        List<PlatformEntities.ProcessStep> steps = await context.ProcessSteps
+        List<PlatformEntities.ProcessStep> steps = await processWorkspace.RetrieveSteps()
             .AsNoTracking()
             .Where(item => item.ProcessDefinitionId == definition.Id)
             .OrderBy(item => item.Sequence)
             .ThenBy(item => item.Name)
             .ToListAsync();
 
-        List<PlatformEntities.ProcessTransition> transitions = await context.ProcessTransitions
+        List<PlatformEntities.ProcessTransition> transitions = await processWorkspace.RetrieveTransitions()
             .AsNoTracking()
             .Where(item => steps.Select(step => step.Id).Contains(item.ProcessStepId))
             .OrderBy(item => item.OutcomeLabel)

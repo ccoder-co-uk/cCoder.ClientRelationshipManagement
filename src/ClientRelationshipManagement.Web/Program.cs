@@ -85,6 +85,11 @@ public class Program
 
         app.MapControllers();
 
+        app.UseSwagger();
+        app.UseSwaggerUI(options => options.SwaggerEndpoint(
+            "/swagger/ClientRelationshipManagement/swagger.json",
+            "Client Relationship Management"));
+
         app.MapControllerRoute(
             name: "default",
             pattern: "{controller=Home}/{action=Index}/{id?}");

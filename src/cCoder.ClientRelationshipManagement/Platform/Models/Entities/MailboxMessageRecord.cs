@@ -1,7 +1,13 @@
 namespace cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 
-public class MailboxMessageRecord : AuditableEntity
+public class MailboxMessageRecord : ICrmEntity
 {
+    public Guid Id { get; set; }
+    public string CreatedBy { get; set; }
+    public string LastUpdatedBy { get; set; }
+    public DateTimeOffset CreatedOn { get; set; }
+    public DateTimeOffset LastUpdated { get; set; }
+
     public string ExternalId { get; set; }
     public string InternetMessageId { get; set; }
     public string ConversationId { get; set; }

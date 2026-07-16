@@ -1,6 +1,6 @@
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using ClientRelationshipManagement.Web.Brokers.Loggings;
 using ClientRelationshipManagement.Web.Configuration;
 using ClientRelationshipManagement.Web.Services.Agents;
@@ -11,7 +11,9 @@ using Microsoft.Extensions.Options;
 namespace ClientRelationshipManagement.Web.Services.Leads;
 
 public sealed class LeadWorkIntakeService(
-    IPlatformDbContextFactory dbContextFactory,
+    IProcessCoordinationService processes,
+    ISalesCoordinationService sales,
+    cCoder.ClientRelationshipManagement.Services.Entities.IAgentMessageOrchestrationService messages,
     IWorkflowAutomationService workflowAutomationService,
     IOptions<AuthorityDataOptions> authorityOptions,
     IOptions<AgentWorkflowOptions> workflowOptions,
@@ -22,10 +24,9 @@ public sealed class LeadWorkIntakeService(
         CancellationToken cancellationToken = default)
     {
         AuthorityDataOptions options = authorityOptions.Value;
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
-        IQueryable<ProcessTask> pending = context.ProcessTasks.Where(task =>
+        IQueryable<ProcessTask> pending = processes.RetrieveTasks().Where(task =>
             task.State == ProcessTaskState.Pending
             && (task.LeadId.HasValue
                 || task.OpportunityId.HasValue
@@ -33,18 +34,25 @@ public sealed class LeadWorkIntakeService(
                 || task.TenantCompanyRelationshipId.HasValue));
 
         int activeWorkItems = await pending.CountAsync(cancellationToken);
-        int approvalBlockedWorkItems = await pending.CountAsync(task =>
-            task.ActionType == ProcessActionType.Approval
-            || context.AgentMessages.Any(message =>
-                message.ProcessTaskId == task.Id
+        Guid[] approvalMessageTaskIds = await messages.RetrieveAll()
+            .Where(message => message.ProcessTaskId.HasValue
                 && message.State == AgentMessageState.Pending
                 && (message.Kind == AgentMessageKind.ApprovalRequest
-                    || message.Kind == AgentMessageKind.FeedbackRequest)
+                    || message.Kind == AgentMessageKind.FeedbackRequest))
+            .Select(message => message.ProcessTaskId!.Value)
+            .Distinct()
+            .ToArrayAsync(cancellationToken);
+        Guid[] awaitResponseStepIds = await processes.RetrieveTransitions()
+            .Where(transition => transition.OutcomeKey == "await-response")
+            .Select(transition => transition.ProcessStepId)
+            .Distinct()
+            .ToArrayAsync(cancellationToken);
+        int approvalBlockedWorkItems = await pending.CountAsync(task =>
+            task.ActionType == ProcessActionType.Approval
+            || (approvalMessageTaskIds.Contains(task.Id)
                 && !((task.ActionType == ProcessActionType.Call
                         || task.ActionType == ProcessActionType.Meeting)
-                    && context.ProcessTransitions.Any(transition =>
-                        transition.ProcessStepId == task.ProcessStepId
-                        && transition.OutcomeKey == "await-response")))
+                    && awaitResponseStepIds.Contains(task.ProcessStepId)))
             || (task.ActionType == ProcessActionType.Email
                 && task.EmailId.HasValue
                 && task.Email.State == EmailState.Draft),
@@ -53,7 +61,7 @@ public sealed class LeadWorkIntakeService(
         if (activeWorkItems > 0 && approvalBlockedWorkItems == activeWorkItems)
             return new(activeWorkItems, 0, 0);
 
-        IQueryable<ProcessTask> runnable = WorkflowTaskQueue.BuildImmediatelyAvailableQuery(context, now);
+        IQueryable<ProcessTask> runnable = sales.RetrieveRunnableProcessTasks(now);
         int runnableWorkItems = await runnable.CountAsync(cancellationToken);
         runnableWorkItems += await pending.CountAsync(task =>
             task.AgentClaimId.HasValue && task.AgentClaimExpiresOn > now,
@@ -65,13 +73,13 @@ public sealed class LeadWorkIntakeService(
             return new(activeWorkItems, runnableWorkItems, 0);
 
         string sourceSystem = options.SourceSystem?.Trim() ?? "CompaniesHouse";
-        List<Company> candidates = await context.Companies
+        List<Company> candidates = await sales.RetrieveCompanies()
             .Include(company => company.RegisteredAddress)
             .Where(company => company.SourceSystem == sourceSystem
                 && !company.IsProspectingSuppressed
                 && (company.CompanyStatus == null || company.CompanyStatus.ToLower() == "active")
-                && !context.Leads.Any(lead => lead.CompanyId == company.Id)
-                && !context.TenantCompanyRelationships.Any(relationship => relationship.CompanyId == company.Id))
+                && !sales.RetrieveLeads().Any(lead => lead.CompanyId == company.Id)
+                && !sales.RetrieveRelationships().Any(relationship => relationship.CompanyId == company.Id))
             .OrderByDescending(company => company.RankingScore)
             .ThenByDescending(company => company.AnnualRevenue)
             .ThenByDescending(company => company.EmployeeCount)
@@ -112,11 +120,11 @@ public sealed class LeadWorkIntakeService(
                 LastUpdated = now
             };
 
-            context.Leads.Add(lead);
+            sales.Add(lead);
             leadIds.Add(lead.Id);
         }
 
-        await context.SaveChangesAsync(cancellationToken);
+        await sales.SaveAsync(cancellationToken);
 
         foreach (Guid leadId in leadIds)
             await workflowAutomationService.EnsureCoverageAsync(

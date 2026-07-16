@@ -8,6 +8,7 @@ public interface IEmailDraftWorkflowService
     ValueTask<PlatformEntities.Email> SaveDraftAsync(EmailDraftUpsertCommand command, CancellationToken cancellationToken = default);
     ValueTask<PlatformEntities.Email> ApproveAsync(Guid clientId, Guid emailId, DateTimeOffset? scheduledSendTimeUtc, CancellationToken cancellationToken = default);
     ValueTask<PlatformEntities.Email> MarkSentAsync(Guid clientId, Guid emailId, CancellationToken cancellationToken = default);
+    ValueTask<PlatformEntities.Email> RejectAsync(Guid clientId, Guid emailId, string reason, CancellationToken cancellationToken = default);
 }
 
 public sealed class EmailDraftUpsertCommand

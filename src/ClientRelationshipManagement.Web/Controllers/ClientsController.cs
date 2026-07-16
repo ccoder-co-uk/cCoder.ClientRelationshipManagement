@@ -1,5 +1,5 @@
 using cCoder.ClientRelationshipManagement.Models.Security;
-using cCoder.ClientRelationshipManagement.Platform.Data;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.Security.Objects;
 using ClientRelationshipManagement.Web.Models.Clients;
@@ -14,7 +14,8 @@ using PlatformEntities = cCoder.ClientRelationshipManagement.Platform.Models.Ent
 namespace ClientRelationshipManagement.Web.Controllers;
 
 public sealed class ClientsController(
-    IPlatformDbContextFactory dbContextFactory,
+    ISalesCoordinationService salesWorkspaceService,
+    IOperationsCoordinationService operationsService,
     IEmailDraftWorkflowService emailDraftWorkflowService,
     IWorkflowAutomationService workflowAutomationService,
     ICRMAuthInfo authInfo,
@@ -39,7 +40,6 @@ public sealed class ClientsController(
 
         await workflowAutomationService.EnsureCoverageAsync();
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
         string[] readableTenantIds = GetReadableTenantIds();
         RelationshipStatus? parsedStatus = Enum.TryParse<RelationshipStatus>(status, true, out RelationshipStatus statusValue)
             ? statusValue
@@ -49,7 +49,7 @@ public sealed class ClientsController(
         DateTimeOffset today = new(DateTime.UtcNow.Date, TimeSpan.Zero);
         DateTimeOffset tomorrow = today.AddDays(1);
 
-        IQueryable<PlatformEntities.TenantCompanyRelationship> relationshipQuery = context.TenantCompanyRelationships
+        IQueryable<PlatformEntities.TenantCompanyRelationship> relationshipQuery = salesWorkspaceService.RetrieveRelationships()
             .AsNoTracking()
             .Include(relationship => relationship.Company)
             .Where(relationship => !relationship.IsArchived
@@ -60,16 +60,16 @@ public sealed class ClientsController(
         {
             relationshipQuery = taskFilter switch
             {
-                "due-today" => relationshipQuery.Where(relationship => context.ProcessTasks.Any(task =>
+                "due-today" => relationshipQuery.Where(relationship => salesWorkspaceService.RetrieveProcessTasks().Any(task =>
                     task.TenantCompanyRelationshipId == relationship.Id
                     && task.ClientAccountId.HasValue
                     && task.State == ProcessTaskState.Pending
                     && task.DueOn >= today && task.DueOn < tomorrow)),
-                "overdue" => relationshipQuery.Where(relationship => context.ProcessTasks.Any(task =>
+                "overdue" => relationshipQuery.Where(relationship => salesWorkspaceService.RetrieveProcessTasks().Any(task =>
                     task.TenantCompanyRelationshipId == relationship.Id
                     && task.ClientAccountId.HasValue
                     && task.State == ProcessTaskState.Pending && task.DueOn < today)),
-                _ => relationshipQuery.Where(relationship => context.ProcessTasks.Any(task =>
+                _ => relationshipQuery.Where(relationship => salesWorkspaceService.RetrieveProcessTasks().Any(task =>
                     task.TenantCompanyRelationshipId == relationship.Id
                     && task.ClientAccountId.HasValue
                     && task.State == ProcessTaskState.Pending))
@@ -89,7 +89,7 @@ public sealed class ClientsController(
             })
             .ToListAsync();
 
-        Dictionary<Guid, (string ActionText, DateTimeOffset? DueOn)> nextTaskLookup = await context.ProcessTasks
+        Dictionary<Guid, (string ActionText, DateTimeOffset? DueOn)> nextTaskLookup = await salesWorkspaceService.RetrieveProcessTasks()
             .AsNoTracking()
             .Where(task => task.State == ProcessTaskState.Pending && task.TenantCompanyRelationshipId.HasValue)
             .Where(task => rows.Select(row => row.Id).Contains(task.TenantCompanyRelationshipId!.Value))
@@ -197,81 +197,14 @@ public sealed class ClientsController(
         if (!ModelState.IsValid)
             return View(await CreateEditorModelAsync(model.Id.Value, model));
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        string[] writeableTenantIds = GetWriteableTenantIds();
-        PlatformEntities.TenantCompanyRelationship relationship = await context.TenantCompanyRelationships
-            .Include(item => item.Company)
-            .FirstOrDefaultAsync(item => item.Id == model.Id.Value);
-
-        if (relationship is null || !writeableTenantIds.Contains(relationship.TenantId))
-            return NotFound();
-
-        PlatformEntities.Company company = relationship.Company;
-        PlatformEntities.ClientAccount clientAccount = await context.ClientAccounts
-            .Where(item => item.TenantCompanyRelationshipId == relationship.Id && item.Status != ClientAccountStatus.Closed)
-            .OrderByDescending(item => item.CreatedOn)
-            .FirstOrDefaultAsync();
-        PlatformEntities.RelationshipContact primaryContact = await context.RelationshipContacts
-            .Include(item => item.CompanyContact)
-            .Where(item => item.TenantCompanyRelationshipId == relationship.Id && item.Status == RelationshipContactStatus.Active)
-            .OrderByDescending(item => item.IsPrimary)
-            .ThenBy(item => item.CreatedOn)
-            .FirstOrDefaultAsync();
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        string currentUser = CurrentUserId;
-
-        company.OfficialName = model.CompanyName.Trim();
-        company.TradingName = Normalize(model.TradingName);
-        company.ContactEmailAddress = Normalize(model.ContactEmailAddress);
-        company.ContactPhoneNumber = Normalize(model.ContactPhoneNumber);
-        company.WebsiteUrl = Normalize(model.WebsiteUrl);
-        company.ResearchSummary = Normalize(model.ResearchSummary);
-        company.VerificationNotes = Normalize(model.DataQualityNotes);
-        company.IsVerified = model.IsVerified;
-        company.LastUpdatedBy = currentUser;
-        company.LastUpdated = now;
-
-        if (primaryContact is not null)
-        {
-            primaryContact.IsPrimary = true;
-            primaryContact.CompanyContact.Name = model.PrimaryContactName.Trim();
-            primaryContact.CompanyContact.Position = Normalize(model.PrimaryContactPosition);
-            primaryContact.CompanyContact.EmailAddress = Normalize(model.ContactEmailAddress);
-            primaryContact.CompanyContact.PhoneNumber = Normalize(model.ContactPhoneNumber);
-            primaryContact.CompanyContact.IsPrimary = true;
-            primaryContact.CompanyContact.LastUpdatedBy = currentUser;
-            primaryContact.CompanyContact.LastUpdated = now;
-            primaryContact.LastUpdatedBy = currentUser;
-            primaryContact.LastUpdated = now;
-        }
-
-        if (clientAccount is not null)
-        {
-            clientAccount.Status = model.ClientAccountStatus;
-            clientAccount.AccountReference = Normalize(model.AccountReference);
-            clientAccount.ContractSignedOn = ToDateTimeOffset(model.ContractSignedOn);
-            clientAccount.GoLiveOn = ToDateTimeOffset(model.GoLiveOn);
-            clientAccount.LastUpdatedBy = currentUser;
-            clientAccount.LastUpdated = now;
-        }
-
-        relationship.AccountOwnerDisplayName = Normalize(model.AccountOwner);
-        relationship.AccountOwnerUserId ??= currentUser;
-        relationship.Status = model.Status;
-        relationship.CurrentStage = model.CurrentStage;
-        relationship.Priority = model.Priority;
-        relationship.LeadSource = Normalize(model.LeadSource);
-        relationship.InitialRoute = Normalize(model.InitialRoute);
-        relationship.FitScore = model.FitScore;
-        relationship.OpportunitySummary = Normalize(model.OpportunitySummary);
-        relationship.PreferredOpeningAngle = Normalize(model.PreferredOpeningAngle);
-        relationship.ResearchSummary = Normalize(model.ResearchSummary);
-        relationship.DataQualityNotes = Normalize(model.DataQualityNotes);
-        relationship.IsArchived = model.IsArchived;
-        relationship.LastUpdatedBy = currentUser;
-        relationship.LastUpdated = now;
-
-        await context.SaveChangesAsync();
+        PlatformEntities.TenantCompanyRelationship relationship = await salesWorkspaceService.UpdateClientAsync(
+            new UpdateClientCommand(model.Id.Value, model.CompanyName, model.TradingName, model.ContactEmailAddress,
+                model.ContactPhoneNumber, model.WebsiteUrl, model.ResearchSummary, model.DataQualityNotes,
+                model.IsVerified, model.PrimaryContactName, model.PrimaryContactPosition, model.ClientAccountStatus,
+                model.AccountReference, ToDateTimeOffset(model.ContractSignedOn), ToDateTimeOffset(model.GoLiveOn),
+                model.AccountOwner, model.Status, model.CurrentStage, model.Priority, model.LeadSource,
+                model.InitialRoute, model.FitScore, model.OpportunitySummary, model.PreferredOpeningAngle, model.IsArchived));
+        if (relationship is null) return NotFound();
 
         TempData["ClientsNotice"] = "Client workspace updated.";
         return RedirectToAction(nameof(Edit), new { id = model.Id.Value });
@@ -293,34 +226,11 @@ public sealed class ClientsController(
             return RedirectToAction(nameof(Edit), new { id = request.ClientId });
         }
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        PlatformEntities.TenantCompanyRelationship relationship = await context.TenantCompanyRelationships
-            .FirstOrDefaultAsync(item => item.Id == request.ClientId);
-
-        if (relationship is null || !GetWriteableTenantIds().Contains(relationship.TenantId))
-            return NotFound();
-
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        context.Activities.Add(new PlatformEntities.Activity
-        {
-            Id = Guid.NewGuid(),
-            TenantCompanyRelationshipId = request.ClientId,
-            OpportunityId = request.ClientOpportunityId,
-            ClientAccountId = request.ClientAccountId,
-            ActivityOn = ToDateTimeOffset(request.ActivityOn) ?? now,
-            Type = request.Type,
-            Direction = request.Direction,
-            Summary = request.Summary.Trim(),
-            Outcome = request.Outcome.Trim(),
-            NextAction = Normalize(request.NextAction),
-            NextActionDueOn = ToDateTimeOffset(request.NextActionDueOn),
-            CreatedBy = CurrentUserId,
-            LastUpdatedBy = CurrentUserId,
-            CreatedOn = now,
-            LastUpdated = now
-        });
-
-        await context.SaveChangesAsync();
+        PlatformEntities.Activity activity = await salesWorkspaceService.AddActivityAsync(new AddActivityCommand(
+            request.ClientId, request.ClientOpportunityId, request.ClientAccountId,
+            ToDateTimeOffset(request.ActivityOn) ?? DateTimeOffset.UtcNow, request.Type, request.Direction,
+            request.Summary, request.Outcome, request.NextAction, ToDateTimeOffset(request.NextActionDueOn)));
+        if (activity is null) return NotFound();
 
         TempData["ClientWorkspaceNotice"] = "Activity recorded.";
         return RedirectToAction(nameof(Edit), new { id = request.ClientId });
@@ -342,33 +252,10 @@ public sealed class ClientsController(
             return RedirectToAction(nameof(Edit), new { id = request.ClientId });
         }
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        PlatformEntities.TenantCompanyRelationship relationship = await context.TenantCompanyRelationships
-            .FirstOrDefaultAsync(item => item.Id == request.ClientId);
-
-        if (relationship is null || !GetWriteableTenantIds().Contains(relationship.TenantId))
-            return NotFound();
-
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        PlatformEntities.Opportunity opportunity = new()
-        {
-            Id = Guid.NewGuid(),
-            TenantCompanyRelationshipId = request.ClientId,
-            Type = request.Type,
-            Stage = request.Stage,
-            EstimatedAnnualValue = request.EstimatedAnnualValue,
-            Probability = request.Probability,
-            PainSummary = request.PainSummary.Trim(),
-            ValueHypothesis = Normalize(request.ValueHypothesis),
-            DecisionProcess = Normalize(request.DecisionProcess),
-            CreatedBy = CurrentUserId,
-            LastUpdatedBy = CurrentUserId,
-            CreatedOn = now,
-            LastUpdated = now
-        };
-
-        context.Opportunities.Add(opportunity);
-        await context.SaveChangesAsync();
+        PlatformEntities.Opportunity opportunity = await salesWorkspaceService.AddOpportunityAsync(
+            new AddOpportunityCommand(request.ClientId, request.Type, request.Stage, request.EstimatedAnnualValue,
+                request.Probability, request.PainSummary, request.ValueHypothesis, request.DecisionProcess));
+        if (opportunity is null) return NotFound();
 
         await workflowAutomationService.EnsureCoverageAsync(opportunityId: opportunity.Id, forceCreate: true);
 
@@ -475,10 +362,9 @@ public sealed class ClientsController(
 
     async Task<ClientEditorViewModel> CreateEditorModelAsync(Guid relationshipId, ClientEditorViewModel postedModel = null)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
         string[] readableTenantIds = GetReadableTenantIds();
 
-        PlatformEntities.TenantCompanyRelationship relationship = await context.TenantCompanyRelationships
+        PlatformEntities.TenantCompanyRelationship relationship = await salesWorkspaceService.RetrieveRelationships()
             .AsNoTracking()
             .Include(item => item.Company)
             .FirstOrDefaultAsync(item => item.Id == relationshipId);
@@ -486,12 +372,12 @@ public sealed class ClientsController(
         if (relationship is null || !readableTenantIds.Contains(relationship.TenantId))
             return null;
 
-        PlatformEntities.ClientAccount clientAccount = await context.ClientAccounts
+        PlatformEntities.ClientAccount clientAccount = await salesWorkspaceService.RetrieveClientAccounts()
             .AsNoTracking()
             .Where(item => item.TenantCompanyRelationshipId == relationshipId && item.Status != ClientAccountStatus.Closed)
             .OrderByDescending(item => item.CreatedOn)
             .FirstOrDefaultAsync();
-        PlatformEntities.RelationshipContact primaryContact = await context.RelationshipContacts
+        PlatformEntities.RelationshipContact primaryContact = await salesWorkspaceService.RetrieveRelationshipContacts()
             .AsNoTracking()
             .Include(item => item.CompanyContact)
             .Where(item => item.TenantCompanyRelationshipId == relationshipId && item.Status == RelationshipContactStatus.Active)
@@ -499,7 +385,7 @@ public sealed class ClientsController(
             .ThenBy(item => item.CreatedOn)
             .FirstOrDefaultAsync();
 
-        List<PlatformEntities.Activity> activities = await context.Activities
+        List<PlatformEntities.Activity> activities = await salesWorkspaceService.RetrieveActivities()
             .AsNoTracking()
             .Where(activity => activity.TenantCompanyRelationshipId == relationshipId)
             .OrderByDescending(activity => activity.ActivityOn)
@@ -513,14 +399,14 @@ public sealed class ClientsController(
 
         List<PlatformEntities.Material> materials = materialIds.Count == 0
             ? []
-            : await context.Materials
+            : await salesWorkspaceService.RetrieveMaterials()
                 .AsNoTracking()
                 .Where(material => materialIds.Contains(material.Id))
                 .ToListAsync();
 
         Dictionary<Guid, PlatformEntities.Email> emailLookup = materialIds.Count == 0
             ? new Dictionary<Guid, PlatformEntities.Email>()
-            : await context.Emails
+            : await operationsService.RetrieveAllEmails()
                 .AsNoTracking()
                 .Where(email => email.MaterialId.HasValue && materialIds.Contains(email.MaterialId.Value))
                 .ToDictionaryAsync(email => email.MaterialId!.Value);
@@ -597,7 +483,7 @@ public sealed class ClientsController(
             })
         ];
 
-        List<ClientOpportunitySummaryViewModel> opportunities = await context.Opportunities
+        List<ClientOpportunitySummaryViewModel> opportunities = await salesWorkspaceService.RetrieveOpportunities()
             .AsNoTracking()
             .Where(opportunity => opportunity.TenantCompanyRelationshipId == relationshipId)
             .OrderBy(opportunity => opportunity.Stage)
@@ -620,7 +506,7 @@ public sealed class ClientsController(
             })
             .ToListAsync();
 
-        List<ClientScheduledActionItemViewModel> scheduledActions = await context.ProcessTasks
+        List<ClientScheduledActionItemViewModel> scheduledActions = await salesWorkspaceService.RetrieveProcessTasks()
             .AsNoTracking()
             .Where(task => task.TenantCompanyRelationshipId == relationshipId && task.State == ProcessTaskState.Pending)
             .OrderBy(task => task.DueOn)

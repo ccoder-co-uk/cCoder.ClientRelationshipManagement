@@ -11,7 +11,7 @@ using cCoder.ClientRelationshipManagement.Platform.Data;
 
 namespace cCoder.ClientRelationshipManagement.Platform.Data.Migrations
 {
-    [DbContext(typeof(PlatformDbContext))]
+    [DbContext(typeof(ClientRelationshipDbContext))]
     [Migration("20260622131144_AddCompaniesHouseAuthorityFields")]
     partial class AddCompaniesHouseAuthorityFields
     {

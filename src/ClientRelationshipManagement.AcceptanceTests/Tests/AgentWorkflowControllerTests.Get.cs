@@ -247,6 +247,50 @@ public sealed partial class AgentWorkflowControllerTests
     }
 
     [CRMAcceptanceFact]
+    public async Task RelatedDraftEmails_RecoversStepFromRenderedSubjectWithoutTaskOrOpportunityProvenance()
+    {
+        (Guid relationshipId, Guid opportunityId, _) = await SeedOpportunityWorkspaceAsync();
+        ProcessTask sourceTask = await MoveOpportunityToEmailStepAsync(opportunityId);
+        Guid emailId = sourceTask.EmailId!.Value;
+        Guid messageId = Guid.NewGuid();
+        await ExecuteInAdminContextAsync(async db =>
+        {
+            ProcessTask task = await db.ProcessTasks.SingleAsync(item => item.Id == sourceTask.Id);
+            task.EmailId = null;
+            Email email = await db.Emails.SingleAsync(item => item.Id == emailId);
+            email.OpportunityId = null;
+            email.State = EmailState.Rejected;
+            db.AgentMessages.Add(new AgentMessage
+            {
+                Id = messageId,
+                TenantId = AcceptanceSettings.TenantId,
+                TenantCompanyRelationshipId = relationshipId,
+                EmailId = emailId,
+                Kind = AgentMessageKind.FeedbackRequest,
+                State = AgentMessageState.Pending,
+                Title = "Review rejected email",
+                Body = "The generated email exposed internal drafting instructions.",
+                AgentName = "Approval Agent",
+                CreatedBy = Fixture.Settings.UserId,
+                LastUpdatedBy = Fixture.Settings.UserId
+            });
+            await db.SaveChangesAsync();
+        });
+
+        string token = await Fixture.IssueAgentTokenAsync();
+        using HttpRequestMessage request = new(HttpMethod.Get,
+            $"/Api/AgentWorkflow/Messages/{messageId}/RelatedDraftEmails");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using HttpResponseMessage response = await Client.SendAsync(request);
+        string content = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, content);
+        using JsonDocument document = JsonDocument.Parse(content);
+        document.RootElement.GetProperty("processName").GetString().Should().Be("Opportunity Conversion");
+        document.RootElement.GetProperty("processStepKey").GetString().Should().Be("intro-email");
+    }
+
+    [CRMAcceptanceFact]
     public async Task RelatedDraftEmails_BackfillsLegacySourceProvenance_AndRefreshesOnlyUnsentDraftsFromTheSameStep()
     {
         (Guid sourceRelationshipId, Guid sourceOpportunityId, _) = await SeedOpportunityWorkspaceAsync();

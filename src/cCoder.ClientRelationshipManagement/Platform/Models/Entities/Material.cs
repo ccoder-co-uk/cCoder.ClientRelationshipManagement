@@ -2,8 +2,14 @@ using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 
 namespace cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 
-public class Material : AuditableEntity
+public class Material : ICrmEntity
 {
+    public Guid Id { get; set; }
+    public string CreatedBy { get; set; }
+    public string LastUpdatedBy { get; set; }
+    public DateTimeOffset CreatedOn { get; set; }
+    public DateTimeOffset LastUpdated { get; set; }
+
     public string LegacyId { get; set; }
     public Guid TenantCompanyRelationshipId { get; set; }
     public Guid? OpportunityId { get; set; }

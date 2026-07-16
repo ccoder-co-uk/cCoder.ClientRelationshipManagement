@@ -17,3 +17,9 @@ Agent Workspace/Shared/helper-scripts/temp-message.json
 Agent Workspace/Task Agent/agent_message.txt
 Agent Workspace/Task Agent/scratch/
 Agent Workspace/Task Agent/temp.json
+/.runlogs
+/Agent Workspace/API/crm-api.md
+/Agent Workspace/Task Agent/Session History
+/Agent Workspace/Process Optimiser/temp_message*.json
+/src/ClientRelationshipManagement.Web/runtime.*.log
+/src/ClientRelationshipManagement.HostedServices/runtime.*.log

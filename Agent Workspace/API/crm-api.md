@@ -13,6 +13,36 @@ The helper scripts automatically send:
 
 - `Authorization: Bearer {CRM_AGENT_EXECUTION_TOKEN}`
 
+## General user-scoped data access
+
+Prefer this discoverable API over requesting a new one-off helper script whenever ordinary CRM data access is sufficient.
+
+Every request runs as the user who requested the agent work. The server derives readable and writeable tenants from that user, scopes every query, assigns ownership on create, and writes audit fields itself. Never send or attempt to change `TenantId`, `UserId`, `CreatedOn`, `CreatedBy`, `LastUpdated`, or `LastUpdatedBy`.
+
+Use `../Shared/helper-scripts/Invoke-CrmApi.ps1` as the single transport wrapper:
+
+```powershell
+& '../Shared/helper-scripts/Invoke-CrmApi.ps1' -Method GET -Path '/Api/ClientRelationshipManagement/$metadata'
+```
+
+The OData metadata and Swagger document every typed CRM entity set, property, relationship, key, CRUD route, and semantic action. Always inspect them before using an unfamiliar entity.
+
+- `GET /Api/ClientRelationshipManagement/$metadata`
+- `GET /Api/ClientRelationshipManagement/{entitySet}?$select=...&$filter=...&$expand=...`
+- `GET /Api/ClientRelationshipManagement/{entitySet}({id})`
+- `POST /Api/ClientRelationshipManagement/{entitySet}` with a JSON object
+- `PATCH /Api/ClientRelationshipManagement/{entitySet}({id})` with only fields to change
+- `DELETE /Api/ClientRelationshipManagement/{entitySet}({id})`
+
+Queries are capped at 1,000 records. The server applies the requesting user's tenant or user ownership predicate before OData options. Use exact identifiers from conversation context or prior results. Creation of relationship-owned child records may require a documented semantic operation so CRM can validate the aggregate and workflow invariants. Do not perform broad destructive operations, and never delete evidence, sent email, audit history, agent runs, or conversation entries merely to make a workflow appear successful.
+
+```powershell
+$body = @{ QualificationNotes = 'Updated from confirmed user feedback.' } | ConvertTo-Json -Compress
+& '../Shared/helper-scripts/Invoke-CrmApi.ps1' -Method PATCH -Path '/Api/ClientRelationshipManagement/Leads(00000000-0000-0000-0000-000000000000)' -BodyJson $body
+```
+
+Domain-specific endpoints below remain preferred when they encode workflow invariants, approval boundaries, reconciliation checks, or other business rules. Generic CRUD is for concerns that cannot be solved through those safer operations; it is not permission to bypass them.
+
 ## Endpoints
 
 ### `GET /Api/AgentWorkflow/Tasks/Due?limit=25`
@@ -178,3 +208,23 @@ Use for small changes only:
 - instruction refinement,
 - question-set improvement,
 - conservative sequencing improvements.
+# Canonical OData API
+
+Use the authenticated CRM OData context for all new agent capabilities:
+
+- Service document: `GET /Api/ClientRelationshipManagement`
+- Schema: `GET /Api/ClientRelationshipManagement/$metadata`
+- OpenAPI: `GET /swagger/ClientRelationshipManagement/swagger.json`
+- Approval discussions: `/Api/ClientRelationshipManagement/AgentMessages`
+
+Approval conversation operations are bound OData actions:
+
+- `POST AgentMessages(<id>)/CRM.Reply` with `{ "body": "..." }`
+- `POST AgentMessages(<id>)/CRM.Respond` with `{ "state": "Approved|Rejected|Dismissed", "responseNotes": "..." }`
+- `POST AgentMessages(<id>)/CRM.ChangeState` with `{ "state": "Pending|Completed", "auditNote": "..." }`
+
+These call the same domain functions used by the CRM UI.
+
+Pass the current execution token as `Authorization: Bearer <token>`. OData supports `$select`, `$filter`, `$orderby`, `$expand`, `$count`, `$skip`, and `$top` (maximum 1000).
+
+If the canonical context lacks a guarded business operation, report the missing API capability so it can be added through an Exposer → Service → Broker vertical slice.

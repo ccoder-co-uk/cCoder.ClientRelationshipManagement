@@ -1,4 +1,3 @@
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.ClientRelationshipManagement.Models.Security;
@@ -11,12 +10,14 @@ using ClientRelationshipManagement.Web.Configuration;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using DomainAgentMessageService = cCoder.ClientRelationshipManagement.Services.Entities.IAgentMessageOrchestrationService;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 
 namespace ClientRelationshipManagement.Web.Controllers;
 
 public sealed class AdminController(
-    IPlatformDbContextFactory dbContextFactory,
-    IAgentMessageService agentMessageService,
+    DomainAgentMessageService agentMessageService,
+    IOperationsCoordinationService operationsService,
     IProcessDraftService processDraftService,
     IProcessValidationService processValidationService,
     IWorkflowAutomationService workflowAutomationService,
@@ -32,14 +33,12 @@ public sealed class AdminController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-
-        int pendingEmailApprovalCount = await context.Emails.CountAsync(item => item.State == EmailState.Draft);
-        int pendingMessageCount = await context.AgentMessages.CountAsync(item => item.State == AgentMessageState.Pending);
-        int pendingProposalCount = await context.ProcessDefinitions.CountAsync(
+        int pendingEmailApprovalCount = await operationsService.RetrieveAllEmails().CountAsync(item => item.State == EmailState.Draft);
+        int pendingMessageCount = await agentMessageService.RetrieveAll().CountAsync(item => item.State == AgentMessageState.Pending);
+        int pendingProposalCount = await operationsService.RetrieveAllProcessDefinitions().CountAsync(
             item => item.LifecycleState == ProcessDefinitionLifecycleState.Draft);
         AiProviderSelection aiSelection = await aiProviderSelectionService.GetAsync(RoutingUserId);
-        int approvalConcurrency = await context.AgentAutomationSettings
+        int approvalConcurrency = await operationsService.RetrieveAutomationSettings(RoutingUserId)
             .AsNoTracking()
             .Where(item => item.UserId == RoutingUserId)
             .Select(item => (int?)item.ApprovalAgentConcurrency)
@@ -96,12 +95,12 @@ public sealed class AdminController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
         pageSize = pageSize is 10 or 25 or 50 ? pageSize : 25;
-        int totalCount = await context.AgentRuns.CountAsync(cancellationToken);
+        IQueryable<AgentRun> agentRuns = operationsService.RetrieveAllAgentRuns();
+        int totalCount = await agentRuns.CountAsync(cancellationToken);
         int totalPages = Math.Max(1, (int)Math.Ceiling(totalCount / (double)pageSize));
         page = Math.Clamp(page, 1, totalPages);
-        List<AgentRun> runs = await context.AgentRuns
+        List<AgentRun> runs = await agentRuns
             .AsNoTracking()
             .OrderByDescending(item => item.StartedOn)
             .Skip((page - 1) * pageSize)
@@ -122,13 +121,11 @@ public sealed class AdminController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
         string[] readableTenantIds = authInfo.ReadableTenants.Length > 0 ? authInfo.ReadableTenants : authInfo.WriteableTenants;
         if (readableTenantIds.Length == 0) readableTenantIds = ["default"];
-        List<AgentMessage> messages = await context.AgentMessages
-            .AsNoTracking()
+        List<AgentMessage> messages = await agentMessageService.RetrieveAll()
             .Include(item => item.Entries)
-            .Where(item => readableTenantIds.Contains(item.TenantId))
+            .AsNoTracking()
             .OrderByDescending(item => item.LastUpdated)
             .Take(200)
             .ToListAsync(cancellationToken);
@@ -143,14 +140,12 @@ public sealed class AdminController(
 
         string[] readableTenantIds = authInfo.ReadableTenants.Length > 0 ? authInfo.ReadableTenants : authInfo.WriteableTenants;
         if (readableTenantIds.Length == 0) readableTenantIds = ["default"];
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        AgentMessage message = await context.AgentMessages.AsNoTracking().Include(item => item.Entries)
-            .FirstOrDefaultAsync(item => item.Id == id && readableTenantIds.Contains(item.TenantId), cancellationToken);
+        AgentMessage message = await agentMessageService.RetrieveAll().Include(item => item.Entries).AsNoTracking()
+            .FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
         if (message is null)
             return NotFound();
 
-        List<AgentMessage> conversations = await context.AgentMessages.AsNoTracking().Include(item => item.Entries)
-            .Where(item => readableTenantIds.Contains(item.TenantId))
+        List<AgentMessage> conversations = await agentMessageService.RetrieveAll().Include(item => item.Entries).AsNoTracking()
             .OrderByDescending(item => item.LastUpdated)
             .Take(200)
             .ToListAsync(cancellationToken);
@@ -169,18 +164,10 @@ public sealed class AdminController(
 
         string[] readableTenantIds = authInfo.ReadableTenants.Length > 0 ? authInfo.ReadableTenants : authInfo.WriteableTenants;
         if (readableTenantIds.Length == 0) readableTenantIds = ["default"];
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        AgentMessage message = await context.AgentMessages.AsNoTracking().Include(item => item.Entries)
-            .FirstOrDefaultAsync(item => item.Id == id && readableTenantIds.Contains(item.TenantId), cancellationToken);
+        AgentMessage message = await agentMessageService.RetrieveAll().Include(item => item.Entries).AsNoTracking()
+            .FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
         if (message is null)
             return NotFound();
-
-        DateTimeOffset latestHumanOrSystem = message.Entries
-            .Where(entry => !string.Equals(entry.Role, "Agent", StringComparison.OrdinalIgnoreCase))
-            .Select(entry => entry.CreatedOn).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
-        DateTimeOffset latestAgent = message.Entries
-            .Where(entry => string.Equals(entry.Role, "Agent", StringComparison.OrdinalIgnoreCase))
-            .Select(entry => entry.CreatedOn).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
 
         return Json(new
         {
@@ -188,7 +175,8 @@ public sealed class AdminController(
             state = message.State.ToString(),
             message.ProposedProcessDefinitionId,
             lastUpdated = message.LastUpdated,
-            awaitingAgent = message.State == AgentMessageState.Pending && latestHumanOrSystem > latestAgent,
+            awaitingAgent = message.State == AgentMessageState.Pending
+                && AgentConversationTurnPolicy.IsAgentTurn(message),
             entries = message.Entries.OrderBy(entry => entry.CreatedOn).Select(entry => new
             {
                 entry.Id,
@@ -205,14 +193,62 @@ public sealed class AdminController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        List<ProcessDefinition> proposals = await context.ProcessDefinitions
+        List<ProcessDefinition> proposals = await operationsService.RetrieveAllProcessDefinitions()
             .AsNoTracking()
             .Where(item => item.LifecycleState == ProcessDefinitionLifecycleState.Draft)
             .OrderByDescending(item => item.CreatedOn)
             .Take(200)
             .ToListAsync(cancellationToken);
         return View(new AdminProcessProposalsPageViewModel { Proposals = [.. proposals.Select(MapProposal)] });
+    }
+
+    [HttpGet("/Admin/ProcessProposals/{id:guid}")]
+    public async Task<IActionResult> ProcessProposal(Guid id, CancellationToken cancellationToken)
+    {
+        if (RedirectIfUnauthenticated() is IActionResult redirect) return redirect;
+        ProcessDefinition proposal = await operationsService.RetrieveAllProcessDefinitions().AsNoTracking()
+            .Include(item => item.Steps).ThenInclude(step => step.OutgoingTransitions)
+            .FirstOrDefaultAsync(item => item.Id == id && item.LifecycleState == ProcessDefinitionLifecycleState.Draft, cancellationToken);
+        if (proposal?.SupersedesProcessDefinitionId is null) return NotFound();
+        ProcessDefinition current = await operationsService.RetrieveAllProcessDefinitions().AsNoTracking()
+            .Include(item => item.Steps).ThenInclude(step => step.OutgoingTransitions)
+            .FirstOrDefaultAsync(item => item.Id == proposal.SupersedesProcessDefinitionId.Value, cancellationToken);
+        return current is null ? NotFound() : View(ProcessProposalComparisonService.Build(current, proposal));
+    }
+
+    [HttpPost("/Admin/ProcessProposals/{id:guid}/Approve")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ApproveProcessProposal(Guid id, string approvalNotes, CancellationToken cancellationToken)
+    {
+        if (RedirectIfUnauthenticated() is IActionResult redirect) return redirect;
+        ProcessValidationResult validation = await processValidationService.ValidateDefinitionAsync(id, cancellationToken);
+        if (!validation.IsValid)
+        {
+            string errors = string.Join(" ", validation.Issues
+                .Where(issue => issue.Severity == ProcessValidationSeverity.Error)
+                .Take(3).Select(issue => $"{issue.StepName}: {issue.Message}".TrimStart(':', ' ')));
+            TempData["AdminNotice"] = $"Proposal was not activated because validation failed. {errors}";
+            return RedirectToAction(nameof(ProcessProposal), new { id });
+        }
+
+        ProcessDefinition activated = await processDraftService.ActivateDraftAsync(id, CurrentUserId, approvalNotes, cancellationToken);
+        if (activated is null) return NotFound();
+        await workflowAutomationService.EnsureDefinitionCoverageAsync(activated.Id, cancellationToken);
+        if (activated.ScopeType == ProcessScopeType.Lead)
+            await workflowAutomationService.ReevaluateDeferredLeadsAsync(activated.TenantId, cancellationToken);
+        TempData["AdminNotice"] = "Proposal approved and activated.";
+        return RedirectToAction(nameof(ProcessProposals));
+    }
+
+    [HttpPost("/Admin/ProcessProposals/{id:guid}/Reject")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> RejectProcessProposal(Guid id, string rejectionNotes, CancellationToken cancellationToken)
+    {
+        if (RedirectIfUnauthenticated() is IActionResult redirect) return redirect;
+        ProcessDefinition rejected = await processDraftService.RejectDraftAsync(id, CurrentUserId, rejectionNotes, cancellationToken);
+        if (rejected is null) return NotFound();
+        TempData["AdminNotice"] = "Proposal rejected and removed from the review queue.";
+        return RedirectToAction(nameof(ProcessProposals));
     }
 
     [HttpGet("Admin/AiProviders/{providerKey}/Models")]
@@ -425,7 +461,7 @@ public sealed class AdminController(
             return RedirectAfterMessageAction(returnUrl);
         }
 
-        await agentMessageService.AppendEntryAsync(id, "User", responseNotes, CurrentUserId, cancellationToken);
+        await agentMessageService.AppendEntryAsync(id, "User", responseNotes, cancellationToken);
         TempData["AdminNotice"] = "Your response was added. The Approval Agent will continue the review.";
         return RedirectAfterMessageAction(returnUrl);
     }
@@ -440,7 +476,6 @@ public sealed class AdminController(
         AgentMessage message = await agentMessageService.ChangeStateAsync(
             id,
             AgentMessageState.Completed,
-            CurrentUserId,
             $"Conversation resolved by {CurrentUserId}.",
             cancellationToken);
         TempData["AdminNotice"] = message is null ? "Conversation was not found." : "Conversation resolved.";
@@ -457,7 +492,6 @@ public sealed class AdminController(
         AgentMessage message = await agentMessageService.ChangeStateAsync(
             id,
             AgentMessageState.Pending,
-            CurrentUserId,
             $"Conversation reopened by {CurrentUserId}.",
             cancellationToken);
         TempData["AdminNotice"] = message is null ? "Conversation was not found." : "Conversation reopened for the Approval Agent.";
@@ -489,7 +523,7 @@ public sealed class AdminController(
             }
         }
 
-        await agentMessageService.RespondAsync(id, AgentMessageState.Approved, CurrentUserId, responseNotes);
+        await agentMessageService.RespondAsync(id, AgentMessageState.Approved, responseNotes);
 
         if (proposedProcessDefinitionId.HasValue)
         {
@@ -513,7 +547,7 @@ public sealed class AdminController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        await agentMessageService.RespondAsync(id, AgentMessageState.Rejected, CurrentUserId, responseNotes);
+        await agentMessageService.RespondAsync(id, AgentMessageState.Rejected, responseNotes);
         TempData["AdminNotice"] = "Rejection recorded.";
         return RedirectAfterMessageAction(returnUrl);
     }
@@ -525,7 +559,7 @@ public sealed class AdminController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        await agentMessageService.RespondAsync(id, AgentMessageState.Dismissed, CurrentUserId, responseNotes);
+        await agentMessageService.RespondAsync(id, AgentMessageState.Dismissed, responseNotes);
         TempData["AdminNotice"] = "Message dismissed.";
         return RedirectAfterMessageAction(returnUrl);
     }

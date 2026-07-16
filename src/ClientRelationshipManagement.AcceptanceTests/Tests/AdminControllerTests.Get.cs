@@ -212,4 +212,49 @@ public sealed partial class AdminControllerTests
         html.Should().Contain("Process proposals");
         html.Should().Contain("Draft process definitions waiting for review");
     }
+
+    [CRMAcceptanceFact]
+    public async Task Get_ProcessProposal_ShowsTargetedCurrentAndProposedValues()
+    {
+        Guid currentId = Guid.NewGuid(); Guid draftId = Guid.NewGuid();
+        await ExecuteInAdminContextAsync(async db =>
+        {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            ProcessDefinition current = new() { Id = currentId, TenantId = AcceptanceSettings.TenantId, ScopeType = ProcessScopeType.Opportunity,
+                FamilyId = currentId, VersionNumber = 1, LifecycleState = ProcessDefinitionLifecycleState.Active,
+                Name = "Targeted comparison", Description = "Current process", IsActive = true,
+                CreatedBy = "acceptance-test", LastUpdatedBy = "acceptance-test", CreatedOn = now, LastUpdated = now };
+            current.Steps.Add(new ProcessStep { Id = Guid.NewGuid(), ProcessDefinitionId = currentId, Key = "intro-email",
+                Name = "Send Intro Email", Sequence = 20, ActionType = ProcessActionType.Email,
+                Objective = "", RequiredFacts = "", ProducedFacts = "", ViabilityImpact = "", TaskTitleTemplate = "", TaskInstructionsTemplate = "",
+                EmailSubjectTemplate = "", EmailBodyTemplate = "Current email body", CallScriptTemplate = "", QuestionSetTemplate = "",
+                CreatedBy = "acceptance-test", LastUpdatedBy = "acceptance-test", CreatedOn = now, LastUpdated = now });
+            ProcessDefinition draft = new() { Id = draftId, TenantId = AcceptanceSettings.TenantId, ScopeType = ProcessScopeType.Opportunity,
+                FamilyId = currentId, SupersedesProcessDefinitionId = currentId, VersionNumber = 2, LifecycleState = ProcessDefinitionLifecycleState.Draft,
+                Name = "Targeted comparison", Description = "Current process", ChangeSummary = "Make the outreach recipient-ready.",
+                CreatedBy = "acceptance-test", LastUpdatedBy = "acceptance-test", CreatedOn = now, LastUpdated = now };
+            draft.Steps.Add(new ProcessStep { Id = Guid.NewGuid(), ProcessDefinitionId = draftId, Key = "intro-email",
+                Name = "Send Intro Email", Sequence = 20, ActionType = ProcessActionType.Email,
+                Objective = "", RequiredFacts = "", ProducedFacts = "", ViabilityImpact = "", TaskTitleTemplate = "", TaskInstructionsTemplate = "",
+                EmailSubjectTemplate = "", EmailBodyTemplate = "Proposed email body", CallScriptTemplate = "", QuestionSetTemplate = "",
+                CreatedBy = "acceptance-test", LastUpdatedBy = "acceptance-test", CreatedOn = now, LastUpdated = now });
+            db.ProcessDefinitions.AddRange(current, draft); await db.SaveChangesAsync();
+        });
+
+        string html = await GetStringAsync($"/Admin/ProcessProposals/{draftId}");
+        html.Should().Contain("Where the change sits");
+        html.Should().Contain("Send Intro Email");
+        html.Should().Contain("Email body");
+        html.Should().Contain("Current email body");
+        html.Should().Contain("Proposed email body");
+        html.Should().Contain("workflow routing");
+
+        await ExecuteInAdminContextAsync(async db =>
+        {
+            db.ProcessSteps.RemoveRange(db.ProcessSteps.Where(item => item.ProcessDefinitionId == currentId || item.ProcessDefinitionId == draftId));
+            await db.SaveChangesAsync();
+            db.ProcessDefinitions.RemoveRange(db.ProcessDefinitions.Where(item => item.Id == currentId || item.Id == draftId));
+            await db.SaveChangesAsync();
+        });
+    }
 }

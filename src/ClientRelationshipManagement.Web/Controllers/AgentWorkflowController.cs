@@ -1,4 +1,3 @@
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Models.Security;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
@@ -15,15 +14,21 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using System.Text.RegularExpressions;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
+using IPlatformAgentMessageService = cCoder.ClientRelationshipManagement.Services.Entities.IAgentMessageOrchestrationService;
+using IWebAgentMessageService = ClientRelationshipManagement.Web.Services.Agents.IAgentMessageService;
 
 namespace ClientRelationshipManagement.Web.Controllers;
 
 [ApiController]
 [Route("Api/[controller]")]
 public sealed class AgentWorkflowController(
-    IPlatformDbContextFactory dbContextFactory,
+    IOperationsCoordinationService operations,
+    ISalesCoordinationService salesWorkspace,
+    IProcessCoordinationService processWorkspace,
+    IPlatformAgentMessageService messageWorkspace,
     IEmailDraftWorkflowService emailDraftWorkflowService,
-    IAgentMessageService agentMessageService,
+    IWebAgentMessageService agentMessageService,
     IProcessDraftService processDraftService,
     IWorkflowAutomationService workflowAutomationService,
     IEmailTaskEvidenceService emailTaskEvidenceService,
@@ -46,8 +51,7 @@ public sealed class AgentWorkflowController(
         string[] readableTenantIds = crmAuthInfo.ReadableTenants.Length > 0
             ? crmAuthInfo.ReadableTenants : crmAuthInfo.WriteableTenants;
         if (readableTenantIds.Length == 0) readableTenantIds = ["default"];
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        List<Email> crmEmails = await context.Emails.AsNoTracking()
+        List<Email> crmEmails = await operations.RetrieveAllEmails().AsNoTracking()
             .Include(item => item.TenantCompanyRelationship).ThenInclude(item => item.Company)
             .Where(item => readableTenantIds.Contains(item.TenantCompanyRelationship.TenantId)
                 && item.State == EmailState.Sent
@@ -65,7 +69,7 @@ public sealed class AgentWorkflowController(
             cancellationToken);
 
         Guid[] relationshipIds = crmEmails.Select(item => item.TenantCompanyRelationshipId).Distinct().ToArray();
-        var opportunities = await context.Opportunities.AsNoTracking()
+        var opportunities = await salesWorkspace.RetrieveOpportunities().AsNoTracking()
             .Where(item => relationshipIds.Contains(item.TenantCompanyRelationshipId))
             .OrderByDescending(item => item.LastUpdated)
             .Select(item => new { item.Id, item.TenantCompanyRelationshipId, Stage = item.Stage.ToString(), item.LastUpdated })
@@ -119,8 +123,7 @@ public sealed class AgentWorkflowController(
             return BadRequest("A Sent Items mailbox message id is required.");
 
         string[] writeableTenantIds = crmAuthInfo.WriteableTenants.Length > 0 ? crmAuthInfo.WriteableTenants : ["default"];
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        Email email = await context.Emails.Include(item => item.TenantCompanyRelationship)
+        Email email = await operations.RetrieveAllEmails().Include(item => item.TenantCompanyRelationship)
             .FirstOrDefaultAsync(item => item.Id == emailId
                 && writeableTenantIds.Contains(item.TenantCompanyRelationship.TenantId), cancellationToken);
         if (email is null) return NotFound();
@@ -136,7 +139,7 @@ public sealed class AgentWorkflowController(
 
         if (!string.IsNullOrWhiteSpace(match.InternetMessageId))
         {
-            bool alreadyLinked = await context.Emails.AsNoTracking().AnyAsync(item =>
+            bool alreadyLinked = await operations.RetrieveAllEmails().AsNoTracking().AnyAsync(item =>
                 item.Id != email.Id && item.ExternalMessageId == match.InternetMessageId,
                 cancellationToken);
             if (alreadyLinked)
@@ -145,7 +148,7 @@ public sealed class AgentWorkflowController(
 
         if (request.OpportunityId.HasValue)
         {
-            bool validOpportunity = await context.Opportunities.AnyAsync(item =>
+            bool validOpportunity = await salesWorkspace.RetrieveOpportunities().AnyAsync(item =>
                 item.Id == request.OpportunityId.Value
                 && item.TenantCompanyRelationshipId == email.TenantCompanyRelationshipId,
                 cancellationToken);
@@ -159,7 +162,7 @@ public sealed class AgentWorkflowController(
         email.LastError = null;
         email.LastUpdatedBy = CurrentExecutionUserId;
         email.LastUpdated = DateTimeOffset.UtcNow;
-        await context.SaveChangesAsync(cancellationToken);
+        await operations.SaveAsync(cancellationToken);
         return Ok(new { email.Id, email.State, email.OpportunityId, email.ExternalMessageId, email.SentOn, candidate.Score, candidate.Reasons });
     }
 
@@ -173,8 +176,7 @@ public sealed class AgentWorkflowController(
             return failure!;
 
         string[] writeableTenantIds = crmAuthInfo.WriteableTenants.Length > 0 ? crmAuthInfo.WriteableTenants : ["default"];
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        Email email = await context.Emails.Include(item => item.TenantCompanyRelationship)
+        Email email = await operations.RetrieveAllEmails().Include(item => item.TenantCompanyRelationship)
             .FirstOrDefaultAsync(item => item.Id == emailId
                 && item.State == EmailState.Sent
                 && writeableTenantIds.Contains(item.TenantCompanyRelationship.TenantId), cancellationToken);
@@ -203,27 +205,34 @@ public sealed class AgentWorkflowController(
         email.LastError = $"Mailbox reconciliation: {reason}";
         email.LastUpdatedBy = CurrentExecutionUserId;
         email.LastUpdated = DateTimeOffset.UtcNow;
-        await context.SaveChangesAsync(cancellationToken);
+        await operations.SaveAsync(cancellationToken);
         return Ok(new { email.Id, email.State, Reason = reason });
     }
 
     [HttpGet("Messages")]
-    public async Task<IActionResult> GetMessages([FromQuery] int limit = 25, CancellationToken cancellationToken = default)
+    public async Task<IActionResult> GetMessages(
+        [FromQuery] int limit = 25,
+        [FromQuery] Guid? conversationId = null,
+        CancellationToken cancellationToken = default)
     {
         if (TryAuthenticate(out IActionResult failure))
             return failure!;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
         string[] readableTenantIds = crmAuthInfo.ReadableTenants.Length > 0 ? crmAuthInfo.ReadableTenants : crmAuthInfo.WriteableTenants;
         if (readableTenantIds.Length == 0) readableTenantIds = ["default"];
-        var messages = await context.AgentMessages
+        var query = messageWorkspace.RetrieveAll()
             .AsNoTracking()
             .Include(item => item.Entries)
             .Include(item => item.ProcessDefinition)
             .Include(item => item.ProcessStep)
             .Where(item => readableTenantIds.Contains(item.TenantId)
-                && item.State == AgentMessageState.Pending
-                && item.Kind != AgentMessageKind.ApprovalRequest)
+                && item.State == AgentMessageState.Pending);
+
+        query = conversationId.HasValue
+            ? query.Where(item => item.Id == conversationId.Value)
+            : query.Where(item => item.Kind != AgentMessageKind.ApprovalRequest);
+
+        var messages = await query
             .OrderBy(item => item.CreatedOn)
             .Take(Math.Clamp(limit, 1, 100))
             .Select(item => new
@@ -280,19 +289,18 @@ public sealed class AgentWorkflowController(
         if (TryAuthenticate(out IActionResult failure))
             return failure!;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
         DateTimeOffset now = DateTimeOffset.UtcNow;
         IQueryable<ProcessTask> runnableTasks;
         if (processTaskId.HasValue)
         {
-            runnableTasks = context.ProcessTasks.Where(task =>
+            runnableTasks = processWorkspace.RetrieveTasks().Where(task =>
                 task.Id == processTaskId.Value
                 && task.State == ProcessTaskState.Pending
                 && (!task.AgentClaimId.HasValue || task.AgentClaimedBy == CurrentExecutionUserId));
         }
         else
         {
-            runnableTasks = WorkflowTaskQueue.BuildRunnableQuery(context, now);
+            runnableTasks = salesWorkspace.RetrieveRunnableProcessTasks(now);
         }
 
         List<ProcessTask> tasks = await WorkflowTaskQueue.OrderByCommercialProgress(runnableTasks)
@@ -319,7 +327,7 @@ public sealed class AgentWorkflowController(
 
         Dictionary<Guid, List<AgentTaskOutcomeViewModel>> outcomeLookup = stepIds.Count == 0
             ? []
-            : await context.ProcessTransitions
+            : await processWorkspace.RetrieveTransitions()
                 .AsNoTracking()
                 .Where(item => stepIds.Contains(item.ProcessStepId))
                 .GroupBy(item => item.ProcessStepId)
@@ -346,7 +354,7 @@ public sealed class AgentWorkflowController(
 
         Dictionary<Guid, RelationshipContact> primaryContactsByRelationship = relationshipIds.Count == 0
             ? []
-            : await context.RelationshipContacts
+            : await salesWorkspace.RetrieveRelationshipContacts()
                 .AsNoTracking()
                 .Include(item => item.CompanyContact)
                 .Where(item => relationshipIds.Contains(item.TenantCompanyRelationshipId))
@@ -365,7 +373,7 @@ public sealed class AgentWorkflowController(
         List<string> tenantIds = [.. taskCompanies.Select(item => item.TenantId).Distinct()];
         List<CompanyHistoryItem> recentHistory = companyIds.Count == 0
             ? []
-            : await context.CompanyHistory
+            : await salesWorkspace.RetrieveCompanyHistory()
                 .AsNoTracking()
                 .Where(item => companyIds.Contains(item.CompanyId) && tenantIds.Contains(item.TenantId))
                 .OrderByDescending(item => item.OccurredOn)
@@ -469,9 +477,8 @@ public sealed class AgentWorkflowController(
         if (string.IsNullOrWhiteSpace(request?.OutcomeKey))
             return BadRequest("An outcome key is required.");
 
-        using (PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true))
         {
-            var taskContext = await context.ProcessTasks
+            var taskContext = await processWorkspace.RetrieveTasks()
                 .AsNoTracking()
                 .Where(item => item.Id == processTaskId)
                 .Select(item => new { item.ActionType, StepKey = item.ProcessStep.Key })
@@ -524,8 +531,7 @@ public sealed class AgentWorkflowController(
 
         if (string.Equals(request.OutcomeKey, "await-response", StringComparison.OrdinalIgnoreCase))
         {
-            using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-            List<AgentMessage> obsoleteApprovals = await context.AgentMessages
+            List<AgentMessage> obsoleteApprovals = await messageWorkspace.RetrieveAll()
                 .Where(item => item.ProcessTaskId == processTaskId
                     && item.State == AgentMessageState.Pending
                     && item.Kind == AgentMessageKind.ApprovalRequest)
@@ -541,8 +547,8 @@ public sealed class AgentWorkflowController(
                 message.LastUpdated = now;
             }
 
-            if (obsoleteApprovals.Count > 0)
-                await context.SaveChangesAsync(cancellationToken);
+            foreach (AgentMessage message in obsoleteApprovals)
+                await messageWorkspace.ModifyAsync(message, cancellationToken);
         }
 
         return Ok(new
@@ -579,8 +585,7 @@ public sealed class AgentWorkflowController(
         if (TryAuthenticate(out IActionResult failure))
             return failure!;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        ProcessTask task = await context.ProcessTasks
+        ProcessTask task = await processWorkspace.RetrieveTasks()
             .Include(item => item.Email)
             .FirstOrDefaultAsync(item => item.Id == processTaskId, cancellationToken);
 
@@ -615,7 +620,7 @@ public sealed class AgentWorkflowController(
             task.EmailId = email.Id;
             task.LastUpdatedBy = CurrentExecutionUserId;
             task.LastUpdated = DateTimeOffset.UtcNow;
-            await context.SaveChangesAsync(cancellationToken);
+            await processWorkspace.SaveAsync(cancellationToken);
         }
 
         await agentMessageService.UpsertAsync(
@@ -672,16 +677,15 @@ public sealed class AgentWorkflowController(
         Guid? processStepId;
         Guid? processTaskId;
         Email rejectedEmail;
-        using (PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true))
         {
-            AgentMessage conversation = await context.AgentMessages
+            AgentMessage conversation = await messageWorkspace.RetrieveAll()
                 .FirstOrDefaultAsync(item => item.Id == messageId, cancellationToken);
             if (conversation is null)
                 return NotFound("The conversation was not found.");
             if (!conversation.EmailId.HasValue)
                 return Conflict("The conversation does not identify a source email.");
 
-            rejectedEmail = await context.Emails
+            rejectedEmail = await operations.RetrieveAllEmails()
                 .Include(item => item.Material)
                 .Include(item => item.TenantCompanyRelationship)
                 .FirstOrDefaultAsync(item => item.Id == conversation.EmailId.Value, cancellationToken);
@@ -698,7 +702,7 @@ public sealed class AgentWorkflowController(
             Guid? inferredOpportunityId = rejectedEmail.OpportunityId ?? conversation.OpportunityId;
             if (!inferredOpportunityId.HasValue)
             {
-                List<Guid> candidates = await context.Opportunities
+                List<Guid> candidates = await salesWorkspace.RetrieveOpportunities()
                     .Where(item => item.TenantCompanyRelationshipId == relationshipId
                         && item.Stage != SalesPipelineStage.Won
                         && item.Stage != SalesPipelineStage.Lost)
@@ -713,7 +717,7 @@ public sealed class AgentWorkflowController(
             opportunityId = inferredOpportunityId.Value;
 
             Guid? inferredDefinitionId = conversation.ProcessDefinitionId
-                ?? await context.ProcessDefinitions
+                ?? await processWorkspace.RetrieveDefinitions()
                     .Where(item => item.TenantId == tenantId
                         && item.ScopeType == ProcessScopeType.Opportunity
                         && item.IsActive)
@@ -740,7 +744,8 @@ public sealed class AgentWorkflowController(
             conversation.ProcessDefinitionId = processDefinitionId;
             conversation.LastUpdatedBy = CurrentExecutionUserId;
             conversation.LastUpdated = now;
-            await context.SaveChangesAsync(cancellationToken);
+            await operations.SaveAsync(cancellationToken);
+            await messageWorkspace.ModifyAsync(conversation, cancellationToken);
         }
 
         Email replacement = await emailDraftWorkflowService.SaveDraftAsync(
@@ -881,8 +886,7 @@ public sealed class AgentWorkflowController(
         if (TryAuthenticate(out IActionResult failure))
             return failure!;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        List<ProcessDefinition> definitions = await context.ProcessDefinitions
+        List<ProcessDefinition> definitions = await processWorkspace.RetrieveDefinitions()
             .AsNoTracking()
             .Where(item => item.LifecycleState == ProcessDefinitionLifecycleState.Active || item.IsActive)
             .OrderBy(item => item.ScopeType)
@@ -894,39 +898,39 @@ public sealed class AgentWorkflowController(
 
         foreach (ProcessDefinition definition in definitions)
         {
-            int activeInstanceCount = await context.ProcessInstances.CountAsync(
+        int activeInstanceCount = await processWorkspace.RetrieveInstances().CountAsync(
                 item => item.ProcessDefinitionId == definition.Id && item.State == ProcessInstanceState.Active,
                 cancellationToken);
 
-            int pendingTaskCount = await context.ProcessTasks.CountAsync(
+        int pendingTaskCount = await processWorkspace.RetrieveTasks().CountAsync(
                 item => item.ProcessInstance.ProcessDefinitionId == definition.Id && item.State == ProcessTaskState.Pending,
                 cancellationToken);
 
-            int sentEmailCount = await context.Emails.CountAsync(
+        int sentEmailCount = await operations.RetrieveAllEmails().CountAsync(
                 item => item.State == EmailState.Sent
                     && ((definition.ScopeType == ProcessScopeType.Opportunity && item.Opportunity!.ProcessInstances.Any(instance => instance.ProcessDefinitionId == definition.Id))
                         || (definition.ScopeType == ProcessScopeType.ClientAccount && item.ClientAccount!.ProcessInstances.Any(instance => instance.ProcessDefinitionId == definition.Id))),
                 cancellationToken);
 
-            int replyActivityCount = await context.Activities.CountAsync(
+        int replyActivityCount = await salesWorkspace.RetrieveActivities().CountAsync(
                 item => item.Direction == ActivityDirection.Inbound
                     && ((definition.ScopeType == ProcessScopeType.Opportunity && item.Opportunity!.ProcessInstances.Any(instance => instance.ProcessDefinitionId == definition.Id))
                         || (definition.ScopeType == ProcessScopeType.ClientAccount && item.ClientAccount!.ProcessInstances.Any(instance => instance.ProcessDefinitionId == definition.Id))),
                 cancellationToken);
 
             int wonCount = definition.ScopeType == ProcessScopeType.Opportunity
-                ? await context.Opportunities.CountAsync(item =>
+            ? await salesWorkspace.RetrieveOpportunities().CountAsync(item =>
                     item.ProcessInstances.Any(instance => instance.ProcessDefinitionId == definition.Id)
                     && item.Stage == SalesPipelineStage.Won, cancellationToken)
                 : 0;
 
             int lostCount = definition.ScopeType == ProcessScopeType.Opportunity
-                ? await context.Opportunities.CountAsync(item =>
+            ? await salesWorkspace.RetrieveOpportunities().CountAsync(item =>
                     item.ProcessInstances.Any(instance => instance.ProcessDefinitionId == definition.Id)
                     && item.Stage == SalesPipelineStage.Lost, cancellationToken)
                 : 0;
 
-            List<ProcessStepPerformanceMetricsViewModel> stepMetrics = await context.ProcessSteps
+        List<ProcessStepPerformanceMetricsViewModel> stepMetrics = await processWorkspace.RetrieveSteps()
                 .AsNoTracking()
                 .Where(step => step.ProcessDefinitionId == definition.Id && step.IsActive)
                 .OrderBy(step => step.Sequence)
@@ -979,15 +983,36 @@ public sealed class AgentWorkflowController(
         if (TryAuthenticate(out IActionResult failure))
             return failure!;
 
-        ProcessDefinition draft = await processDraftService.CreateDraftAsync(
+        List<ProcessStepDraftUpdateRequest> requestedStepUpdates = request.StepUpdates ?? [];
+        if (requestedStepUpdates.Count == 0 &&
+            (request.ProcessStepId.HasValue || !string.IsNullOrWhiteSpace(request.ProcessStepKey)) &&
+            (!string.IsNullOrWhiteSpace(request.EmailSubjectTemplate) || !string.IsNullOrWhiteSpace(request.EmailBodyTemplate)))
+        {
+            requestedStepUpdates =
+            [
+                new ProcessStepDraftUpdateRequest
+                {
+                    Id = request.ProcessStepId,
+                    Key = request.ProcessStepKey,
+                    EmailSubjectTemplate = request.EmailSubjectTemplate,
+                    EmailBodyTemplate = request.EmailBodyTemplate
+                }
+            ];
+        }
+
+        ProcessDefinition draft;
+        try
+        {
+            draft = await processDraftService.CreateDraftAsync(
             processDefinitionId,
             CurrentExecutionUserId,
             request.ProposedByAgent,
             request.ChangeSummary,
             request.Name,
             request.Description,
-            request.StepUpdates.Select(item => new ProcessStepDraftUpdate
+            requestedStepUpdates.Select(item => new ProcessStepDraftUpdate
             {
+                Id = item.Id,
                 Key = item.Key,
                 Name = item.Name,
                 Objective = item.Objective,
@@ -1001,14 +1026,18 @@ public sealed class AgentWorkflowController(
                 QuestionSetTemplate = item.QuestionSetTemplate
             }).ToList(),
             cancellationToken);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(exception.Message);
+        }
 
         if (draft is null)
             return NotFound();
 
         if (request.AgentMessageId.HasValue)
         {
-            using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-            AgentMessage conversation = await context.AgentMessages.FirstOrDefaultAsync(
+            AgentMessage conversation = await messageWorkspace.RetrieveAll().FirstOrDefaultAsync(
                 item => item.Id == request.AgentMessageId.Value,
                 cancellationToken);
             if (conversation is null)
@@ -1026,7 +1055,7 @@ public sealed class AgentWorkflowController(
                 : request.ApprovalBody;
             conversation.LastUpdatedBy = CurrentExecutionUserId;
             conversation.LastUpdated = DateTimeOffset.UtcNow;
-            await context.SaveChangesAsync(cancellationToken);
+            await messageWorkspace.ModifyAsync(conversation, cancellationToken);
             await agentMessageService.AppendEntryAsync(
                 conversation.Id,
                 "Agent",
@@ -1071,8 +1100,7 @@ public sealed class AgentWorkflowController(
         if (TryAuthenticate(out IActionResult failure))
             return failure!;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        Lead lead = await context.Leads
+        Lead lead = await salesWorkspace.RetrieveLeads()
             .Include(item => item.Contacts)
             .Include(item => item.Company)
                 .ThenInclude(company => company.RegisteredAddress)
@@ -1099,7 +1127,7 @@ public sealed class AgentWorkflowController(
                     lead.SourceSystem,
                     CurrentExecutionUserId,
                     now);
-                context.Addresses.Add(address);
+                salesWorkspace.Add(address);
                 lead.Company.RegisteredAddressId = address.Id;
             }
             else
@@ -1146,7 +1174,7 @@ public sealed class AgentWorkflowController(
                     LastUpdated = now
                 };
 
-                context.LeadContacts.Add(primaryContact);
+                salesWorkspace.Add(primaryContact);
             }
             else
             {
@@ -1161,7 +1189,7 @@ public sealed class AgentWorkflowController(
             }
         }
 
-        await context.SaveChangesAsync(cancellationToken);
+        await salesWorkspace.SaveAsync(cancellationToken);
 
         return Ok(new
         {
@@ -1189,8 +1217,7 @@ public sealed class AgentWorkflowController(
         if (!Regex.IsMatch(sectionKey, "^[a-z0-9-]{1,64}$", RegexOptions.CultureInvariant))
             return BadRequest("The section key may contain only lower-case letters, numbers, and hyphens.");
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        Lead lead = await context.Leads.FirstOrDefaultAsync(item => item.Id == leadId, cancellationToken);
+        Lead lead = await salesWorkspace.RetrieveLeads().FirstOrDefaultAsync(item => item.Id == leadId, cancellationToken);
         if (lead is null)
             return NotFound();
 
@@ -1204,7 +1231,7 @@ public sealed class AgentWorkflowController(
         lead.LastUpdatedBy = CurrentExecutionUserId;
         lead.LastUpdated = DateTimeOffset.UtcNow;
 
-        await context.SaveChangesAsync(cancellationToken);
+        await salesWorkspace.SaveAsync(cancellationToken);
         return Ok(new { lead.Id, SectionKey = sectionKey });
     }
 

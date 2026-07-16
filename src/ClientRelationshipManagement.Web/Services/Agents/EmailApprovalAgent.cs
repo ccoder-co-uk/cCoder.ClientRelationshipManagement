@@ -1,9 +1,9 @@
 using System.Text.Json;
 using cCoder.AI.Models.Requests;
 using cCoder.AI.Services.Foundations.Completions;
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using ClientRelationshipManagement.Web.Brokers.Loggings;
 using ClientRelationshipManagement.Web.Configuration;
 using ClientRelationshipManagement.Web.Services.Execution;
@@ -15,7 +15,8 @@ namespace ClientRelationshipManagement.Web.Services.Agents;
 
 public sealed class EmailApprovalAgent(
     ICompletionProviderService completionProviderService,
-    IPlatformDbContextFactory dbContextFactory,
+    IProcessCoordinationService processWorkspace,
+    IOperationsCoordinationService operations,
     IAgentAutomationSettingsService automationSettingsService,
     IEmailDraftWorkflowService emailDraftWorkflowService,
     IAgentMessageService agentMessageService,
@@ -172,9 +173,7 @@ public sealed class EmailApprovalAgent(
         int batchSize,
         CancellationToken cancellationToken)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-
-        return await context.ProcessTasks
+        return await processWorkspace.RetrieveTasks()
             .AsNoTracking()
             .Where(task =>
                 task.State == ProcessTaskState.Pending
@@ -289,14 +288,11 @@ public sealed class EmailApprovalAgent(
         string executionUserId,
         CancellationToken cancellationToken)
     {
-        using (PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true))
-        {
-            var email = await context.Emails.FirstAsync(item => item.Id == candidate.EmailId, cancellationToken);
-            email.LastError = $"{ReviewRequiredPrefix} {notes}";
-            email.LastUpdatedBy = executionUserId;
-            email.LastUpdated = DateTimeOffset.UtcNow;
-            await context.SaveChangesAsync(cancellationToken);
-        }
+        var email = await operations.RetrieveAllEmails().FirstAsync(item => item.Id == candidate.EmailId, cancellationToken);
+        email.LastError = $"{ReviewRequiredPrefix} {notes}";
+        email.LastUpdatedBy = executionUserId;
+        email.LastUpdated = DateTimeOffset.UtcNow;
+        await operations.SaveAsync(cancellationToken);
 
         await agentMessageService.UpsertAsync(
             CreateMessage(

@@ -1,5 +1,5 @@
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using ClientRelationshipManagement.Web.Brokers.Loggings;
 using ClientRelationshipManagement.Web.Configuration;
 using ClientRelationshipManagement.Web.Services.Processes;
@@ -10,7 +10,7 @@ using PlatformEntities = cCoder.ClientRelationshipManagement.Platform.Models.Ent
 namespace ClientRelationshipManagement.Web.Services.Mail;
 
 public sealed class EmailDispatchProcessor(
-    IPlatformDbContextFactory dbContextFactory,
+    IOperationsCoordinationService operations,
     IMailClientFactory mailClientFactory,
     ICurrentUserMailProfileProvider currentUserMailProfileProvider,
     IWorkflowAutomationService workflowAutomationService,
@@ -46,9 +46,8 @@ public sealed class EmailDispatchProcessor(
             return 0;
         }
 
-        using PlatformDbContext dbContext = dbContextFactory.CreateDbContext(useAdminConnection: true);
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        List<PlatformEntities.Email> dueEmails = await dbContext.Emails
+        List<PlatformEntities.Email> dueEmails = await operations.RetrieveAllEmails()
             .Include(email => email.CompanyContact)
             .Include(email => email.Material)
                 .ThenInclude(material => material.CompanyContact)
@@ -76,14 +75,13 @@ public sealed class EmailDispatchProcessor(
         foreach (PlatformEntities.Email email in dueEmails)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            dispatchedCount += await DispatchSingleEmailAsync(dbContext, mailClient, email, now, mailOptions, cancellationToken);
+            dispatchedCount += await DispatchSingleEmailAsync(mailClient, email, now, mailOptions, cancellationToken);
         }
 
         return dispatchedCount;
     }
 
     async Task<int> DispatchSingleEmailAsync(
-        PlatformDbContext dbContext,
         IMailClient mailClient,
         PlatformEntities.Email email,
         DateTimeOffset now,
@@ -95,13 +93,13 @@ public sealed class EmailDispatchProcessor(
 
         if (string.IsNullOrWhiteSpace(senderProfile?.EmailAddress))
         {
-            await MarkFailedAsync(dbContext, email, now, "No sender email address is available for this draft.", cancellationToken);
+            await MarkFailedAsync(email, now, "No sender email address is available for this draft.", cancellationToken);
             return 0;
         }
 
         if (string.IsNullOrWhiteSpace(toAddresses))
         {
-            await MarkFailedAsync(dbContext, email, now, "No recipient email address is available for this draft.", cancellationToken);
+            await MarkFailedAsync(email, now, "No recipient email address is available for this draft.", cancellationToken);
             return 0;
         }
 
@@ -112,7 +110,7 @@ public sealed class EmailDispatchProcessor(
         email.FromDisplayName ??= senderProfile.DisplayName;
         email.FromEmailAddress ??= senderProfile.EmailAddress ?? mailOptions.FallbackFromAddress;
         email.ToAddresses = toAddresses;
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await operations.SaveAsync(cancellationToken);
 
         MailSendResult result = await mailClient.SendAsync(
             new MailSendRequest
@@ -147,7 +145,7 @@ public sealed class EmailDispatchProcessor(
                 email.Material.LastUpdated = email.LastUpdated;
             }
 
-            await dbContext.SaveChangesAsync(cancellationToken);
+            await operations.SaveAsync(cancellationToken);
             bool workflowAdvanced = await workflowAutomationService.CompleteEmailTaskAsync(email.Id, cancellationToken);
             loggingBroker.LogInformation(
                 "Sent approved email for {RelationshipName} with subject {Subject}. Workflow advanced: {WorkflowAdvanced}.",
@@ -157,7 +155,7 @@ public sealed class EmailDispatchProcessor(
             return 1;
         }
 
-        await MarkFailedAsync(dbContext, email, DateTimeOffset.UtcNow, result.ErrorMessage, cancellationToken);
+        await MarkFailedAsync(email, DateTimeOffset.UtcNow, result.ErrorMessage, cancellationToken);
         return 0;
     }
 
@@ -197,7 +195,6 @@ public sealed class EmailDispatchProcessor(
             : string.Empty;
 
     async Task MarkFailedAsync(
-        PlatformDbContext dbContext,
         PlatformEntities.Email email,
         DateTimeOffset failedOn,
         string errorMessage,
@@ -209,7 +206,7 @@ public sealed class EmailDispatchProcessor(
         email.SendFailureCount += 1;
         email.LastUpdated = failedOn;
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await operations.SaveAsync(cancellationToken);
 
         loggingBroker.LogWarning(
             "Email {EmailId} failed dispatch: {ErrorMessage}",

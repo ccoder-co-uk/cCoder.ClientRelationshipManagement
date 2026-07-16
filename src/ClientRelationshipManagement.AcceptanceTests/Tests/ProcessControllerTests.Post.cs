@@ -22,6 +22,8 @@ public sealed partial class ProcessControllerTests
         string tenantId = Unique("migration-tenant");
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
+        Fixture.Factory.GrantTenant(tenantId);
+
         await ExecuteInAdminContextAsync(async db =>
         {
             db.ProcessDefinitions.Add(new ProcessDefinition
@@ -95,7 +97,7 @@ public sealed partial class ProcessControllerTests
                 "Acceptance Agent",
                 "Update the active graph",
                 null,
-                null,
+                "Updated process definition for activation coverage.",
                 [],
                 CancellationToken.None);
             activated = await service.ActivateDraftAsync(
@@ -128,6 +130,7 @@ public sealed partial class ProcessControllerTests
         result.Task.State.Should().Be(ProcessTaskState.Cancelled);
         result.Task.CompletionOutcomeKey.Should().Be("process-version-migrated");
         result.Source.LifecycleState.Should().Be(ProcessDefinitionLifecycleState.Archived);
+        Fixture.Factory.RevokeTenant(tenantId);
     }
 
     [CRMAcceptanceFact]

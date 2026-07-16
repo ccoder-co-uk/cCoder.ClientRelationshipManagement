@@ -1,19 +1,18 @@
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using Microsoft.EntityFrameworkCore;
 
 namespace ClientRelationshipManagement.Web.Services.Agents;
 
-public sealed class AgentRunJournalService(IPlatformDbContextFactory dbContextFactory) : IAgentRunJournalService
+public sealed class AgentRunJournalService(IOperationsCoordinationService operations) : IAgentRunJournalService
 {
     public async ValueTask<int> FailAbandonedAsync(
         AgentRunKind kind,
         DateTimeOffset startedBefore,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        List<AgentRun> abandoned = await context.AgentRuns
+        List<AgentRun> abandoned = await operations.RetrieveAllAgentRuns()
             .Where(item => item.Kind == kind
                 && item.State == AgentRunState.Running
                 && item.StartedOn < startedBefore)
@@ -31,7 +30,7 @@ public sealed class AgentRunJournalService(IPlatformDbContextFactory dbContextFa
             run.LastUpdated = now;
         }
 
-        await context.SaveChangesAsync(cancellationToken);
+        await operations.SaveAsync(cancellationToken);
         return abandoned.Count;
     }
 
@@ -49,7 +48,6 @@ public sealed class AgentRunJournalService(IPlatformDbContextFactory dbContextFa
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
         AgentRun run = new()
         {
             Id = Guid.NewGuid(),
@@ -70,8 +68,8 @@ public sealed class AgentRunJournalService(IPlatformDbContextFactory dbContextFa
             LastUpdated = now
         };
 
-        context.AgentRuns.Add(run);
-        await context.SaveChangesAsync(cancellationToken);
+        operations.Add(run);
+        await operations.SaveAsync(cancellationToken);
         return run;
     }
 
@@ -84,8 +82,7 @@ public sealed class AgentRunJournalService(IPlatformDbContextFactory dbContextFa
         int processedItemCount,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        AgentRun run = await context.AgentRuns.FirstOrDefaultAsync(item => item.Id == runId, cancellationToken);
+        AgentRun run = await operations.RetrieveAllAgentRuns().FirstOrDefaultAsync(item => item.Id == runId, cancellationToken);
         if (run is null)
             return;
 
@@ -98,6 +95,6 @@ public sealed class AgentRunJournalService(IPlatformDbContextFactory dbContextFa
         run.LastUpdatedBy = run.ExecutionUserId;
         run.LastUpdated = DateTimeOffset.UtcNow;
 
-        await context.SaveChangesAsync(cancellationToken);
+        await operations.SaveAsync(cancellationToken);
     }
 }

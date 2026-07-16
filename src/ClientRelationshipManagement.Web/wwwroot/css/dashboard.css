@@ -4778,3 +4778,48 @@ code {
         gap: 3px;
     }
 }
+/* Process proposal review */
+.proposal-review-page { max-width: 1500px; }
+.proposal-review-hero { align-items: flex-start; }
+.proposal-eyebrow, .proposal-context header span, .proposal-change-group header span, .proposal-diff__heading span {
+    color: #64748b; font-size: .72rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
+}
+.proposal-impact-strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1px; margin: 0 0 20px; overflow: hidden; border: 1px solid #dbe3ec; border-radius: 14px; background: #dbe3ec; }
+.proposal-impact-strip div { display: flex; flex-direction: column; gap: 3px; padding: 17px 20px; background: #fff; }
+.proposal-impact-strip strong { color: #172033; font-family: "Space Grotesk", sans-serif; font-size: 1.08rem; }
+.proposal-impact-strip span { color: #64748b; font-size: .78rem; }
+.proposal-context { margin-bottom: 20px; padding: 0; overflow: hidden; }
+.proposal-context > header, .proposal-change-group > header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 22px; border-bottom: 1px solid #e5eaf0; }
+.proposal-context h2, .proposal-change-group h2 { margin: 3px 0 0; font-size: 1.08rem; }
+.proposal-context header small { color: #64748b; }
+.proposal-workflow { display: flex; gap: 10px; padding: 20px 22px 24px; overflow-x: auto; }
+.proposal-workflow__step { position: relative; display: grid; flex: 0 0 172px; min-height: 92px; padding: 13px 14px; border: 1px solid #dbe3ec; border-radius: 11px; background: #f8fafc; color: #475569; text-decoration: none; }
+.proposal-workflow__step:not(:last-child)::after { content: "→"; position: absolute; right: -10px; top: 34px; z-index: 2; color: #94a3b8; }
+.proposal-workflow__step > span { color: #94a3b8; font-size: .68rem; font-weight: 800; }
+.proposal-workflow__step strong { align-self: center; color: inherit; font-size: .83rem; }
+.proposal-workflow__step small { font-size: .7rem; }
+.proposal-workflow__step b { margin-top: 7px; color: #92400e; font-size: .68rem; }
+.proposal-workflow__step.is-unchanged { opacity: .48; }
+.proposal-workflow__step.is-modified { border: 2px solid #f59e0b; background: #fffbeb; color: #78350f; box-shadow: 0 8px 22px rgba(245,158,11,.12); }
+.proposal-workflow__step.is-added { border: 2px solid #22c55e; background: #f0fdf4; color: #166534; }
+.proposal-workflow__step.is-removed { border: 2px solid #ef4444; background: #fef2f2; color: #991b1b; }
+.proposal-change-list { display: grid; gap: 20px; }
+.proposal-change-group { padding: 0; overflow: hidden; scroll-margin-top: 16px; }
+.proposal-change-group > header b { padding: 6px 10px; border-radius: 999px; background: #fff7ed; color: #9a3412; font-size: .74rem; }
+.proposal-diff { padding: 20px 22px 24px; }
+.proposal-diff + .proposal-diff { border-top: 1px solid #e5eaf0; }
+.proposal-diff__heading { margin-bottom: 12px; }
+.proposal-diff__heading h3 { margin: 3px 0 0; font-size: .95rem; }
+.proposal-diff__columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.proposal-diff__columns > div { min-width: 0; overflow: hidden; border: 1px solid #dbe3ec; border-radius: 10px; background: #f8fafc; }
+.proposal-diff__columns > div:last-child { border-color: #bbf7d0; background: #f0fdf4; }
+.proposal-diff__label { display: block; padding: 8px 12px; border-bottom: 1px solid #dbe3ec; color: #64748b; font-size: .7rem; font-weight: 800; text-transform: uppercase; }
+.proposal-diff__label.is-proposed { border-color: #bbf7d0; color: #15803d; }
+.proposal-diff pre { min-height: 48px; margin: 0; padding: 13px 14px; overflow: auto; color: #334155; font: .8rem/1.55 "Manrope", sans-serif; white-space: pre-wrap; overflow-wrap: anywhere; }
+.proposal-diff__columns.is-long-text pre { min-height: 150px; max-height: 420px; }
+.proposal-review-footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 22px; padding: 18px 2px 5px; color: #64748b; }
+@media (max-width: 850px) {
+    .proposal-impact-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .proposal-diff__columns { grid-template-columns: 1fr; }
+    .proposal-review-footer { align-items: flex-start; flex-direction: column; }
+}

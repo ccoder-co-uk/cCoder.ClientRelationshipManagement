@@ -58,7 +58,7 @@ public sealed class ScheduledAuthorityDataIngestHostedService(
         {
             loggingBroker.LogInformation("Scheduled authority data ingest hosted service tick started.");
             using IServiceScope scope = serviceScopeFactory.CreateScope();
-            IAuthorityDataImportService service = scope.ServiceProvider.GetRequiredService<IAuthorityDataImportService>();
+            IAuthorityDataImportCoordinationService service = scope.ServiceProvider.GetRequiredService<IAuthorityDataImportCoordinationService>();
             int importedFileCount = await service.RunPendingImportsAsync(cancellationToken);
             loggingBroker.LogInformation(
                 "Scheduled authority data ingest hosted service tick completed. Imported {ImportedFileCount} file(s).",

@@ -1,6 +1,6 @@
 namespace ClientRelationshipManagement.Web.Services.Leads;
 
-public interface IAuthorityDataImportService
+public interface IAuthorityDataImportCoordinationService
 {
     ValueTask<int> RunPendingImportsAsync(CancellationToken cancellationToken = default);
 }

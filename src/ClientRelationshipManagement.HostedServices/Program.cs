@@ -3,6 +3,8 @@ using ClientRelationshipManagement.Web.Configuration;
 using ClientRelationshipManagement.Web.Models.Imports;
 using ClientRelationshipManagement.Web.Services.Imports;
 using ClientRelationshipManagement.Web.Services.Migration;
+using cCoder.ClientRelationshipManagement.Models.Security;
+using cCoder.ClientRelationshipManagement.Brokers;
 
 namespace ClientRelationshipManagement.HostedServices;
 
@@ -16,7 +18,8 @@ public static class Program
             .SetBasePath(Directory.GetCurrentDirectory())
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
             .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true)
-            .AddEnvironmentVariables();
+            .AddEnvironmentVariables()
+            .AddCommandLine(args);
 
         builder.Logging.AddSimpleConsole(options =>
         {
@@ -52,6 +55,10 @@ public static class Program
                 options.IncludeMvc = false;
                 options.IncludeHostedServices = true;
             });
+
+        builder.Services.AddSingleton<ICRMAuthInfo>(new HostedAuthorizationBroker(
+            crmAdminConnection,
+            builder.Configuration["AgentWorkflows:ExecutionUserId"]));
 
         builder.Services.AddCors();
         builder.Services.AddDistributedMemoryCache();

@@ -1,7 +1,6 @@
 using System.Data;
 using System.Globalization;
 using System.Text.Json;
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Configuration;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
@@ -11,17 +10,18 @@ using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.VisualBasic.FileIO;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 
 namespace ClientRelationshipManagement.Web.Services.Leads;
 
-public sealed class AuthorityDataImportService(
+public sealed class AuthorityDataImportCoordinationService(
     IHostEnvironment environment,
-    PlatformConfiguration platformConfiguration,
-    IPlatformDbContextFactory dbContextFactory,
+    CRMConfiguration platformConfiguration,
+    IImportCoordinationService imports,
     IOptions<AuthorityDataOptions> options,
     IOptions<AgentWorkflowOptions> agentWorkflowOptions,
-    ILoggingBroker<AuthorityDataImportService> loggingBroker)
-    : IAuthorityDataImportService
+    ILoggingBroker<AuthorityDataImportCoordinationService> loggingBroker)
+    : IAuthorityDataImportCoordinationService
 {
     const string CompaniesHouseSource = "CompaniesHouse";
     const string ImportedFromAuthorityPrefix = "Imported from authority";
@@ -192,9 +192,7 @@ public sealed class AuthorityDataImportService(
         CancellationToken cancellationToken)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-
-        Source source = await context.Sources.FirstOrDefaultAsync(
+        Source source = await imports.RetrieveAllSources().FirstOrDefaultAsync(
             item => item.Name == authorityDataOptions.SourceSystem
                 && item.CountryCode == authorityDataOptions.SourceCountryCode,
             cancellationToken);
@@ -215,11 +213,11 @@ public sealed class AuthorityDataImportService(
                 LastUpdated = now
             };
 
-            context.Sources.Add(source);
+            imports.Add(source);
         }
 
         string storedObjectKey = $"legacy-staging:{stagedBatch.BatchId}";
-        Import import = await context.Imports.FirstOrDefaultAsync(
+        Import import = await imports.RetrieveAllImports().FirstOrDefaultAsync(
             item => item.StoredObjectKey == storedObjectKey,
             cancellationToken);
 
@@ -252,7 +250,7 @@ public sealed class AuthorityDataImportService(
                 LastUpdated = now
             };
 
-            context.Imports.Add(import);
+            imports.Add(import);
         }
         else
         {
@@ -266,7 +264,7 @@ public sealed class AuthorityDataImportService(
             import.LastUpdated = now;
         }
 
-        await context.SaveChangesAsync(cancellationToken);
+        await imports.SaveAsync(cancellationToken);
 
         await BackfillLegacyImportProvenanceAsync(
             source.Id,

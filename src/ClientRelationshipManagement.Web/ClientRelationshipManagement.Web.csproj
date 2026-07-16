@@ -19,6 +19,8 @@
   <ItemGroup>
     <PackageReference Include="cCoder.Security" Version="2026.4.29.2038" />
     <PackageReference Include="cCoder.Security.Data.EF.MSSQL" Version="2026.4.29.2038" />
+    <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.2.3" />
+    <PackageReference Include="Swashbuckle.AspNetCore.SwaggerGen" Version="10.2.3" />
   </ItemGroup>
 
   <ItemGroup>

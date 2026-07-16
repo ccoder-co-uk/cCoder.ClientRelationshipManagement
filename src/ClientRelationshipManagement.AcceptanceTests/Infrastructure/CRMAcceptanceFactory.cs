@@ -24,6 +24,12 @@ namespace ClientRelationshipManagement.AcceptanceTests.Infrastructure;
 internal sealed class CRMAcceptanceFactory(AcceptanceSettings settings)
     : WebApplicationFactory<CRMProgram>
 {
+    readonly AcceptanceCRMAuthInfo acceptanceAuthInfo = new(settings.UserId);
+
+    internal void GrantTenant(string tenantId) => acceptanceAuthInfo.GrantTenant(tenantId);
+
+    internal void RevokeTenant(string tenantId) => acceptanceAuthInfo.RevokeTenant(tenantId);
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Acceptance");
@@ -45,16 +51,16 @@ internal sealed class CRMAcceptanceFactory(AcceptanceSettings settings)
         {
             services.RemoveAll<ISecurityDbContextFactory>();
             services.RemoveAll<IEventHub>();
-            services.RemoveAll<PlatformConfiguration>();
-            services.RemoveAll<PlatformDbContext>();
-            services.RemoveAll<DbContextOptions<PlatformDbContext>>();
-            services.RemoveAll<IPlatformDbContextFactory>();
+            services.RemoveAll<CRMConfiguration>();
+            services.RemoveAll<ClientRelationshipDbContext>();
+            services.RemoveAll<DbContextOptions<ClientRelationshipDbContext>>();
+            services.RemoveAll<IClientRelationshipDbContextFactory>();
             services.RemoveAll<IAuthorizationBroker>();
             services.RemoveAll<ICRMAuthInfo>();
             services.RemoveAll<IMailClientFactory>();
             services.AddSingleton<IEventHub, NoOpEventHub>();
             services.AddSingleton<IMailClientFactory, AcceptanceMailClientFactory>();
-            services.AddSingleton(new PlatformConfiguration
+            services.AddSingleton(new CRMConfiguration
             {
                 ConnectionString = settings.CrmConnectionString,
                 AdminConnectionString = settings.CrmAdminConnectionString,
@@ -66,11 +72,14 @@ internal sealed class CRMAcceptanceFactory(AcceptanceSettings settings)
                 services.AddSingleton<ISSOAuthInfo>(new SSOAuthInfo { SSOUserId = settings.UserId });
             }
 
-            services.AddScoped<ICRMAuthInfo>(_ => new AcceptanceCRMAuthInfo(settings.UserId));
-            services.AddScoped<IPlatformDbContextFactory>(provider =>
-                new AcceptancePlatformDbContextFactory(
+            services.AddSingleton<ICRMAuthInfo>(acceptanceAuthInfo);
+            services.AddScoped<IClientRelationshipDbContextFactory>(provider =>
+                new AcceptanceClientRelationshipDbContextFactory(
                     settings,
                     provider.GetRequiredService<ICRMAuthInfo>()));
+            services.AddScoped(provider =>
+                provider.GetRequiredService<IClientRelationshipDbContextFactory>()
+                    .CreateDbContext(useAdminConnection: true));
 
             services.AddScoped<ISecurityDbContextFactory>(
                 provider => new MSSQLSecurityDbContextFactory(settings.SsoConnectionString)
@@ -155,30 +164,42 @@ internal sealed class CRMAcceptanceFactory(AcceptanceSettings settings)
 
     sealed class AcceptanceCRMAuthInfo(string userId) : ICRMAuthInfo
     {
+        readonly HashSet<string> tenantIds = [AcceptanceSettings.TenantId];
+
         public string SSOUserId { get; } = userId;
 
-        public string[] ReadableTenants { get; } = [AcceptanceSettings.TenantId];
+        public string[] ReadableTenants { get { lock (tenantIds) return [.. tenantIds]; } }
 
-        public string[] WriteableTenants { get; } = [AcceptanceSettings.TenantId];
+        public string[] WriteableTenants { get { lock (tenantIds) return [.. tenantIds]; } }
+
+        public void GrantTenant(string tenantId)
+        {
+            lock (tenantIds) tenantIds.Add(tenantId);
+        }
+
+        public void RevokeTenant(string tenantId)
+        {
+            lock (tenantIds) tenantIds.Remove(tenantId);
+        }
     }
 
-    sealed class AcceptancePlatformDbContextFactory(
+    sealed class AcceptanceClientRelationshipDbContextFactory(
         AcceptanceSettings settings,
         ICRMAuthInfo authInfo)
-        : IPlatformDbContextFactory
+        : IClientRelationshipDbContextFactory
     {
-        public PlatformDbContext CreateDbContext(bool useAdminConnection = false)
+        public ClientRelationshipDbContext CreateDbContext(bool useAdminConnection = false)
         {
             string connectionString = useAdminConnection && !string.IsNullOrWhiteSpace(settings.CrmAdminConnectionString)
                 ? settings.CrmAdminConnectionString
                 : settings.CrmConnectionString;
 
-            DbContextOptions<PlatformDbContext> options =
-                new DbContextOptionsBuilder<PlatformDbContext>()
+            DbContextOptions<ClientRelationshipDbContext> options =
+                new DbContextOptionsBuilder<ClientRelationshipDbContext>()
                     .UseSqlServer(connectionString)
                     .Options;
 
-            return new PlatformDbContext(options, authInfo);
+            return new ClientRelationshipDbContext(options, authInfo);
         }
     }
 }

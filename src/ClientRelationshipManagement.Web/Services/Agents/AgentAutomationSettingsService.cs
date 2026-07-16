@@ -1,10 +1,10 @@
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using Microsoft.EntityFrameworkCore;
 
 namespace ClientRelationshipManagement.Web.Services.Agents;
 
-public sealed class AgentAutomationSettingsService(IPlatformDbContextFactory dbContextFactory)
+public sealed class AgentAutomationSettingsService(IOperationsCoordinationService operations)
     : IAgentAutomationSettingsService
 {
     public async ValueTask<AgentAutomationSetting> GetAsync(
@@ -14,8 +14,7 @@ public sealed class AgentAutomationSettingsService(IPlatformDbContextFactory dbC
         if (string.IsNullOrWhiteSpace(userId))
             return null;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        return await context.AgentAutomationSettings
+        return await operations.RetrieveAutomationSettings(userId)
             .AsNoTracking()
             .FirstOrDefaultAsync(item => item.UserId == userId, cancellationToken);
     }
@@ -26,14 +25,13 @@ public sealed class AgentAutomationSettingsService(IPlatformDbContextFactory dbC
         CancellationToken cancellationToken = default)
     {
         AgentAutomationSetting setting = await GetOrCreateAsync(userId, cancellationToken);
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        AgentAutomationSetting tracked = await context.AgentAutomationSettings
+        AgentAutomationSetting tracked = await operations.RetrieveAutomationSettings(userId)
             .FirstAsync(item => item.Id == setting.Id, cancellationToken);
 
         tracked.AutoApproveProcessEmails = enabled;
         tracked.LastUpdatedBy = userId;
         tracked.LastUpdated = DateTimeOffset.UtcNow;
-        await context.SaveChangesAsync(cancellationToken);
+        await operations.SaveAsync(cancellationToken);
         return tracked;
     }
 
@@ -43,14 +41,13 @@ public sealed class AgentAutomationSettingsService(IPlatformDbContextFactory dbC
         CancellationToken cancellationToken = default)
     {
         AgentAutomationSetting setting = await GetOrCreateAsync(userId, cancellationToken);
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        AgentAutomationSetting tracked = await context.AgentAutomationSettings
+        AgentAutomationSetting tracked = await operations.RetrieveAutomationSettings(userId)
             .FirstAsync(item => item.Id == setting.Id, cancellationToken);
 
         tracked.LastMailboxSyncOn = syncedOn;
         tracked.LastUpdatedBy = userId;
         tracked.LastUpdated = DateTimeOffset.UtcNow;
-        await context.SaveChangesAsync(cancellationToken);
+        await operations.SaveAsync(cancellationToken);
     }
 
     public async ValueTask SetMailboxEvidenceBackfillCompletedOnAsync(
@@ -59,14 +56,13 @@ public sealed class AgentAutomationSettingsService(IPlatformDbContextFactory dbC
         CancellationToken cancellationToken = default)
     {
         AgentAutomationSetting setting = await GetOrCreateAsync(userId, cancellationToken);
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        AgentAutomationSetting tracked = await context.AgentAutomationSettings
+        AgentAutomationSetting tracked = await operations.RetrieveAutomationSettings(userId)
             .FirstAsync(item => item.Id == setting.Id, cancellationToken);
 
         tracked.MailboxEvidenceBackfillCompletedOn = completedOn;
         tracked.LastUpdatedBy = userId;
         tracked.LastUpdated = DateTimeOffset.UtcNow;
-        await context.SaveChangesAsync(cancellationToken);
+        await operations.SaveAsync(cancellationToken);
     }
 
     async ValueTask<AgentAutomationSetting> GetOrCreateAsync(
@@ -76,8 +72,7 @@ public sealed class AgentAutomationSettingsService(IPlatformDbContextFactory dbC
         if (string.IsNullOrWhiteSpace(userId))
             throw new ArgumentException("An execution user is required.", nameof(userId));
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        AgentAutomationSetting setting = await context.AgentAutomationSettings
+        AgentAutomationSetting setting = await operations.RetrieveAutomationSettings(userId)
             .FirstOrDefaultAsync(item => item.UserId == userId, cancellationToken);
 
         if (setting is not null)
@@ -94,8 +89,8 @@ public sealed class AgentAutomationSettingsService(IPlatformDbContextFactory dbC
             LastUpdated = now
         };
 
-        context.AgentAutomationSettings.Add(setting);
-        await context.SaveChangesAsync(cancellationToken);
+        operations.Add(setting);
+        await operations.SaveAsync(cancellationToken);
         return setting;
     }
 }

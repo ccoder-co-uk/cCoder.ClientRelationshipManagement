@@ -1,8 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using ClientRelationshipManagement.Web.Brokers.Loggings;
 using ClientRelationshipManagement.Web.Configuration;
 using ClientRelationshipManagement.Web.Services.Agents;
@@ -13,7 +13,8 @@ namespace ClientRelationshipManagement.Web.Services.Mail;
 
 public sealed class MailboxSyncProcessor(
     IMicrosoftGraphMailboxClient mailboxClient,
-    IPlatformDbContextFactory dbContextFactory,
+    IOperationsCoordinationService operations,
+    ISalesCoordinationService sales,
     IAgentAutomationSettingsService automationSettingsService,
     IOptions<MailOptions> mailOptions,
     IOptions<AgentWorkflowOptions> agentWorkflowOptions,
@@ -72,8 +73,7 @@ public sealed class MailboxSyncProcessor(
     {
         string legacyId = CreateLegacyId(message);
         string externalId = string.IsNullOrWhiteSpace(message.ExternalId) ? legacyId : message.ExternalId;
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        if (await context.MailboxMessageRecords.AnyAsync(
+        if (await operations.RetrieveMailboxMessages().AnyAsync(
                 item => item.ExternalId == externalId
                     || (!string.IsNullOrWhiteSpace(message.InternetMessageId)
                         && item.InternetMessageId == message.InternetMessageId),
@@ -84,7 +84,7 @@ public sealed class MailboxSyncProcessor(
 
         var relationship = string.IsNullOrWhiteSpace(message.FromAddress)
             ? null
-            : await context.RelationshipContacts
+            : await sales.RetrieveRelationshipContacts()
                 .AsNoTracking()
                 .Where(item =>
                     !item.TenantCompanyRelationship.IsArchived
@@ -100,14 +100,14 @@ public sealed class MailboxSyncProcessor(
 
         Guid? opportunityId = relationship is null
             ? null
-            : await context.Opportunities
+            : await sales.RetrieveOpportunities()
                 .Where(item => item.TenantCompanyRelationshipId == relationship.TenantCompanyRelationshipId)
                 .OrderByDescending(item => item.LastUpdated)
                 .Select(item => (Guid?)item.Id)
                 .FirstOrDefaultAsync(cancellationToken);
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
-        context.MailboxMessageRecords.Add(new MailboxMessageRecord
+        operations.Add(new MailboxMessageRecord
         {
             Id = Guid.NewGuid(),
             ExternalId = externalId,
@@ -133,15 +133,15 @@ public sealed class MailboxSyncProcessor(
 
         int importedActivityCount = 0;
         if (relationship is not null
-            && !await context.Activities.AnyAsync(item => item.LegacyId == legacyId, cancellationToken))
+            && !await sales.RetrieveActivities().AnyAsync(item => item.LegacyId == legacyId, cancellationToken))
         {
-            Guid? clientAccountId = await context.ClientAccounts
+            Guid? clientAccountId = await sales.RetrieveClientAccounts()
                 .Where(item => item.TenantCompanyRelationshipId == relationship.TenantCompanyRelationshipId)
                 .OrderByDescending(item => item.LastUpdated)
                 .Select(item => (Guid?)item.Id)
                 .FirstOrDefaultAsync(cancellationToken);
 
-            context.Activities.Add(new Activity
+            sales.Add(new Activity
             {
                 Id = Guid.NewGuid(),
                 LegacyId = legacyId,
@@ -162,7 +162,8 @@ public sealed class MailboxSyncProcessor(
             importedActivityCount = 1;
         }
 
-        await context.SaveChangesAsync(cancellationToken);
+        await operations.SaveAsync(cancellationToken);
+        await sales.SaveAsync(cancellationToken);
         return importedActivityCount;
     }
 

@@ -1,5 +1,5 @@
 using cCoder.ClientRelationshipManagement.Models.Security;
-using cCoder.ClientRelationshipManagement.Platform.Data;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using ClientRelationshipManagement.Web.Configuration;
 using ClientRelationshipManagement.Web.Models.Imports;
 using Microsoft.AspNetCore.Mvc;
@@ -10,7 +10,7 @@ namespace ClientRelationshipManagement.Web.Controllers;
 
 [Route("Admin/Imports")]
 public sealed class ImportsController(
-    IPlatformDbContextFactory dbContextFactory,
+    IImportCoordinationService importService,
     IOptions<ImportWorkflowOptions> options,
     ICRMAuthInfo authInfo)
     : Controller
@@ -21,14 +21,12 @@ public sealed class ImportsController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext();
-
         return View(new ImportListPageViewModel
         {
             Notice = TempData["ImportsNotice"]?.ToString() ?? string.Empty,
             HostedServicesBaseUrl = options.Value.HostedServicesBaseUrl,
             ChunkSizeBytes = options.Value.ChunkSizeBytes,
-            Sources = await context.Sources
+            Sources = await importService.RetrieveAllSources()
                 .AsNoTracking()
                 .OrderBy(item => item.Name)
                 .Select(item => new SourceOptionViewModel
@@ -39,7 +37,7 @@ public sealed class ImportsController(
                     IsAuthoritative = item.IsAuthoritative
                 })
                 .ToListAsync(),
-            Imports = await context.Imports
+            Imports = await importService.RetrieveAllImports()
                 .AsNoTracking()
                 .Include(item => item.Source)
                 .OrderByDescending(item => item.CreatedOn)

@@ -1,12 +1,12 @@
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using ClientRelationshipManagement.Web.Services.Processes;
 using Microsoft.EntityFrameworkCore;
 
 namespace ClientRelationshipManagement.Web.Services.Agents;
 
-public sealed class ProcessDraftService(IPlatformDbContextFactory dbContextFactory) : IProcessDraftService
+public sealed class ProcessDraftService(IProcessCoordinationService processes) : IProcessDraftService
 {
     public async ValueTask<ProcessDefinition> CreateDraftAsync(
         Guid sourceProcessDefinitionId,
@@ -18,22 +18,36 @@ public sealed class ProcessDraftService(IPlatformDbContextFactory dbContextFacto
         IReadOnlyList<ProcessStepDraftUpdate> stepUpdates,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        ProcessDefinition source = await context.ProcessDefinitions
+        ProcessDefinition source = await processes.RetrieveDefinitions()
             .Include(item => item.Steps)
             .FirstOrDefaultAsync(item => item.Id == sourceProcessDefinitionId, cancellationToken);
 
         if (source is null)
             return null;
 
-        List<ProcessTransition> sourceTransitions = await context.ProcessTransitions
+        string proposedName = string.IsNullOrWhiteSpace(name) ? source.Name : name.Trim();
+        string proposedDescription = string.IsNullOrWhiteSpace(description) ? source.Description : description.Trim();
+        bool definitionChanged = !string.Equals(proposedName, source.Name, StringComparison.Ordinal)
+            || !string.Equals(proposedDescription, source.Description, StringComparison.Ordinal);
+        bool stepChanged = source.Steps.Any(sourceStep =>
+        {
+            ProcessStepDraftUpdate update = stepUpdates.FirstOrDefault(item =>
+                item.Id == sourceStep.Id || (!string.IsNullOrWhiteSpace(item.Key) &&
+                string.Equals(item.Key, sourceStep.Key, StringComparison.OrdinalIgnoreCase)));
+            return update is not null && HasEffectiveChange(sourceStep, update);
+        });
+
+        if (!definitionChanged && !stepChanged)
+            throw new InvalidOperationException("The proposed draft contains no effective changes. Supply at least one value that differs from the current process.");
+
+        List<ProcessTransition> sourceTransitions = await processes.RetrieveTransitions()
             .Where(item => item.ProcessStep.ProcessDefinitionId == source.Id)
             .ToListAsync(cancellationToken);
 
         DateTimeOffset now = DateTimeOffset.UtcNow;
         Guid familyId = source.FamilyId ?? source.Id;
 
-        int nextVersion = await context.ProcessDefinitions
+        int nextVersion = await processes.RetrieveDefinitions()
             .Where(item => item.FamilyId == familyId || item.Id == familyId)
             .MaxAsync(item => (int?)item.VersionNumber, cancellationToken) ?? 1;
 
@@ -46,8 +60,8 @@ public sealed class ProcessDraftService(IPlatformDbContextFactory dbContextFacto
             SupersedesProcessDefinitionId = source.Id,
             VersionNumber = nextVersion + 1,
             LifecycleState = ProcessDefinitionLifecycleState.Draft,
-            Name = string.IsNullOrWhiteSpace(name) ? source.Name : name.Trim(),
-            Description = string.IsNullOrWhiteSpace(description) ? source.Description : description.Trim(),
+            Name = proposedName,
+            Description = proposedDescription,
             IsDefault = false,
             IsActive = false,
             ChangeSummary = string.IsNullOrWhiteSpace(changeSummary) ? null : changeSummary.Trim(),
@@ -58,13 +72,14 @@ public sealed class ProcessDraftService(IPlatformDbContextFactory dbContextFacto
             LastUpdated = now
         };
 
-        context.ProcessDefinitions.Add(draft);
+        processes.Add(draft);
 
         Dictionary<Guid, Guid> stepMap = [];
         foreach (ProcessStep sourceStep in source.Steps.OrderBy(item => item.Sequence))
         {
             ProcessStepDraftUpdate update = stepUpdates.FirstOrDefault(item =>
-                string.Equals(item.Key, sourceStep.Key, StringComparison.OrdinalIgnoreCase));
+                item.Id == sourceStep.Id || (!string.IsNullOrWhiteSpace(item.Key) &&
+                string.Equals(item.Key, sourceStep.Key, StringComparison.OrdinalIgnoreCase)));
 
             ProcessStep draftStep = new()
             {
@@ -98,13 +113,13 @@ public sealed class ProcessDraftService(IPlatformDbContextFactory dbContextFacto
                 LastUpdated = now
             };
 
-            context.ProcessSteps.Add(draftStep);
+            processes.Add(draftStep);
             stepMap[sourceStep.Id] = draftStep.Id;
         }
 
         foreach (ProcessTransition sourceTransition in sourceTransitions)
         {
-            context.ProcessTransitions.Add(new ProcessTransition
+            processes.Add(new ProcessTransition
             {
                 Id = Guid.NewGuid(),
                 ProcessStepId = stepMap[sourceTransition.ProcessStepId],
@@ -137,9 +152,25 @@ public sealed class ProcessDraftService(IPlatformDbContextFactory dbContextFacto
             source.LastUpdated = now;
         }
 
-        await context.SaveChangesAsync(cancellationToken);
+        await processes.SaveAsync(cancellationToken);
         return draft;
     }
+
+    private static bool HasEffectiveChange(ProcessStep source, ProcessStepDraftUpdate update) =>
+        DifferentWhenSupplied(update.Name, source.Name, trim: true)
+        || DifferentWhenSupplied(update.Objective, source.Objective)
+        || DifferentWhenSupplied(update.RequiredFacts, source.RequiredFacts)
+        || DifferentWhenSupplied(update.ProducedFacts, source.ProducedFacts)
+        || DifferentWhenSupplied(update.ViabilityImpact, source.ViabilityImpact)
+        || DifferentWhenSupplied(update.TaskInstructionsTemplate, source.TaskInstructionsTemplate)
+        || DifferentWhenSupplied(update.EmailSubjectTemplate, source.EmailSubjectTemplate)
+        || DifferentWhenSupplied(update.EmailBodyTemplate, source.EmailBodyTemplate)
+        || DifferentWhenSupplied(update.CallScriptTemplate, source.CallScriptTemplate)
+        || DifferentWhenSupplied(update.QuestionSetTemplate, source.QuestionSetTemplate);
+
+    private static bool DifferentWhenSupplied(string proposed, string current, bool trim = false) =>
+        proposed is not null &&
+        !string.Equals(trim ? proposed.Trim() : proposed, current, StringComparison.Ordinal);
 
     public async ValueTask<ProcessDefinition> ActivateDraftAsync(
         Guid draftProcessDefinitionId,
@@ -147,15 +178,14 @@ public sealed class ProcessDraftService(IPlatformDbContextFactory dbContextFacto
         string approvalNotes,
         CancellationToken cancellationToken = default)
     {
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        ProcessDefinition draft = await context.ProcessDefinitions
+        ProcessDefinition draft = await processes.RetrieveWritableDefinitions()
             .FirstOrDefaultAsync(item => item.Id == draftProcessDefinitionId, cancellationToken);
 
         if (draft is null || draft.LifecycleState != ProcessDefinitionLifecycleState.Draft)
             return null;
 
         Guid familyId = draft.FamilyId ?? draft.Id;
-        List<ProcessDefinition> familyDefinitions = await context.ProcessDefinitions
+        List<ProcessDefinition> familyDefinitions = await processes.RetrieveWritableDefinitions()
             .Where(item =>
                 item.FamilyId == familyId || item.Id == familyId)
             .ToListAsync(cancellationToken);
@@ -164,7 +194,7 @@ public sealed class ProcessDraftService(IPlatformDbContextFactory dbContextFacto
             .ToList();
 
         await ProcessVersionMigration.MoveActiveInstancesAsync(
-            context,
+            processes,
             draft,
             [.. familyDefinitions.Where(item => item.Id != draft.Id).Select(item => item.Id)],
             approvedBy,
@@ -172,7 +202,7 @@ public sealed class ProcessDraftService(IPlatformDbContextFactory dbContextFacto
 
         DateTimeOffset now = DateTimeOffset.UtcNow;
         bool shouldRemainDefault = draft.SupersedesProcessDefinitionId.HasValue
-            && await context.ProcessDefinitions
+            && await processes.RetrieveDefinitions()
                 .Where(item => item.Id == draft.SupersedesProcessDefinitionId.Value)
                 .Select(item => item.IsDefault)
                 .FirstOrDefaultAsync(cancellationToken);
@@ -195,7 +225,32 @@ public sealed class ProcessDraftService(IPlatformDbContextFactory dbContextFacto
         draft.LastUpdatedBy = approvedBy;
         draft.LastUpdated = now;
 
-        await context.SaveChangesAsync(cancellationToken);
+        await processes.SaveAsync(cancellationToken);
+        return draft;
+    }
+
+    public async ValueTask<ProcessDefinition> RejectDraftAsync(
+        Guid draftProcessDefinitionId,
+        string rejectedBy,
+        string rejectionNotes,
+        CancellationToken cancellationToken = default)
+    {
+        ProcessDefinition draft = await processes.RetrieveWritableDefinitions()
+            .FirstOrDefaultAsync(item => item.Id == draftProcessDefinitionId, cancellationToken);
+
+        if (draft is null || draft.LifecycleState != ProcessDefinitionLifecycleState.Draft)
+            return null;
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        draft.IsActive = false;
+        draft.IsDefault = false;
+        draft.LifecycleState = ProcessDefinitionLifecycleState.Archived;
+        draft.ApprovalNotes = string.IsNullOrWhiteSpace(rejectionNotes)
+            ? $"Rejected by {rejectedBy}."
+            : $"Rejected by {rejectedBy}: {rejectionNotes.Trim()}";
+        draft.LastUpdatedBy = rejectedBy;
+        draft.LastUpdated = now;
+        await processes.SaveAsync(cancellationToken);
         return draft;
     }
 }

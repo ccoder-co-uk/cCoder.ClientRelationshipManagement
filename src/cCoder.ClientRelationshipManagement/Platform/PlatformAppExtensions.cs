@@ -15,8 +15,8 @@ public static class PlatformAppExtensions
         log?.LogInformation("Initialising CRM platform schemas");
 
         using IServiceScope scope = app.Services.CreateScope();
-        IPlatformDbContextFactory contextFactory = scope.ServiceProvider.GetRequiredService<IPlatformDbContextFactory>();
-        using PlatformDbContext dbContext = contextFactory.CreateDbContext(useAdminConnection: true);
+        IClientRelationshipDbContextFactory contextFactory = scope.ServiceProvider.GetRequiredService<IClientRelationshipDbContextFactory>();
+        using ClientRelationshipDbContext dbContext = contextFactory.CreateDbContext(useAdminConnection: true);
         dbContext.Database.Migrate();
 
         return app;

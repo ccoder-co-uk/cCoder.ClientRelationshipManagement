@@ -1,7 +1,7 @@
 using cCoder.AI.Models.Configurations;
-using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
+using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using ClientRelationshipManagement.Web.Configuration;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -10,16 +10,16 @@ namespace ClientRelationshipManagement.Web.Services.Agents;
 
 public sealed class AiProviderSelectionService : IAiProviderSelectionService
 {
-    readonly IPlatformDbContextFactory dbContextFactory;
+    readonly IOperationsCoordinationService operations;
     readonly AiRoutingOptions routingOptions;
     readonly IReadOnlyList<AiProviderProfile> profiles;
 
     public AiProviderSelectionService(
-        IPlatformDbContextFactory dbContextFactory,
+        IOperationsCoordinationService operations,
         IOptions<AiRoutingOptions> routingOptions,
         AIConfiguration aiConfiguration)
     {
-        this.dbContextFactory = dbContextFactory;
+        this.operations = operations;
         this.routingOptions = routingOptions.Value;
         profiles = BuildProfiles(aiConfiguration, this.routingOptions);
     }
@@ -34,8 +34,7 @@ public sealed class AiProviderSelectionService : IAiProviderSelectionService
         string selectedModel = null;
         if (!string.IsNullOrWhiteSpace(userId))
         {
-            using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-            var selectedSetting = await context.AgentAutomationSettings
+            var selectedSetting = await operations.RetrieveAutomationSettings(userId)
                 .AsNoTracking()
                 .Where(item => item.UserId == userId)
                 .Select(item => new { item.SelectedAiProfileKey, item.SelectedAiModel })
@@ -66,28 +65,14 @@ public sealed class AiProviderSelectionService : IAiProviderSelectionService
             ?? throw new ArgumentException("The selected AI profile is not configured.", nameof(profileKey));
         EnsureAvailable(selected);
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        AgentAutomationSetting setting = await context.AgentAutomationSettings
-            .FirstOrDefaultAsync(item => item.UserId == userId, cancellationToken);
+        AgentAutomationSetting setting = await GetOrCreateAsync(userId, cancellationToken);
         DateTimeOffset now = DateTimeOffset.UtcNow;
-
-        if (setting is null)
-        {
-            setting = new AgentAutomationSetting
-            {
-                Id = Guid.NewGuid(),
-                UserId = userId,
-                CreatedBy = userId,
-                CreatedOn = now
-            };
-            context.AgentAutomationSettings.Add(setting);
-        }
 
         setting.SelectedAiProfileKey = selected.Key;
         setting.SelectedAiModel = selected.Model;
         setting.LastUpdatedBy = userId;
         setting.LastUpdated = now;
-        await context.SaveChangesAsync(cancellationToken);
+        await operations.SaveAsync(cancellationToken);
 
         return new(selected, selected.Model, true);
     }
@@ -99,8 +84,7 @@ public sealed class AiProviderSelectionService : IAiProviderSelectionService
         AgentAutomationSetting setting = null;
         if (!string.IsNullOrWhiteSpace(userId))
         {
-            using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-            setting = await context.AgentAutomationSettings
+            setting = await operations.RetrieveAutomationSettings(userId)
                 .AsNoTracking()
                 .SingleOrDefaultAsync(item => item.UserId == userId, cancellationToken);
         }
@@ -140,27 +124,14 @@ public sealed class AiProviderSelectionService : IAiProviderSelectionService
             EnsureAvailable(profile);
         int selectedConcurrency = enabled ? ClampConcurrency(concurrency, profile) : 1;
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        AgentAutomationSetting setting = await context.AgentAutomationSettings
-            .SingleOrDefaultAsync(item => item.UserId == userId, cancellationToken);
+        AgentAutomationSetting setting = await GetOrCreateAsync(userId, cancellationToken);
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        if (setting is null)
-        {
-            setting = new AgentAutomationSetting
-            {
-                Id = Guid.NewGuid(),
-                UserId = userId,
-                CreatedBy = userId,
-                CreatedOn = now
-            };
-            context.AgentAutomationSettings.Add(setting);
-        }
 
         string selectedModel = enabled ? profile.Model : string.Empty;
         SetLane(setting, lane, enabled ? profile.Key : "none", selectedModel, selectedConcurrency);
         setting.LastUpdatedBy = userId;
         setting.LastUpdated = now;
-        await context.SaveChangesAsync(cancellationToken);
+        await operations.SaveAsync(cancellationToken);
         return new(lane, profile, selectedModel, enabled, selectedConcurrency);
     }
 
@@ -208,21 +179,8 @@ public sealed class AiProviderSelectionService : IAiProviderSelectionService
                 enabled ? ClampConcurrency(update.Concurrency, profile) : 1));
         }
 
-        using PlatformDbContext context = dbContextFactory.CreateDbContext(useAdminConnection: true);
-        AgentAutomationSetting setting = await context.AgentAutomationSettings
-            .SingleOrDefaultAsync(item => item.UserId == userId, cancellationToken);
+        AgentAutomationSetting setting = await GetOrCreateAsync(userId, cancellationToken);
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        if (setting is null)
-        {
-            setting = new AgentAutomationSetting
-            {
-                Id = Guid.NewGuid(),
-                UserId = userId,
-                CreatedBy = userId,
-                CreatedOn = now
-            };
-            context.AgentAutomationSettings.Add(setting);
-        }
 
         setting.SelectedAiProfileKey = sharedProfile.Key;
         setting.SelectedAiModel = selectedSharedModel;
@@ -239,9 +197,24 @@ public sealed class AiProviderSelectionService : IAiProviderSelectionService
 
         setting.LastUpdatedBy = userId;
         setting.LastUpdated = now;
-        await context.SaveChangesAsync(cancellationToken);
+        await operations.SaveAsync(cancellationToken);
 
         return new(new AiProviderSelection(sharedProfile, selectedSharedModel, true), selections);
+    }
+
+    async ValueTask<AgentAutomationSetting> GetOrCreateAsync(string userId, CancellationToken cancellationToken)
+    {
+        AgentAutomationSetting setting = await operations.RetrieveAutomationSettings(userId)
+            .SingleOrDefaultAsync(cancellationToken);
+        if (setting is not null) return setting;
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        setting = new AgentAutomationSetting
+        {
+            Id = Guid.NewGuid(), UserId = userId, CreatedBy = userId, LastUpdatedBy = userId,
+            CreatedOn = now, LastUpdated = now
+        };
+        operations.Add(setting);
+        return setting;
     }
 
     AiProviderProfile FindProfile(string key) => profiles.FirstOrDefault(profile =>
