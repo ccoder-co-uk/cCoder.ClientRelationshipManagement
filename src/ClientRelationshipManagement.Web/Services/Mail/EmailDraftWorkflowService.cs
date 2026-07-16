@@ -190,6 +190,19 @@ public sealed class EmailDraftWorkflowService(
             return null;
         }
 
+        string recipientAddresses = ResolveRecipientAddresses(
+            email.ToAddresses,
+            email.CompanyContact,
+            email.TenantCompanyRelationship,
+            email.ToAddresses);
+        if (string.IsNullOrWhiteSpace(recipientAddresses))
+        {
+            loggingBroker.LogWarning(
+                "Refused to approve email {EmailId} because it has no recipient.",
+                email.Id);
+            return null;
+        }
+
         DateTimeOffset now = DateTimeOffset.UtcNow;
         string currentUser = CurrentUserId;
         MailSenderProfile senderProfile = await currentUserMailProfileProvider.GetCurrentAsync(cancellationToken);
@@ -200,11 +213,7 @@ public sealed class EmailDraftWorkflowService(
             ?? currentUser;
         email.FromEmailAddress = senderProfile?.EmailAddress ?? email.FromEmailAddress;
         email.ReplyToAddresses = Normalize(email.ReplyToAddresses) ?? email.FromEmailAddress;
-        email.ToAddresses = ResolveRecipientAddresses(
-            email.ToAddresses,
-            email.CompanyContact,
-            email.TenantCompanyRelationship,
-            email.ToAddresses);
+        email.ToAddresses = recipientAddresses;
         email.State = EmailState.Approved;
         email.ApprovedOn = now;
         email.ApprovedBy = currentUser;
@@ -244,6 +253,14 @@ public sealed class EmailDraftWorkflowService(
 
         if (email is null)
             return null;
+
+        if (string.IsNullOrWhiteSpace(email.ToAddresses))
+        {
+            loggingBroker.LogWarning(
+                "Refused to mark email {EmailId} as sent because it has no recipient.",
+                email.Id);
+            return null;
+        }
 
         DateTimeOffset now = DateTimeOffset.UtcNow;
         string currentUser = CurrentUserId;

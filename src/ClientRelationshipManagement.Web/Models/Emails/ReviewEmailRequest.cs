@@ -2,7 +2,7 @@ using System.ComponentModel.DataAnnotations;
 
 namespace ClientRelationshipManagement.Web.Models.Emails;
 
-public sealed class ReviewEmailRequest
+public sealed class ReviewEmailRequest : EmailGridRequest
 {
     public Guid EmailId { get; set; }
     public Guid ClientId { get; set; }
@@ -13,7 +13,7 @@ public sealed class ReviewEmailRequest
     public DateTime? ScheduledSendOn { get; set; }
 }
 
-public sealed class RejectEmailRequest
+public sealed class RejectEmailRequest : EmailGridRequest
 {
     public Guid EmailId { get; set; }
     public Guid ClientId { get; set; }

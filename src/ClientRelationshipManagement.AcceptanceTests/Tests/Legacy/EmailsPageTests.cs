@@ -42,6 +42,37 @@ public sealed class EmailsPageTests(CRMAcceptanceFixture fixture)
         response.Should().Contain("Queue draft");
         response.Should().Contain("Approve");
         response.Should().Contain("Mark Sent");
+        response.Should().Contain("Showing 1–1 of 1 emails");
+        response.Should().Contain("Email result pages");
+    }
+
+    [CRMAcceptanceFact]
+    public async Task Get_Index_DoesNotOfferApprovalWithoutRecipient()
+    {
+        Client client = NewClient();
+        Company company = NewCompany(client.Id);
+        company.Name = "Missing Recipient Co";
+        ClientMaterial material = NewClientMaterial(client.Id);
+        Email email = NewEmail(client.Id, clientMaterialId: material.Id);
+        email.ToAddresses = null;
+        email.Subject = "Recipient-less draft";
+        email.State = EmailState.Draft;
+
+        await ExecuteInAdminContextAsync(async dbContext =>
+        {
+            dbContext.Clients.Add(client);
+            dbContext.Companies.Add(company);
+            dbContext.ClientMaterials.Add(material);
+            dbContext.Emails.Add(email);
+            await dbContext.SaveChangesAsync();
+        });
+
+        string response = await GetStringAsync($"/Admin/Emails?id={email.Id}");
+
+        response.Should().Contain("Recipient unavailable");
+        response.Should().Contain("cannot be approved or sent");
+        response.Should().NotContain("Approve Send");
+        response.Should().NotContain("Mark Sent");
     }
 
     [CRMAcceptanceFact]
@@ -87,9 +118,12 @@ public sealed class EmailsPageTests(CRMAcceptanceFixture fixture)
                 ["ClientId"] = client.Id.ToString(),
                 ["EmailId"] = email.Id.ToString(),
                 ["ScheduledSendOn"] = "2026-06-18T08:45",
+                ["ReturnUrl"] = "/Admin/Emails?search=Queue&state=Draft&page=2&pageSize=25",
             });
 
         response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        response.Headers.Location.Should().Be(
+            new Uri("/Admin/Emails?search=Queue&state=Draft&page=2&pageSize=25", UriKind.Relative));
 
         Email? approvedEmail = await QueryInAdminContextAsync(dbContext =>
             dbContext.Emails.IgnoreQueryFilters().FirstOrDefaultAsync(item => item.Id == email.Id));

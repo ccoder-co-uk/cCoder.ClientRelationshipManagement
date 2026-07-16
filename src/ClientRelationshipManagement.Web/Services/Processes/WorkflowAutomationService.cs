@@ -1518,6 +1518,14 @@ public sealed class WorkflowAutomationService(
                         : null)
                 : renderContext.Contact?.EmailAddress ?? renderContext.Company?.ContactEmailAddress;
 
+            if (string.IsNullOrWhiteSpace(recipientAddress))
+            {
+                loggingBroker.LogWarning(
+                    "Did not create email draft for task {ProcessTaskId} because no recipient email address is available.",
+                    task.Id);
+                return task;
+            }
+
             PlatformEntities.Material material = new()
             {
                 Id = Guid.NewGuid(),
