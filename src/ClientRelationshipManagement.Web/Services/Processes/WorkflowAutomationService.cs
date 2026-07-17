@@ -723,6 +723,7 @@ public sealed class WorkflowAutomationService(
         CancellationToken cancellationToken)
     {
         await EnsureRequiredEvidenceStepsAsync(storage, tenantId, cancellationToken);
+        await EnsureLeadContactGateContractsAsync(storage, tenantId, cancellationToken);
         await storage.SaveAsync(cancellationToken);
 
         List<PlatformEntities.ProcessStep> steps = await storage.ProcessSteps
@@ -1790,6 +1791,32 @@ public sealed class WorkflowAutomationService(
             task.DueOn);
 
         return task;
+    }
+
+    async ValueTask EnsureLeadContactGateContractsAsync(
+        IWorkflowBroker storage,
+        string tenantId,
+        CancellationToken cancellationToken)
+    {
+        List<PlatformEntities.ProcessStep> steps = await storage.ProcessSteps
+            .Where(step => step.ProcessDefinition.TenantId == tenantId
+                && step.ProcessDefinition.IsActive
+                && step.ProcessDefinition.ScopeType == ProcessScopeType.Lead
+                && (step.Key == "commercial-fit" || step.Key == "qualify-lead"))
+            .ToListAsync(cancellationToken);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        foreach (PlatformEntities.ProcessStep step in steps)
+        {
+            if (step.Key == "commercial-fit")
+                step.ProducedFacts = "company.fit-score, company.opening-angle, lead.contact-name, lead.contact-role, lead.contact-point, lead.contact-source";
+            else
+            {
+                step.RequiredFacts = "company.identity-verification, company.status, company.fit-score, lead.contact-point, lead.contact-source";
+                step.ProducedFacts = "company.qualification-decision, lead.contact-gate-result";
+            }
+            step.LastUpdatedBy = CurrentUserId;
+            step.LastUpdated = now;
+        }
     }
 
     async ValueTask InitializeStepTaskRunsAsync(

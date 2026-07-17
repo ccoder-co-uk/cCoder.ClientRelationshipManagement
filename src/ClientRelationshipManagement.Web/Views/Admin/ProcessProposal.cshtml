@@ -4,7 +4,10 @@
 <main class="page-shell proposal-review-page">
     @if (TempData["AdminNotice"] is string notice)
     {
-        <div class="status-banner" role="alert">@notice</div>
+        <div class="data-panel process-validation-summary has-errors" role="alert">
+            <strong>Proposal not activated</strong>
+            <p>@notice</p>
+        </div>
     }
     <section class="page-hero proposal-review-hero">
         <div>

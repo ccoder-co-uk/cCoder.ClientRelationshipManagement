@@ -229,7 +229,7 @@ public sealed class AdminController(
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect) return redirect;
         await workflowAutomationService.EnsureDefinitionStepTasksAsync(id, cancellationToken);
-        ProcessValidationResult validation = await processValidationService.ValidateDefinitionAsync(id, cancellationToken);
+        ProcessValidationResult validation = await processValidationService.ValidateActivationAsync(id, cancellationToken);
         if (!validation.IsValid)
         {
             string errors = string.Join(" ", validation.Issues

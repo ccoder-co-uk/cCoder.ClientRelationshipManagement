@@ -187,6 +187,44 @@ public sealed class ProcessValidationService(IProcessCoordinationService process
         }
     }
 
+    public async ValueTask<ProcessValidationResult> ValidateActivationAsync(
+        Guid processDefinitionId,
+        CancellationToken cancellationToken = default)
+    {
+        ProcessDefinition candidate = await processWorkspace.RetrieveDefinitions().AsNoTracking()
+            .Include(item => item.Steps).ThenInclude(step => step.OutgoingTransitions)
+            .Include(item => item.Steps).ThenInclude(step => step.StepTasks)
+            .FirstOrDefaultAsync(item => item.Id == processDefinitionId, cancellationToken);
+        if (candidate is null)
+            return await ValidateDefinitionAsync(processDefinitionId, cancellationToken);
+
+        List<ProcessDefinition> model = await processWorkspace.RetrieveDefinitions().AsNoTracking()
+            .Where(item => item.TenantId == candidate.TenantId && item.IsActive
+                && item.ScopeType != candidate.ScopeType)
+            .Include(item => item.Steps).ThenInclude(step => step.OutgoingTransitions)
+            .Include(item => item.Steps).ThenInclude(step => step.StepTasks)
+            .ToListAsync(cancellationToken);
+        model.Add(candidate);
+
+        HashSet<string> facts = new(InitialCompanyFacts, StringComparer.OrdinalIgnoreCase);
+        List<ProcessValidationIssue> issues = [];
+        foreach (ProcessDefinition definition in model.OrderBy(item => item.ScopeType))
+        {
+            AddScopeFacts(definition.ScopeType, facts);
+            ValidateDefinition(definition, facts, issues);
+            foreach (string fact in definition.Steps.Where(step => step.IsActive)
+                .SelectMany(step => SplitFacts(step.ProducedFacts)))
+                facts.Add(fact);
+        }
+
+        return new ProcessValidationResult
+        {
+            ValidatedOn = DateTimeOffset.UtcNow,
+            Issues = issues.OrderByDescending(issue => issue.Severity)
+                .ThenBy(issue => issue.ProcessName).ThenBy(issue => issue.StepName).ToList()
+        };
+    }
+
     static void AddScopeFacts(ProcessScopeType scopeType, HashSet<string> facts)
     {
         if (scopeType < ProcessScopeType.Lead)
