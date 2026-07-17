@@ -902,12 +902,26 @@ Kind regards,
                     RegexOptions.CultureInvariant);
                 int? fitScore = ParseFitScore(lead.QualificationNotes);
                 bool knownInactive = IsKnownInactive(lead.Company.CompanyStatus) || lead.Company.DissolvedOn.HasValue;
-                bool qualify = identityCoherent && !knownInactive && fitScore >= 60;
+                bool hasUsableContact = !string.IsNullOrWhiteSpace(lead.RawContactEmailAddress)
+                    || !string.IsNullOrWhiteSpace(lead.RawContactPhoneNumber)
+                    || !string.IsNullOrWhiteSpace(lead.Company.ContactEmailAddress)
+                    || !string.IsNullOrWhiteSpace(lead.Company.ContactPhoneNumber)
+                    || lead.Contacts.Any(item => !string.IsNullOrWhiteSpace(item.EmailAddress)
+                        || !string.IsNullOrWhiteSpace(item.PhoneNumber));
+                bool evidenceComplete = identityCoherent && fitScore.HasValue;
+                bool qualify = evidenceComplete && !knownInactive && fitScore >= 60 && hasUsableContact;
+                bool reject = knownInactive || (evidenceComplete && fitScore < 60);
                 string knownActive = knownInactive ? "no"
                     : string.Equals(lead.Company.CompanyStatus, "active", StringComparison.OrdinalIgnoreCase) ? "yes"
                     : "uncertain";
-                outcomeKey = qualify ? "qualified" : knownInactive ? "rejected" : "deferred";
-                finding = $"Identity coherent: {(identityCoherent ? "yes" : "no")}.\nKnown active: {knownActive}.\nRecorded fit score: {(fitScore.HasValue ? fitScore.Value : 0)}.\nDecision: {outcomeKey}.\nRule explanation: identity must be coherent, the company must not be known inactive, and fit must be at least 60; the recorded values {(qualify ? "meet" : "do not meet")} that rule.";
+                outcomeKey = qualify ? "qualified" : reject ? "rejected" : "deferred";
+                string decisionReason = !hasUsableContact ? "no usable email address or phone number was found"
+                    : !identityCoherent ? "company identity evidence is incomplete"
+                    : !fitScore.HasValue ? "commercial fit evidence is incomplete"
+                    : knownInactive ? "the company is inactive or dissolved"
+                    : fitScore < 60 ? "commercial fit is below the qualification threshold"
+                    : "all qualification gates passed";
+                finding = $"Identity coherent: {(identityCoherent ? "yes" : "no")}.\nKnown active: {knownActive}.\nRecorded fit score: {(fitScore.HasValue ? fitScore.Value : 0)}.\nUsable contact point: {(hasUsableContact ? "yes" : "no")}.\nDecision: {outcomeKey}.\nDecision reason: {decisionReason}.\nRule explanation: identity and fit evidence must be complete, the company must be active, fit must be at least 60, and a usable email address or phone number must exist before an opportunity can be created.";
                 break;
             }
         }

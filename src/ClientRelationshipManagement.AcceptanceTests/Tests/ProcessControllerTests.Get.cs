@@ -87,5 +87,9 @@ public sealed partial class ProcessControllerTests
         html.Should().Contain("Resolve and verify recipient");
         html.Should().Contain("CRM.ValidateRecipientEmail");
         html.Should().Contain("Implicit inference");
+        html.Should().Contain("Find a Relevant Contact Route");
+        html.Should().Contain("transition-template-");
+        html.Should().Contain("Current companies");
+        html.Should().Contain("Why companies are here");
     }
 }

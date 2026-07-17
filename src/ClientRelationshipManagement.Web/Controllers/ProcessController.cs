@@ -8,6 +8,7 @@ using ClientRelationshipManagement.Web.Utilities;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.EntityFrameworkCore;
+using System.Text.RegularExpressions;
 using PlatformEntities = cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 
 namespace ClientRelationshipManagement.Web.Controllers;
@@ -285,9 +286,19 @@ public sealed class ProcessController(
             .Where(lead => tenantIds.Contains(lead.TenantId))
             .Select(lead => new WorkflowLeadCompanyProjection
             {
+                LeadId = lead.Id,
                 CompanyId = lead.CompanyId,
                 Status = lead.Status,
-                LastUpdated = lead.LastUpdated
+                LastUpdated = lead.LastUpdated,
+                CompanyStatus = lead.Company.CompanyStatus,
+                CompanyIsDissolved = lead.Company.DissolvedOn.HasValue,
+                HasUsableContact = !string.IsNullOrWhiteSpace(lead.RawContactEmailAddress)
+                    || !string.IsNullOrWhiteSpace(lead.RawContactPhoneNumber)
+                    || !string.IsNullOrWhiteSpace(lead.Company.ContactEmailAddress)
+                    || !string.IsNullOrWhiteSpace(lead.Company.ContactPhoneNumber)
+                    || lead.Contacts.Any(contact => !string.IsNullOrWhiteSpace(contact.EmailAddress)
+                        || !string.IsNullOrWhiteSpace(contact.PhoneNumber)),
+                QualificationNotes = lead.QualificationNotes
             })
             .ToListAsync(cancellationToken);
         Dictionary<Guid, WorkflowLeadCompanyProjection> latestLeads = leadRows
@@ -383,6 +394,72 @@ public sealed class ProcessController(
                 (ProcessScopeType.Opportunity, ProcessTransitionEffect.CloseOpportunityAsWon) => latestOpportunities.Values.Count(item => item.Stage == SalesPipelineStage.Won),
                 (ProcessScopeType.ClientAccount, ProcessTransitionEffect.CloseClientAccount) => latestClients.Values.Count(item => item.Status == ClientAccountStatus.Closed),
                 _ => 0
+            };
+
+        IReadOnlyList<WorkflowOutcomeReasonViewModel> CurrentStateReasons(
+            ProcessScopeType scopeType,
+            ProcessTransitionEffect effect)
+        {
+            if (scopeType != ProcessScopeType.Lead || effect != ProcessTransitionEffect.DeferLead)
+                return [];
+
+            List<WorkflowLeadCompanyProjection> deferred = latestLeads.Values
+                .Where(item => item.Status == LeadStatus.Deferred)
+                .ToList();
+            long noContact = deferred.LongCount(item => !item.HasUsableContact);
+            long inactive = deferred.LongCount(item => item.HasUsableContact
+                && (item.CompanyIsDissolved || Regex.IsMatch(item.CompanyStatus ?? string.Empty,
+                    "dissolved|liquidation|removed|closed|inactive|converted-closed",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)));
+            long incompleteEvidence = deferred.LongCount(item => item.HasUsableContact
+                && !item.CompanyIsDissolved
+                && !Regex.IsMatch(item.CompanyStatus ?? string.Empty,
+                    "dissolved|liquidation|removed|closed|inactive|converted-closed",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+                && (!Regex.IsMatch(item.QualificationNotes ?? string.Empty,
+                        @"(?im)^Identity result:\s*(matched|partially matched)\b",
+                        RegexOptions.CultureInvariant)
+                    || !Regex.IsMatch(item.QualificationNotes ?? string.Empty,
+                        @"(?im)^Fit score:\s*\d{1,3}\b",
+                        RegexOptions.CultureInvariant)));
+            long other = deferred.Count - noContact - inactive - incompleteEvidence;
+
+            return new[]
+            {
+                new WorkflowOutcomeReasonViewModel
+                {
+                    Label = "No usable contact point",
+                    Detail = "No email address or phone number is recorded on the lead, company, or lead contacts. Contact discovery did not produce the information the qualification gate requires.",
+                    Count = noContact
+                },
+                new WorkflowOutcomeReasonViewModel
+                {
+                    Label = "Qualification evidence incomplete",
+                    Detail = "A contact exists, but identity coherence or the fit score is missing from the recorded research.",
+                    Count = incompleteEvidence
+                },
+                new WorkflowOutcomeReasonViewModel
+                {
+                    Label = "Company inactive or dissolved",
+                    Detail = "The registry state indicates that conversion should not proceed.",
+                    Count = inactive
+                },
+                new WorkflowOutcomeReasonViewModel
+                {
+                    Label = "Other recorded qualification result",
+                    Detail = "The available evidence was processed under an older or unclassified decision rule.",
+                    Count = other
+                }
+            }.Where(reason => reason.Count > 0).ToList();
+        }
+
+        string CurrentStateHref(ProcessScopeType scopeType, ProcessTransitionEffect effect) =>
+            (scopeType, effect) switch
+            {
+                (ProcessScopeType.Lead, ProcessTransitionEffect.DeferLead) => "/Leads?status=Deferred",
+                (ProcessScopeType.Lead, ProcessTransitionEffect.RejectLead) => "/Leads?status=Rejected",
+                (ProcessScopeType.Lead, ProcessTransitionEffect.QualifyLeadAndCreateOpportunity) => "/Leads?status=Converted",
+                _ => string.Empty
             };
 
         Dictionary<string, PlatformEntities.ProcessStep> entrySteps = definitions
@@ -524,7 +601,9 @@ public sealed class ProcessController(
                                             GraphTargetId = graphTargetId,
                                             DestinationLabel = destinationLabel,
                                             HistoricalCompletedCount = historicalOutcomeCount,
-                                            CurrentStateCount = CurrentStateCount(definition.ScopeType, transition.Effect)
+                                            CurrentStateCount = CurrentStateCount(definition.ScopeType, transition.Effect),
+                                            CurrentStateHref = CurrentStateHref(definition.ScopeType, transition.Effect),
+                                            CurrentStateReasons = CurrentStateReasons(definition.ScopeType, transition.Effect)
                                         };
                                     })
                                     .ToList()

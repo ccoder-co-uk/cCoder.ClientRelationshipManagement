@@ -16,7 +16,7 @@ public sealed partial class HomeControllerTests
         (Guid leadId, _) = await SeedLeadAsync();
         await ExecuteWorkflowAsync(service => service.EnsureCoverageAsync(leadId: leadId, forceCreate: true).AsTask());
 
-        string[] outcomes = ["identity-checked", "activity-described", "scale-assessed", "quality-assessed", "fit-assessed", "deferred"];
+        string[] outcomes = ["identity-checked", "activity-described", "contact-researched", "scale-assessed", "quality-assessed", "fit-assessed", "deferred"];
         foreach (string outcome in outcomes)
         {
             Guid taskId = await QueryInAdminContextAsync(db => db.ProcessTasks

@@ -723,6 +723,7 @@ public sealed class WorkflowAutomationService(
         CancellationToken cancellationToken)
     {
         await EnsureRequiredEvidenceStepsAsync(storage, tenantId, cancellationToken);
+        await EnsureLeadContactResearchStepAsync(storage, tenantId, cancellationToken);
         await EnsureLeadContactGateContractsAsync(storage, tenantId, cancellationToken);
         await storage.SaveAsync(cancellationToken);
 
@@ -747,6 +748,38 @@ public sealed class WorkflowAutomationService(
             step.ViabilityImpact = contract.ViabilityImpact;
             step.LastUpdatedBy = CurrentUserId;
             step.LastUpdated = DateTimeOffset.UtcNow;
+        }
+
+        await storage.SaveAsync(cancellationToken);
+        await ReevaluateDeferredLeadsMissingContactResearchAsync(storage, tenantId, cancellationToken);
+    }
+
+    async ValueTask ReevaluateDeferredLeadsMissingContactResearchAsync(
+        IWorkflowBroker storage,
+        string tenantId,
+        CancellationToken cancellationToken)
+    {
+        List<PlatformEntities.Lead> leads = await storage.Leads
+            .Where(lead => lead.TenantId == tenantId
+                && lead.Status == LeadStatus.Deferred
+                && !storage.ProcessTasks.Any(task => task.LeadId == lead.Id
+                    && task.ProcessStep.Key == "contact-research"))
+            .ToListAsync(cancellationToken);
+
+        foreach (PlatformEntities.Lead lead in leads)
+        {
+            lead.Status = LeadStatus.Imported;
+            lead.LastUpdatedBy = CurrentUserId;
+            lead.LastUpdated = DateTimeOffset.UtcNow;
+            await EnsureLeadCoverageAsync(storage, lead, true, cancellationToken);
+        }
+
+        if (leads.Count > 0)
+        {
+            await storage.SaveAsync(cancellationToken);
+            loggingBroker.LogInformation(
+                "Requeued {LeadCount} deferred lead(s) that had never received public-web contact research.",
+                leads.Count);
         }
     }
 
@@ -1791,6 +1824,75 @@ public sealed class WorkflowAutomationService(
             task.DueOn);
 
         return task;
+    }
+
+    async ValueTask EnsureLeadContactResearchStepAsync(
+        IWorkflowBroker storage,
+        string tenantId,
+        CancellationToken cancellationToken)
+    {
+        List<PlatformEntities.ProcessDefinition> definitions = await storage.ProcessDefinitions
+            .Where(definition => definition.TenantId == tenantId
+                && definition.IsActive
+                && definition.ScopeType == ProcessScopeType.Lead)
+            .Include(definition => definition.Steps)
+                .ThenInclude(step => step.OutgoingTransitions)
+            .ToListAsync(cancellationToken);
+
+        foreach (PlatformEntities.ProcessDefinition definition in definitions)
+        {
+            PlatformEntities.ProcessStep activity = definition.Steps.FirstOrDefault(step => step.Key == "company-activity" && step.IsActive);
+            PlatformEntities.ProcessStep verify = definition.Steps.FirstOrDefault(step => step.Key == "verify-company" && step.IsActive);
+            if (activity is null || verify is null)
+                continue;
+
+            PlatformEntities.ProcessStep contactResearch = definition.Steps
+                .FirstOrDefault(step => step.Key == "contact-research" && step.IsActive);
+            if (contactResearch is null)
+            {
+                contactResearch = NewStep(definition, "contact-research", "Find a Relevant Contact Route", 25, false,
+                    ProcessActionType.Research, null, null, null, 0, 0,
+                    "Find a relevant contact route for {{Lead.RawCompanyName}}",
+                    "Research the public web, beginning with the company's own website and then relevant reputable business sources. Find a current contact route appropriate for business opportunity outreach: preferably a named person in a commercially relevant role, otherwise a role-based business address or switchboard. Do not use a Companies House officer merely because they are listed by the registrar. Verify the company identity before using a source. Record the source URL for every contact detail. Update the lead research record with the contact name, role, email address and/or phone number, website, and source evidence. Never invent or derive an email pattern. If no contact can be verified, record exactly which sources were checked and complete the task with no contact found.",
+                    null, null, null,
+                    "Contact found: yes or no.\nContact name: verified name or none.\nContact role: verified role or role-based route.\nContact point: verified email and/or phone, or none.\nSource URLs: one URL per asserted detail.\nSources checked: concise list.");
+                contactResearch.ProducedFacts = "lead.contact-name, lead.contact-role, lead.contact-point, lead.contact-source";
+                contactResearch.ViabilityImpact = "A verified, outreach-appropriate contact route is mandatory before opportunity conversion; failure to find one defers rather than fabricates a contact.";
+                contactResearch.Objective = "Find and evidence a real, publicly listed contact route suitable for commercial outreach.";
+                contactResearch.RequiredFacts = "company.identity-verification";
+                storage.Add(contactResearch);
+            }
+
+            List<PlatformEntities.ProcessTransition> activityTransitions = await storage.ProcessTransitions
+                .Where(transition => transition.ProcessStepId == activity.Id)
+                .ToListAsync(cancellationToken);
+            PlatformEntities.ProcessTransition priorRoute = activityTransitions
+                .OrderByDescending(transition => transition.IsDefaultOutcome)
+                .FirstOrDefault();
+            PlatformEntities.ProcessStep priorDestination = definition.Steps
+                .FirstOrDefault(step => step.Id == priorRoute?.NextProcessStepId) ?? verify;
+            bool contactIsLinked = activityTransitions.Any(transition => transition.NextProcessStepId == contactResearch.Id);
+            if (!contactIsLinked)
+            {
+                storage.RemoveRange(activityTransitions);
+                storage.Add(NewTransition(
+                    activity,
+                    contactResearch,
+                    priorRoute?.OutcomeKey ?? "activity-described",
+                    priorRoute?.OutcomeLabel ?? "Company activity described",
+                    true,
+                    ProcessTransitionEffect.None));
+                bool hasContactTransition = await storage.ProcessTransitions.AnyAsync(
+                    transition => transition.ProcessStepId == contactResearch.Id
+                        && transition.NextProcessStepId == priorDestination.Id,
+                    cancellationToken);
+                if (!hasContactTransition)
+                {
+                    storage.Add(NewTransition(contactResearch, priorDestination, "contact-researched", "Contact research completed", true,
+                        ProcessTransitionEffect.None));
+                }
+            }
+        }
     }
 
     async ValueTask EnsureLeadContactGateContractsAsync(

@@ -347,7 +347,7 @@
                                             data-node-row="@(useTerminalShelf ? maximumNodeRow + 1 : exitRow)"
                                             data-node-column="@exitColumn"
                                             data-lane-id="@process.Id"
-                                            data-inspector-template="step-template-@exit.Step.Id.ToString("N")">
+                                            data-inspector-template="transition-template-@exit.Transition.Id.ToString("N")">
                                         <span>@exit.Transition.OutcomeLabel</span>
                                         <strong>@exit.Transition.DestinationLabel</strong>
                                         <small data-live-key="exit-@exit.Transition.Id.ToString("N")">@exit.Transition.CurrentStateCount.ToString("N0") here</small>
@@ -491,6 +491,58 @@
                         </div>
                     </section>
                 </template>
+
+                @foreach (WorkflowTransitionViewModel transition in step.Transitions.Where(transition => transition.IsTerminal))
+                {
+                    long outcomePopulation = step.Transitions
+                        .Where(candidate => candidate.IsTerminal || candidate.GraphTargetId.StartsWith("portal-", StringComparison.Ordinal))
+                        .Sum(candidate => candidate.CurrentStateCount);
+                    decimal share = outcomePopulation == 0 ? 0 : (decimal)transition.CurrentStateCount / outcomePopulation;
+                    <template id="transition-template-@transition.Id.ToString("N")"
+                              data-heading="@transition.DestinationLabel"
+                              data-context="@process.Name · @step.Name · @transition.OutcomeLabel"
+                              data-lane="@process.LaneKey"
+                              data-live-template>
+                        <section class="workflow-inspector__step workflow-inspector__step--@process.LaneKey">
+                            <p class="workflow-inspector__objective">Companies currently held in this end state, and the evidence explaining why they are here.</p>
+                            <dl class="workflow-inspector__contract">
+                                <div><dt>Current companies</dt><dd>@transition.CurrentStateCount.ToString("N0")</dd></div>
+                                <div><dt>Share of this step's current outcomes</dt><dd>@share.ToString("P1")</dd></div>
+                                <div><dt>Historical route uses</dt><dd>@transition.HistoricalCompletedCount.ToString("N0") task completions</dd></div>
+                                <div><dt>Resulting state</dt><dd>@transition.ResultingState</dd></div>
+                            </dl>
+
+                            <h3>Why companies are here</h3>
+                            @if (transition.CurrentStateReasons.Count == 0)
+                            {
+                                <p>No more specific reason is recorded for this outcome yet.</p>
+                            }
+                            else
+                            {
+                                <table class="data-table">
+                                    <thead><tr><th>Reason</th><th>Companies</th><th>Share</th></tr></thead>
+                                    <tbody>
+                                    @foreach (WorkflowOutcomeReasonViewModel reason in transition.CurrentStateReasons)
+                                    {
+                                        decimal reasonShare = transition.CurrentStateCount == 0 ? 0 : (decimal)reason.Count / transition.CurrentStateCount;
+                                        <tr>
+                                            <td><strong>@reason.Label</strong><br /><small>@reason.Detail</small></td>
+                                            <td>@reason.Count.ToString("N0")</td>
+                                            <td>@reasonShare.ToString("P1")</td>
+                                        </tr>
+                                    }
+                                    </tbody>
+                                </table>
+                            }
+
+                            @if (!string.IsNullOrWhiteSpace(transition.CurrentStateHref))
+                            {
+                                <a class="primary-action" href="@transition.CurrentStateHref">View these companies</a>
+                            }
+                            <button type="button" class="secondary-action" data-inspector-template="step-template-@step.Id.ToString("N")">View the decision step</button>
+                        </section>
+                    </template>
+                }
             }
         }
     </div>
