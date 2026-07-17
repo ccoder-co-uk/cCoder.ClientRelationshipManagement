@@ -149,6 +149,8 @@ public sealed class ProcessController(
                 && item.LifecycleState == ProcessDefinitionLifecycleState.Active)
             .Include(item => item.Steps.Where(step => step.IsActive))
                 .ThenInclude(step => step.OutgoingTransitions)
+            .Include(item => item.Steps.Where(step => step.IsActive))
+                .ThenInclude(step => step.StepTasks)
             .OrderBy(item => item.ScopeType)
             .ThenByDescending(item => item.IsDefault)
             .ThenBy(item => item.Name)
