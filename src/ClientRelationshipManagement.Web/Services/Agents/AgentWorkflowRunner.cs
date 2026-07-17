@@ -10,6 +10,7 @@ using ClientRelationshipManagement.Web.Services.Execution;
 using ClientRelationshipManagement.Web.Services.Mail;
 using ClientRelationshipManagement.Web.Services.Processes;
 using ClientRelationshipManagement.Web.Utilities;
+using ClientRelationshipManagement.Web.Brokers.Storages;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
@@ -33,6 +34,7 @@ public sealed class AgentWorkflowRunner(
     IProcessCoordinationService processes,
     ISalesCoordinationService sales,
     IOperationsCoordinationService operations,
+    IWorkflowBroker workflowStorage,
     cCoder.ClientRelationshipManagement.Services.Entities.IAgentMessageOrchestrationService messages,
     IOptions<AgentWorkflowOptions> options,
     ILoggingBroker<AgentWorkflowRunner> loggingBroker)
@@ -244,12 +246,85 @@ public sealed class AgentWorkflowRunner(
                 nextTask.StepKey,
                 executionCancellation.Token);
 
+            await TrackInferenceAttemptAsync(nextTask.Id, lastRunId, cancellationToken);
+
             await ReleaseClaimAsync(nextTask, cancellationToken);
 
             previousTaskId = nextTask.Id;
         }
 
         return lastRunId;
+    }
+
+    async ValueTask TrackInferenceAttemptAsync(
+        Guid processTaskId,
+        Guid? agentRunId,
+        CancellationToken cancellationToken)
+    {
+        ProcessTask task = await workflowStorage.ProcessTasks
+            .Include(item => item.Email)
+            .Include(item => item.ProcessStep).ThenInclude(item => item.ProcessDefinition)
+            .FirstOrDefaultAsync(item => item.Id == processTaskId, cancellationToken);
+        if (task is null)
+            return;
+        ProcessStepTask inference = await workflowStorage.ProcessStepTasks
+            .Where(item => item.ProcessStepId == task.ProcessStepId
+                && item.IsActive && item.Type == ProcessStepTaskType.Inference)
+            .OrderBy(item => item.Sequence)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (inference is null)
+            return;
+        ProcessStepTaskRun run = await workflowStorage.ProcessStepTaskRuns
+            .FirstOrDefaultAsync(item => item.ProcessTaskId == task.Id
+                && item.ProcessStepTaskId == inference.Id, cancellationToken);
+        if (run is null)
+            return;
+
+        IReadOnlyList<string> errors = task.ProcessStep.ActionType == ProcessActionType.Email
+            ? RecipientEmailContentValidator.Validate(
+                task.Email?.ToAddresses,
+                task.Email?.Subject ?? task.RenderedEmailSubject,
+                task.Email?.BodyText ?? task.Email?.BodyHtml ?? task.RenderedEmailBody)
+            : [];
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        int attemptNumber = run.AttemptCount + 1;
+        bool complete = errors.Count == 0;
+        bool exhausted = !complete && attemptNumber >= Math.Max(1, inference.MaxAttempts);
+        run.AttemptCount = attemptNumber;
+        run.StartedOn ??= now;
+        run.State = complete ? ProcessStepTaskRunState.Completed
+            : exhausted ? ProcessStepTaskRunState.Blocked : ProcessStepTaskRunState.Pending;
+        run.CompletedOn = complete ? now : null;
+        run.ValidationErrors = errors.Count == 0 ? null : string.Join("\n", errors);
+        run.LastUpdated = now;
+        run.LastUpdatedBy = options.Value.ExecutionUserId ?? "system";
+        workflowStorage.Add(new ProcessStepTaskAttempt
+        {
+            Id = Guid.NewGuid(), ProcessStepTaskRunId = run.Id, AttemptNumber = attemptNumber,
+            State = run.State,
+            InputContextJson = run.ContextJson,
+            OutputContextJson = JsonSerializer.Serialize(new { agentRunId, task.EmailId, task.RenderedEmailSubject, task.RenderedEmailBody }),
+            ValidationErrors = run.ValidationErrors,
+            CreatedBy = run.LastUpdatedBy, LastUpdatedBy = run.LastUpdatedBy, CreatedOn = now, LastUpdated = now
+        });
+        await workflowStorage.SaveAsync(cancellationToken);
+
+        if (!exhausted)
+            return;
+        string errorSummary = string.Join(" ", errors);
+        await agentMessageService.UpsertAsync(new AgentMessage
+        {
+            Id = Guid.NewGuid(), TenantId = task.ProcessStep.ProcessDefinition.TenantId,
+            LeadId = task.LeadId, TenantCompanyRelationshipId = task.TenantCompanyRelationshipId,
+            OpportunityId = task.OpportunityId, ClientAccountId = task.ClientAccountId,
+            ProcessTaskId = task.Id, ProcessStepId = task.ProcessStepId,
+            ProcessDefinitionId = task.ProcessStep.ProcessDefinitionId, EmailId = task.EmailId,
+            Kind = AgentMessageKind.Exception, State = AgentMessageState.Pending,
+            CorrelationKey = $"step-bottleneck:{task.ProcessStepId}:{inference.Key}",
+            Title = $"Repeated inference failure in {task.ProcessStep.Name}",
+            Body = $"Task '{inference.Name}' exhausted {attemptNumber} attempts. {errorSummary}",
+            AgentName = "Approval Agent", CreatedBy = run.LastUpdatedBy, LastUpdatedBy = run.LastUpdatedBy
+        }, cancellationToken);
     }
 
     public ValueTask<Guid?> RunProcessOptimiserAsync(CancellationToken cancellationToken = default) =>

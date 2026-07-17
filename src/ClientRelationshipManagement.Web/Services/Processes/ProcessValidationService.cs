@@ -29,6 +29,8 @@ public sealed class ProcessValidationService(IProcessCoordinationService process
             .Where(definition => tenantIds.Contains(definition.TenantId) && definition.IsActive)
             .Include(definition => definition.Steps)
                 .ThenInclude(step => step.OutgoingTransitions)
+            .Include(definition => definition.Steps)
+                .ThenInclude(step => step.StepTasks)
             .OrderBy(definition => definition.TenantId)
             .ThenBy(definition => definition.ScopeType)
             .ThenByDescending(definition => definition.VersionNumber)
@@ -67,6 +69,8 @@ public sealed class ProcessValidationService(IProcessCoordinationService process
             .Where(item => item.Id == processDefinitionId)
             .Include(item => item.Steps)
                 .ThenInclude(step => step.OutgoingTransitions)
+            .Include(item => item.Steps)
+                .ThenInclude(step => step.StepTasks)
             .FirstOrDefaultAsync(cancellationToken);
         if (definition is null)
         {
@@ -128,6 +132,7 @@ public sealed class ProcessValidationService(IProcessCoordinationService process
 
         foreach (ProcessStep step in steps)
         {
+            ValidateStepTasks(definition, step, issues);
             if (string.IsNullOrWhiteSpace(step.Objective))
                 AddIssue(issues, ProcessValidationSeverity.Warning, definition, step, "missing-objective", "The step does not declare what it is trying to achieve.");
             if (string.IsNullOrWhiteSpace(step.ProducedFacts))
@@ -177,6 +182,39 @@ public sealed class ProcessValidationService(IProcessCoordinationService process
                 AddIssue(issues, ProcessValidationSeverity.Error, definition, step, "missing-upstream-facts", $"Required information is not produced upstream: {string.Join(", ", missing)}.");
             foreach (string fact in SplitFacts(step.ProducedFacts))
                 facts.Add(fact);
+        }
+    }
+
+    static void ValidateStepTasks(
+        ProcessDefinition definition,
+        ProcessStep step,
+        List<ProcessValidationIssue> issues)
+    {
+        List<ProcessStepTask> tasks = step.StepTasks.Where(item => item.IsActive).OrderBy(item => item.Sequence).ToList();
+        if (tasks.Count == 0)
+            return;
+        HashSet<string> keys = [.. tasks.Select(item => item.Key)];
+        if (keys.Count != tasks.Count)
+            AddIssue(issues, ProcessValidationSeverity.Error, definition, step, "duplicate-task-key", "The step contains duplicate task keys.");
+        if (tasks.GroupBy(item => item.Sequence).Any(group => group.Count() > 1))
+            AddIssue(issues, ProcessValidationSeverity.Warning, definition, step, "duplicate-task-sequence", "Two or more tasks share the same sequence.");
+        foreach (ProcessStepTask task in tasks)
+        {
+            if (task.MaxAttempts < 1)
+                AddIssue(issues, ProcessValidationSeverity.Error, definition, step, "invalid-task-attempts", $"Task '{task.Name}' must permit at least one attempt.");
+            if (task.Type != ProcessStepTaskType.Flow && string.IsNullOrWhiteSpace(task.HandlerKey))
+                AddIssue(issues, ProcessValidationSeverity.Error, definition, step, "missing-task-handler", $"Task '{task.Name}' has no registered handler.");
+            if (!string.IsNullOrWhiteSpace(task.NextTaskKey) && !keys.Contains(task.NextTaskKey))
+                AddIssue(issues, ProcessValidationSeverity.Error, definition, step, "invalid-next-task", $"Task '{task.Name}' routes to missing task '{task.NextTaskKey}'.");
+            if (!string.IsNullOrWhiteSpace(task.FailureTaskKey) && !keys.Contains(task.FailureTaskKey))
+                AddIssue(issues, ProcessValidationSeverity.Error, definition, step, "invalid-failure-task", $"Task '{task.Name}' routes failures to missing task '{task.FailureTaskKey}'.");
+        }
+        if (step.ActionType == ProcessActionType.Email
+            && (!tasks.Any(item => item.Type == ProcessStepTaskType.Validation)
+                || !tasks.Any(item => item.HandlerKey == "CRM.CreateEmailDraft")))
+        {
+            AddIssue(issues, ProcessValidationSeverity.Error, definition, step, "unsafe-email-tasks",
+                "An email step must validate recipient content before invoking CRM.CreateEmailDraft.");
         }
     }
 

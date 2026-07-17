@@ -49,7 +49,7 @@
             {
                 <a role="listitem" class="proposal-workflow__step is-@step.ChangeState"
                    href="@(step.ChangeCount > 0 ? $"#change-{step.Key.ToLowerInvariant()}" : "#")">
-                    <span>@step.Sequence</span><strong>@step.Name</strong><small>@step.ActionType</small>
+                    <span>@step.Sequence</span><strong>@step.Name</strong><small>@step.ActionType · @(step.TaskCount == 0 ? "implicit inference" : $"{step.TaskCount} tasks")</small>
                     @if (step.ChangeCount > 0) { <b>@step.ChangeCount change@(step.ChangeCount == 1 ? "" : "s")</b> }
                 </a>
             }

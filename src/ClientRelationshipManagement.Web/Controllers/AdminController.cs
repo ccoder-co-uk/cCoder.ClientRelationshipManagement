@@ -213,10 +213,12 @@ public sealed class AdminController(
         if (RedirectIfUnauthenticated() is IActionResult redirect) return redirect;
         ProcessDefinition proposal = await operationsService.RetrieveAllProcessDefinitions().AsNoTracking()
             .Include(item => item.Steps).ThenInclude(step => step.OutgoingTransitions)
+            .Include(item => item.Steps).ThenInclude(step => step.StepTasks)
             .FirstOrDefaultAsync(item => item.Id == id && item.LifecycleState == ProcessDefinitionLifecycleState.Draft, cancellationToken);
         if (proposal?.SupersedesProcessDefinitionId is null) return NotFound();
         ProcessDefinition current = await operationsService.RetrieveAllProcessDefinitions().AsNoTracking()
             .Include(item => item.Steps).ThenInclude(step => step.OutgoingTransitions)
+            .Include(item => item.Steps).ThenInclude(step => step.StepTasks)
             .FirstOrDefaultAsync(item => item.Id == proposal.SupersedesProcessDefinitionId.Value, cancellationToken);
         return current is null ? NotFound() : View(ProcessProposalComparisonService.Build(current, proposal));
     }

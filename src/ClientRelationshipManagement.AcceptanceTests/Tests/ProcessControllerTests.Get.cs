@@ -2,6 +2,7 @@ using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using ClientRelationshipManagement.AcceptanceTests.Infrastructure;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 
 namespace ClientRelationshipManagement.AcceptanceTests.Tests;
 
@@ -14,7 +15,8 @@ public sealed partial class ProcessControllerTests
 
         ProcessDefinition definition = await QueryInAdminContextAsync(db =>
             db.ProcessDefinitions
-                .Where(item => item.TenantId == AcceptanceSettings.TenantId)
+                .Where(item => item.TenantId == AcceptanceSettings.TenantId
+                    && item.ScopeType == ProcessScopeType.Opportunity)
                 .OrderByDescending(item => item.IsDefault)
                 .ThenBy(item => item.Name)
                 .FirstAsync());
@@ -28,6 +30,9 @@ public sealed partial class ProcessControllerTests
         editResponse.Should().Contain("Process Details");
         editResponse.Should().Contain("Step List");
         editResponse.Should().Contain("Supported Tokens");
+        editResponse.Should().Contain("4 tasks");
+        editResponse.Should().Contain("Validate complete sendable email");
+        editResponse.Should().Contain("CRM.ValidateRecipientEmail");
     }
 
     [CRMAcceptanceFact]

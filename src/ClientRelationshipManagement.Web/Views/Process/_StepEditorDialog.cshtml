@@ -104,6 +104,32 @@
 @if (Model.Id.HasValue)
 {
     <div class="workspace-card__subsection">
+        <h3 class="workspace-card__title">Execution tasks</h3>
+        @if (Model.Tasks.Count == 0)
+        {
+            <p>This step has no explicit task sequence and is executed as one implicit inference task.</p>
+        }
+        else
+        {
+            <div class="table-shell">
+                <table class="crm-table">
+                    <thead><tr><th>#</th><th>Task</th><th>Type</th><th>Handler</th><th>Attempts</th><th>Routing</th></tr></thead>
+                    <tbody>
+                    @foreach (ProcessStepTaskViewModel task in Model.Tasks)
+                    {
+                        <tr>
+                            <td>@task.Sequence</td><td><strong>@task.Name</strong><br /><small>@task.Key</small></td>
+                            <td>@task.Type</td><td>@task.HandlerKey</td><td>@task.MaxAttempts</td>
+                            <td>Next: @(string.IsNullOrWhiteSpace(task.NextTaskKey) ? "complete" : task.NextTaskKey)<br />Failure: @(string.IsNullOrWhiteSpace(task.FailureTaskKey) ? "block" : task.FailureTaskKey)</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+
+    <div class="workspace-card__subsection">
         <h3 class="workspace-card__title">Transitions</h3>
         <div class="table-shell">
             <table class="crm-table">

@@ -1130,6 +1130,7 @@ public sealed class ProcessController(
 
         List<PlatformEntities.ProcessStep> steps = await processWorkspace.RetrieveSteps()
             .AsNoTracking()
+            .Include(item => item.StepTasks)
             .Where(item => item.ProcessDefinitionId == definition.Id)
             .OrderBy(item => item.Sequence)
             .ThenBy(item => item.Name)
@@ -1189,6 +1190,13 @@ public sealed class ProcessController(
                     RelationshipStatusOptions = BuildRelationshipStatusOptions(step.RelationshipStatusOnActivate),
                     SalesStageOptions = BuildSalesStageOptions(step.SalesStageOnActivate),
                     ClientAccountStatusOptions = BuildClientAccountStatusOptions(step.ClientAccountStatusOnActivate),
+                    Tasks = [.. step.StepTasks.Where(item => item.IsActive).OrderBy(item => item.Sequence).Select(item => new ProcessStepTaskViewModel
+                    {
+                        Key = item.Key, Name = item.Name, Sequence = item.Sequence, Type = DisplayText.Humanize(item.Type),
+                        HandlerKey = item.HandlerKey ?? string.Empty, RequiredContextKeys = item.RequiredContextKeys ?? string.Empty,
+                        ProducedContextKeys = item.ProducedContextKeys ?? string.Empty, MaxAttempts = item.MaxAttempts,
+                        NextTaskKey = item.NextTaskKey ?? string.Empty, FailureTaskKey = item.FailureTaskKey ?? string.Empty
+                    })],
                     Transitions =
                     [
                         .. transitions
