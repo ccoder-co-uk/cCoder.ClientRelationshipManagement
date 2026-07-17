@@ -91,5 +91,7 @@ public sealed partial class ProcessControllerTests
         html.Should().Contain("transition-template-");
         html.Should().Contain("Current companies");
         html.Should().Contain("Why companies are here");
+        html.Should().Contain("data-nodes-per-stroke=\"5\"");
+        html.Should().Contain("data-terminal-column-reserved=\"true\"");
     }
 }
