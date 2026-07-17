@@ -1850,7 +1850,7 @@ public sealed class WorkflowAutomationService(
                 .FirstOrDefault(step => step.Key == "contact-research" && step.IsActive);
             if (contactResearch is null)
             {
-                contactResearch = NewStep(definition, "contact-research", "Find a Relevant Contact Route", 25, false,
+                contactResearch = NewStep(definition, "contact-research", "Find a Relevant Contact Route", 22, false,
                     ProcessActionType.Research, null, null, null, 0, 0,
                     "Find a relevant contact route for {{Lead.RawCompanyName}}",
                     "Research the public web, beginning with the company's own website and then relevant reputable business sources. Find a current contact route appropriate for business opportunity outreach: preferably a named person in a commercially relevant role, otherwise a role-based business address or switchboard. Do not use a Companies House officer merely because they are listed by the registrar. Verify the company identity before using a source. Record the source URL for every contact detail. Update the lead research record with the contact name, role, email address and/or phone number, website, and source evidence. Never invent or derive an email pattern. If no contact can be verified, record exactly which sources were checked and complete the task with no contact found.",
@@ -1862,6 +1862,13 @@ public sealed class WorkflowAutomationService(
                 contactResearch.RequiredFacts = "company.identity-verification";
                 storage.Add(contactResearch);
             }
+
+            // Sequence is also the diagram's stable execution order. Keep this step
+            // between activity research (20) and company scale (25), including for
+            // definitions created before this ordering rule was introduced.
+            contactResearch.Sequence = 22;
+            contactResearch.LastUpdatedBy = CurrentUserId;
+            contactResearch.LastUpdated = DateTimeOffset.UtcNow;
 
             List<PlatformEntities.ProcessTransition> activityTransitions = await storage.ProcessTransitions
                 .Where(transition => transition.ProcessStepId == activity.Id)
