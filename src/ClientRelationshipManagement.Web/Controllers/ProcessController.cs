@@ -45,6 +45,8 @@ public sealed class ProcessController(
             .Where(item => tenantIds.Contains(item.TenantId) && item.IsActive)
             .Include(item => item.Steps.Where(step => step.IsActive))
                 .ThenInclude(step => step.OutgoingTransitions)
+            .Include(item => item.Steps.Where(step => step.IsActive))
+                .ThenInclude(step => step.StepTasks)
             .OrderBy(item => item.ScopeType)
             .ThenBy(item => item.Name)
             .ToListAsync(cancellationToken);
@@ -461,6 +463,17 @@ public sealed class ProcessController(
                                 TaskTitleTemplate = step.TaskTitleTemplate ?? string.Empty,
                                 TaskInstructionsTemplate = step.TaskInstructionsTemplate ?? string.Empty,
                                 QuestionSetTemplate = step.QuestionSetTemplate ?? string.Empty,
+                                Tasks = step.StepTasks.Where(task => task.IsActive)
+                                    .OrderBy(task => task.Sequence)
+                                    .Select(task => new WorkflowStepTaskViewModel
+                                    {
+                                        Key = task.Key,
+                                        Name = task.Name,
+                                        Sequence = task.Sequence,
+                                        Type = DisplayText.Humanize(task.Type),
+                                        HandlerKey = task.HandlerKey ?? string.Empty,
+                                        MaxAttempts = task.MaxAttempts
+                                    }).ToList(),
                                 DueAfterDays = step.DueAfterDays,
                                 DueAfterHours = step.DueAfterHours,
                                 StateOnActivate = DescribeState(

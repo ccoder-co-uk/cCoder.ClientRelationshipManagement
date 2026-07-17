@@ -270,6 +270,10 @@
                                         <span class="workflow-node__iteration" title="This step can repeat" aria-label="Repeating step">↻</span>
                                     }
                                     <span class="workflow-node__meta"><b>@step.Sequence</b> @step.ActionType</span>
+                                    @if (step.Tasks.Count > 0)
+                                    {
+                                        <span class="workflow-node__tasks" title="@string.Join(" → ", step.Tasks.Select(task => task.Name))">@step.Tasks.Count child task@(step.Tasks.Count == 1 ? "" : "s")</span>
+                                    }
                                     <strong>@step.Name</strong>
                                     <small>@step.Objective</small>
                                     <span class="workflow-node__footer" data-live-key="step-@step.Id.ToString("N")">
@@ -430,6 +434,24 @@
                             <div><dt>State on entry</dt><dd>@step.StateOnActivate</dd></div>
                             <div><dt>Due</dt><dd>@(step.DueAfterDays == 0 && step.DueAfterHours == 0 ? "Immediately" : $"After {step.DueAfterDays} day(s), {step.DueAfterHours} hour(s)")</dd></div>
                         </dl>
+
+                        <h3>Execution tasks</h3>
+                        @if (step.Tasks.Count == 0)
+                        {
+                            <p class="workflow-inspector__implicit-task">Implicit inference — this step has no explicit child-task sequence.</p>
+                        }
+                        else
+                        {
+                            <ol class="workflow-inspector__tasks">
+                                @foreach (WorkflowStepTaskViewModel task in step.Tasks)
+                                {
+                                    <li>
+                                        <span>@task.Sequence</span>
+                                        <div><strong>@task.Name</strong><small>@task.Type · <code>@task.HandlerKey</code> · max @task.MaxAttempts attempt@(task.MaxAttempts == 1 ? "" : "s")</small></div>
+                                    </li>
+                                }
+                            </ol>
+                        }
 
                         @if (!string.IsNullOrWhiteSpace(step.QuestionSetTemplate))
                         {

@@ -82,5 +82,10 @@ public sealed partial class ProcessControllerTests
         html.Should().Contain("parallel-return");
         html.Should().Contain("workflow-node__iteration");
         html.Should().Contain("Repeating step");
+        html.Should().Contain("child tasks");
+        html.Should().Contain("Execution tasks");
+        html.Should().Contain("Resolve and verify recipient");
+        html.Should().Contain("CRM.ValidateRecipientEmail");
+        html.Should().Contain("Implicit inference");
     }
 }

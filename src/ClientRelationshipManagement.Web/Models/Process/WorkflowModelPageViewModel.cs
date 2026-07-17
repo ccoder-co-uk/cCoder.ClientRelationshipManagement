@@ -64,8 +64,19 @@ public sealed class WorkflowStepViewModel
     public int DueAfterHours { get; init; }
     public string StateOnActivate { get; init; } = string.Empty;
     public int CurrentInstances { get; init; }
+    public IReadOnlyList<WorkflowStepTaskViewModel> Tasks { get; init; } = [];
     public WorkflowStepHealthViewModel Health { get; init; } = new();
     public IReadOnlyList<WorkflowTransitionViewModel> Transitions { get; init; } = [];
+}
+
+public sealed class WorkflowStepTaskViewModel
+{
+    public string Key { get; init; } = string.Empty;
+    public string Name { get; init; } = string.Empty;
+    public int Sequence { get; init; }
+    public string Type { get; init; } = string.Empty;
+    public string HandlerKey { get; init; } = string.Empty;
+    public int MaxAttempts { get; init; }
 }
 
 public sealed class WorkflowTransitionViewModel
