@@ -19,7 +19,7 @@ public sealed class ProcessDraftService(IProcessCoordinationService processes) :
         CancellationToken cancellationToken = default)
     {
         ProcessDefinition source = await processes.RetrieveDefinitions()
-            .Include(item => item.Steps)
+            .Include(item => item.Steps).ThenInclude(step => step.StepTasks)
             .FirstOrDefaultAsync(item => item.Id == sourceProcessDefinitionId, cancellationToken);
 
         if (source is null)

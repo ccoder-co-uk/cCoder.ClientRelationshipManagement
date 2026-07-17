@@ -228,6 +228,7 @@ public sealed class AdminController(
     public async Task<IActionResult> ApproveProcessProposal(Guid id, string approvalNotes, CancellationToken cancellationToken)
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect) return redirect;
+        await workflowAutomationService.EnsureDefinitionStepTasksAsync(id, cancellationToken);
         ProcessValidationResult validation = await processValidationService.ValidateDefinitionAsync(id, cancellationToken);
         if (!validation.IsValid)
         {

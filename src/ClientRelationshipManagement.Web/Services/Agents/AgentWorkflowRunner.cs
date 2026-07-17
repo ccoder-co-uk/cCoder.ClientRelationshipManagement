@@ -279,6 +279,9 @@ public sealed class AgentWorkflowRunner(
                 && item.ProcessStepTaskId == inference.Id, cancellationToken);
         if (run is null)
             return;
+        if (run.State == ProcessStepTaskRunState.Blocked
+            || run.AttemptCount >= Math.Max(1, inference.MaxAttempts))
+            return;
 
         IReadOnlyList<string> errors = task.ProcessStep.ActionType == ProcessActionType.Email
             ? RecipientEmailContentValidator.Validate(
@@ -287,7 +290,7 @@ public sealed class AgentWorkflowRunner(
                 task.Email?.BodyText ?? task.Email?.BodyHtml ?? task.RenderedEmailBody)
             : [];
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        int attemptNumber = run.AttemptCount + 1;
+        int attemptNumber = Math.Min(run.AttemptCount + 1, Math.Max(1, inference.MaxAttempts));
         bool complete = errors.Count == 0;
         bool exhausted = !complete && attemptNumber >= Math.Max(1, inference.MaxAttempts);
         run.AttemptCount = attemptNumber;

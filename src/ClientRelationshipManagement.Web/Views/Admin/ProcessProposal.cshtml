@@ -2,6 +2,10 @@
 @{ ViewData["Title"] = $"Review {Model.Name}"; }
 
 <main class="page-shell proposal-review-page">
+    @if (TempData["AdminNotice"] is string notice)
+    {
+        <div class="status-banner" role="alert">@notice</div>
+    }
     <section class="page-hero proposal-review-hero">
         <div>
             <span class="proposal-eyebrow">Process proposal · v@(Model.CurrentVersion) → v@(Model.ProposedVersion)</span>

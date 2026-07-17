@@ -42,6 +42,7 @@ public sealed class ProcessValidationService(IProcessCoordinationService process
             HashSet<string> availableFacts = new(InitialCompanyFacts, StringComparer.OrdinalIgnoreCase);
             foreach (ProcessDefinition definition in tenantProcesses.OrderBy(item => item.ScopeType))
             {
+                AddScopeFacts(definition.ScopeType, availableFacts);
                 ValidateDefinition(definition, availableFacts, issues);
                 foreach (string fact in definition.Steps.Where(step => step.IsActive).SelectMany(step => SplitFacts(step.ProducedFacts)))
                     availableFacts.Add(fact);
@@ -99,6 +100,7 @@ public sealed class ProcessValidationService(IProcessCoordinationService process
             .OrderBy(item => item.ScopeType)
             .ToListAsync(cancellationToken);
         HashSet<string> availableFacts = new(InitialCompanyFacts, StringComparer.OrdinalIgnoreCase);
+        AddScopeFacts(definition.ScopeType, availableFacts);
         foreach (string fact in priorLanes.SelectMany(item => item.Steps).SelectMany(step => SplitFacts(step.ProducedFacts)))
             availableFacts.Add(fact);
 
@@ -183,6 +185,17 @@ public sealed class ProcessValidationService(IProcessCoordinationService process
             foreach (string fact in SplitFacts(step.ProducedFacts))
                 facts.Add(fact);
         }
+    }
+
+    static void AddScopeFacts(ProcessScopeType scopeType, HashSet<string> facts)
+    {
+        if (scopeType < ProcessScopeType.Lead)
+            return;
+
+        // A lead process starts with a persisted lead and its company status. These are
+        // input context, not facts that an earlier workflow step needs to manufacture.
+        facts.Add("lead.identity");
+        facts.Add("lead.company-status");
     }
 
     static void ValidateStepTasks(

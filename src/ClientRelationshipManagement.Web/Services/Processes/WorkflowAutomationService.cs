@@ -86,6 +86,14 @@ public sealed class WorkflowAutomationService(
         await transaction.CommitAsync(cancellationToken);
     }
 
+    public async ValueTask EnsureDefinitionStepTasksAsync(
+        Guid processDefinitionId,
+        CancellationToken cancellationToken = default)
+    {
+        await EnsureStandardStepTasksAsync(storage, [], cancellationToken, processDefinitionId);
+        await storage.SaveAsync(cancellationToken);
+    }
+
     async ValueTask BackfillEmailStepTaskRunsAsync(
         IWorkflowBroker storage,
         CancellationToken cancellationToken)
@@ -115,12 +123,15 @@ public sealed class WorkflowAutomationService(
     async ValueTask EnsureStandardStepTasksAsync(
         IWorkflowBroker storage,
         IEnumerable<string> tenantIds,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? processDefinitionId = null)
     {
         string[] tenants = [.. tenantIds.Where(item => !string.IsNullOrWhiteSpace(item)).Distinct()];
         List<PlatformEntities.ProcessStep> emailSteps = await storage.ProcessSteps
-            .Where(step => tenants.Contains(step.ProcessDefinition.TenantId)
-                && step.ProcessDefinition.IsActive
+            .Where(step => ((!processDefinitionId.HasValue
+                    && tenants.Contains(step.ProcessDefinition.TenantId)
+                    && step.ProcessDefinition.IsActive)
+                || (processDefinitionId.HasValue && step.ProcessDefinitionId == processDefinitionId.Value))
                 && step.IsActive
                 && step.ActionType == ProcessActionType.Email
                 && !step.StepTasks.Any())
@@ -154,8 +165,11 @@ public sealed class WorkflowAutomationService(
             "commercial-fit", "qualify-lead", "confirm-route", "review-response", "opportunity-summary"
         ];
         List<PlatformEntities.ProcessStep> inferredSteps = await storage.ProcessSteps
-            .Where(step => tenants.Contains(step.ProcessDefinition.TenantId)
-                && step.ProcessDefinition.IsActive && step.IsActive
+            .Where(step => ((!processDefinitionId.HasValue
+                    && tenants.Contains(step.ProcessDefinition.TenantId)
+                    && step.ProcessDefinition.IsActive)
+                || (processDefinitionId.HasValue && step.ProcessDefinitionId == processDefinitionId.Value))
+                && step.IsActive
                 && multiActionKeys.Contains(step.Key)
                 && !step.StepTasks.Any())
             .ToListAsync(cancellationToken);

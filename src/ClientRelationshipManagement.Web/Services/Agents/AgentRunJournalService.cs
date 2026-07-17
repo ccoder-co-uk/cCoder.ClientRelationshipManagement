@@ -5,7 +5,9 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ClientRelationshipManagement.Web.Services.Agents;
 
-public sealed class AgentRunJournalService(IOperationsCoordinationService operations) : IAgentRunJournalService
+public sealed class AgentRunJournalService(
+    IOperationsCoordinationService operations,
+    IProcessCoordinationService processes) : IAgentRunJournalService
 {
     public async ValueTask<int> FailAbandonedAsync(
         AgentRunKind kind,
@@ -28,6 +30,20 @@ public sealed class AgentRunJournalService(IOperationsCoordinationService operat
             run.CompletedOn = now;
             run.LastUpdatedBy = "agent-run-recovery";
             run.LastUpdated = now;
+        }
+
+        Guid[] taskIds = [.. abandoned.Where(run => run.ProcessTaskId.HasValue)
+            .Select(run => run.ProcessTaskId!.Value).Distinct()];
+        if (taskIds.Length > 0)
+        {
+            await processes.RetrieveTasks()
+                .Where(task => taskIds.Contains(task.Id) && task.State == ProcessTaskState.Pending)
+                .ExecuteUpdateAsync(update => update
+                    .SetProperty(task => task.AgentClaimId, (Guid?)null)
+                    .SetProperty(task => task.AgentClaimedBy, (string)null)
+                    .SetProperty(task => task.AgentClaimedOn, (DateTimeOffset?)null)
+                    .SetProperty(task => task.AgentClaimExpiresOn, (DateTimeOffset?)null),
+                    cancellationToken);
         }
 
         await operations.SaveAsync(cancellationToken);
