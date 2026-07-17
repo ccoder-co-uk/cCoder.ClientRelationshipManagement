@@ -34,7 +34,7 @@ body {
 }
 
 .dashboard-shell {
-    width: min(1600px, calc(100% - 100px));
+    width: calc(100% - 100px);
     margin: 0 auto;
     padding: 40px 0 52px;
 }
@@ -61,7 +61,7 @@ body {
 }
 
 .product-header__inner {
-    width: min(1840px, calc(100% - 48px));
+    width: calc(100% - 100px);
     margin: 0 auto;
     display: flex;
     align-items: center;
@@ -585,7 +585,7 @@ body {
 
 .page-shell,
 .docs-shell {
-    width: min(1840px, calc(100% - 48px));
+    width: calc(100% - 100px);
     margin: 0 auto;
     padding: 34px 0 52px;
 }
