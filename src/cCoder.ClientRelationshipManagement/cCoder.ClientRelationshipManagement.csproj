@@ -29,7 +29,7 @@
     <PackageReference Include="Microsoft.AspNetCore.OData" Version="9.5.0" />
     <PackageReference Include="Swashbuckle.AspNetCore.SwaggerGen" Version="10.2.3" />
     <PackageReference Include="cCoder.Eventing" Version="2026.7.3.1811" />
-    <PackageReference Include="cCoder.Security.Data" Version="2026.7.7.1439" />
+    <PackageReference Include="cCoder.Security.Data" Version="2026.7.22.814" />
   </ItemGroup>
 
   <ItemGroup>
