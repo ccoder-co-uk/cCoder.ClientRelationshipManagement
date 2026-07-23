@@ -11,6 +11,7 @@ using ClientRelationshipManagement.Web.Utilities;
 using System.Data;
 using System.Data.Common;
 using System.Text.RegularExpressions;
+using System.Text.Json;
 using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using ClientRelationshipManagement.Web.Brokers.Storages;
 using PlatformEntities = cCoder.ClientRelationshipManagement.Platform.Models.Entities;
@@ -74,12 +75,153 @@ public sealed class WorkflowAutomationService(
         foreach (string tenantId in tenantIds.Where(tenantId => !string.IsNullOrWhiteSpace(tenantId)))
             await EnsureProcessContractsAsync(storage, tenantId, cancellationToken);
 
+        await EnsureStandardStepTasksAsync(storage, tenantIds, cancellationToken);
+        await storage.SaveAsync(cancellationToken);
+        await BackfillEmailStepTaskRunsAsync(storage, cancellationToken);
+
         await CancelOrphanedDraftsFromArchivedStepsAsync(storage, tenantIds, cancellationToken);
         await MoveActiveInstancesToLiveDefinitionsAsync(storage, tenantIds, cancellationToken);
         await ReclassifyLegacyScoringRejectionsAsync(storage, cancellationToken);
         await storage.SaveAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
+
+    public async ValueTask EnsureDefinitionStepTasksAsync(
+        Guid processDefinitionId,
+        CancellationToken cancellationToken = default)
+    {
+        await EnsureStandardStepTasksAsync(storage, [], cancellationToken, processDefinitionId);
+        await storage.SaveAsync(cancellationToken);
+    }
+
+    async ValueTask BackfillEmailStepTaskRunsAsync(
+        IWorkflowBroker storage,
+        CancellationToken cancellationToken)
+    {
+        List<PlatformEntities.ProcessTask> tasks = await storage.ProcessTasks
+            .Include(item => item.Email)
+            .Where(item => item.State == ProcessTaskState.Pending
+                && item.ProcessStep.ActionType == ProcessActionType.Email
+                && item.ProcessStep.StepTasks.Any()
+                && !item.StepTaskRuns.Any())
+            .ToListAsync(cancellationToken);
+        foreach (PlatformEntities.ProcessTask task in tasks)
+        {
+            string recipient = task.Email?.ToAddresses;
+            IReadOnlyList<string> errors = task.Email is null
+                ? ["No valid email draft has been produced for this step."]
+                : RecipientEmailContentValidator.Validate(
+                    recipient,
+                    task.Email.Subject,
+                    task.Email.BodyText ?? task.Email.BodyHtml);
+            await RecordEmailStepTaskRunsAsync(
+                storage, task, recipient, task.EmailId,
+                errors, DateTimeOffset.UtcNow, cancellationToken);
+        }
+    }
+
+    async ValueTask EnsureStandardStepTasksAsync(
+        IWorkflowBroker storage,
+        IEnumerable<string> tenantIds,
+        CancellationToken cancellationToken,
+        Guid? processDefinitionId = null)
+    {
+        string[] tenants = [.. tenantIds.Where(item => !string.IsNullOrWhiteSpace(item)).Distinct()];
+        List<PlatformEntities.ProcessStep> emailSteps = await storage.ProcessSteps
+            .Where(step => ((!processDefinitionId.HasValue
+                    && tenants.Contains(step.ProcessDefinition.TenantId)
+                    && step.ProcessDefinition.IsActive)
+                || (processDefinitionId.HasValue && step.ProcessDefinitionId == processDefinitionId.Value))
+                && step.IsActive
+                && step.ActionType == ProcessActionType.Email
+                && !step.StepTasks.Any())
+            .ToListAsync(cancellationToken);
+
+        foreach (PlatformEntities.ProcessStep step in emailSteps)
+        {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            PlatformEntities.ProcessStepTask resolve = NewStepTask(step, "resolve-recipient", "Resolve and verify recipient", 10,
+                ProcessStepTaskType.Operation, "CRM.ResolveEmailRecipient", null,
+                "relationship.id", "recipient.id,recipient.name,recipient.email", 1, now);
+            PlatformEntities.ProcessStepTask generate = NewStepTask(step, "generate-email", "Generate grounded email content", 20,
+                ProcessStepTaskType.Inference, "CRM.GenerateEmail", step.TaskInstructionsTemplate,
+                "company,relationship,recipient,email.purpose", "email.subject,email.body", 3, now);
+            PlatformEntities.ProcessStepTask validate = NewStepTask(step, "validate-email", "Validate complete sendable email", 30,
+                ProcessStepTaskType.Validation, "CRM.ValidateRecipientEmail", null,
+                "recipient.email,email.subject,email.body", "email.validation", 3, now);
+            PlatformEntities.ProcessStepTask create = NewStepTask(step, "create-draft", "Create approval draft", 40,
+                ProcessStepTaskType.Operation, "CRM.CreateEmailDraft", null,
+                "recipient.id,recipient.email,email.subject,email.body", "email.id", 1, now);
+            resolve.NextTaskKey = generate.Key;
+            generate.NextTaskKey = validate.Key;
+            validate.NextTaskKey = create.Key;
+            validate.FailureTaskKey = generate.Key;
+            storage.AddRange(resolve, generate, validate, create);
+        }
+
+        string[] multiActionKeys =
+        [
+            "lead-research", "company-activity", "company-scale", "verify-company",
+            "commercial-fit", "qualify-lead", "confirm-route", "review-response", "opportunity-summary"
+        ];
+        List<PlatformEntities.ProcessStep> inferredSteps = await storage.ProcessSteps
+            .Where(step => ((!processDefinitionId.HasValue
+                    && tenants.Contains(step.ProcessDefinition.TenantId)
+                    && step.ProcessDefinition.IsActive)
+                || (processDefinitionId.HasValue && step.ProcessDefinitionId == processDefinitionId.Value))
+                && step.IsActive
+                && multiActionKeys.Contains(step.Key)
+                && !step.StepTasks.Any())
+            .ToListAsync(cancellationToken);
+        foreach (PlatformEntities.ProcessStep step in inferredSteps)
+            AddInferredStepTasks(storage, step, DateTimeOffset.UtcNow);
+    }
+
+    void AddInferredStepTasks(IWorkflowBroker storage, PlatformEntities.ProcessStep step, DateTimeOffset now)
+    {
+        string gatherHandler = step.Key switch
+        {
+            "confirm-route" => "CRM.ResolvePreferredContact",
+            "review-response" => "CRM.CollectResponseEvidence",
+            "opportunity-summary" => "CRM.CollectOpportunityEvidence",
+            "qualify-lead" => "CRM.CollectQualificationFacts",
+            _ => "CRM.CollectCompanyEvidence"
+        };
+        PlatformEntities.ProcessStepTask gather = NewStepTask(step, "collect-evidence", "Collect required evidence", 10,
+            ProcessStepTaskType.Operation, gatherHandler, null,
+            step.RequiredFacts ?? "company", "evidence", 1, now);
+        PlatformEntities.ProcessStepTask infer = NewStepTask(step, "infer-outcome", "Infer the bounded step outcome", 20,
+            ProcessStepTaskType.Inference, "CRM.InferStepOutcome", step.TaskInstructionsTemplate,
+            "evidence", step.ProducedFacts ?? "outcome", 3, now);
+        PlatformEntities.ProcessStepTask validate = NewStepTask(step, "validate-outcome", "Validate evidence and outcome", 30,
+            ProcessStepTaskType.Validation, "CRM.ValidateStepOutcome", null,
+            "evidence,outcome", "validation", 3, now);
+        gather.NextTaskKey = infer.Key;
+        infer.NextTaskKey = validate.Key;
+        validate.FailureTaskKey = infer.Key;
+        storage.AddRange(gather, infer, validate);
+    }
+
+    PlatformEntities.ProcessStepTask NewStepTask(
+        PlatformEntities.ProcessStep step,
+        string key,
+        string name,
+        int sequence,
+        ProcessStepTaskType type,
+        string handlerKey,
+        string instructions,
+        string requiredContext,
+        string producedContext,
+        int maxAttempts,
+        DateTimeOffset now) => new()
+        {
+            Id = Guid.NewGuid(), ProcessStepId = step.Id, Key = key, Name = name, Sequence = sequence,
+            Type = type, HandlerKey = handlerKey, InstructionsTemplate = instructions,
+            RequiredContextKeys = requiredContext, ProducedContextKeys = producedContext,
+            MaxAttempts = maxAttempts, IsActive = true,
+            CreatedBy = step.CreatedBy, LastUpdatedBy = CurrentUserId,
+            CreatedOn = now, LastUpdated = now
+        };
 
     async ValueTask CancelOrphanedDraftsFromArchivedStepsAsync(
         IWorkflowBroker storage,
@@ -581,12 +723,15 @@ public sealed class WorkflowAutomationService(
         CancellationToken cancellationToken)
     {
         await EnsureRequiredEvidenceStepsAsync(storage, tenantId, cancellationToken);
+        await EnsureLeadContactResearchStepAsync(storage, tenantId, cancellationToken);
+        await EnsureLeadContactGateContractsAsync(storage, tenantId, cancellationToken);
         await storage.SaveAsync(cancellationToken);
 
         List<PlatformEntities.ProcessStep> steps = await storage.ProcessSteps
             .Where(step =>
                 step.ProcessDefinition.TenantId == tenantId
                 && step.ProcessDefinition.IsActive
+                && step.ProcessDefinition.VersionNumber <= 1
                 && step.IsActive)
             .Include(step => step.ProcessDefinition)
             .ToListAsync(cancellationToken);
@@ -604,6 +749,38 @@ public sealed class WorkflowAutomationService(
             step.LastUpdatedBy = CurrentUserId;
             step.LastUpdated = DateTimeOffset.UtcNow;
         }
+
+        await storage.SaveAsync(cancellationToken);
+        await ReevaluateDeferredLeadsMissingContactResearchAsync(storage, tenantId, cancellationToken);
+    }
+
+    async ValueTask ReevaluateDeferredLeadsMissingContactResearchAsync(
+        IWorkflowBroker storage,
+        string tenantId,
+        CancellationToken cancellationToken)
+    {
+        List<PlatformEntities.Lead> leads = await storage.Leads
+            .Where(lead => lead.TenantId == tenantId
+                && lead.Status == LeadStatus.Deferred
+                && !storage.ProcessTasks.Any(task => task.LeadId == lead.Id
+                    && task.ProcessStep.Key == "contact-research"))
+            .ToListAsync(cancellationToken);
+
+        foreach (PlatformEntities.Lead lead in leads)
+        {
+            lead.Status = LeadStatus.Imported;
+            lead.LastUpdatedBy = CurrentUserId;
+            lead.LastUpdated = DateTimeOffset.UtcNow;
+            await EnsureLeadCoverageAsync(storage, lead, true, cancellationToken);
+        }
+
+        if (leads.Count > 0)
+        {
+            await storage.SaveAsync(cancellationToken);
+            loggingBroker.LogInformation(
+                "Requeued {LeadCount} deferred lead(s) that had never received public-web contact research.",
+                leads.Count);
+        }
     }
 
     async ValueTask EnsureRequiredEvidenceStepsAsync(
@@ -612,7 +789,10 @@ public sealed class WorkflowAutomationService(
         CancellationToken cancellationToken)
     {
         List<PlatformEntities.ProcessDefinition> definitions = await storage.ProcessDefinitions
-            .Where(definition => definition.TenantId == tenantId && definition.IsActive)
+            .Where(definition =>
+                definition.TenantId == tenantId
+                && definition.IsActive
+                && definition.VersionNumber <= 1)
             .Include(definition => definition.Steps)
                 .ThenInclude(step => step.OutgoingTransitions)
             .ToListAsync(cancellationToken);
@@ -989,6 +1169,21 @@ public sealed class WorkflowAutomationService(
             .FirstOrDefaultAsync(
                 item => item.OpportunityId == opportunity.Id && item.State == ProcessInstanceState.Active,
                 cancellationToken);
+
+        if (!await HasUsableRelationshipContactAsync(
+                storage,
+                opportunity.TenantCompanyRelationshipId,
+                cancellationToken))
+        {
+            await CloseActiveInstanceAsync(storage, activeInstance, "Missing contact point", cancellationToken);
+            opportunity.Stage = SalesPipelineStage.Nurture;
+            opportunity.LastUpdatedBy = CurrentUserId;
+            opportunity.LastUpdated = DateTimeOffset.UtcNow;
+            loggingBroker.LogWarning(
+                "Opportunity {OpportunityId} cannot enter workflow because its relationship has no usable contact point.",
+                opportunity.Id);
+            return;
+        }
 
         if (opportunity.Stage is SalesPipelineStage.Won or SalesPipelineStage.Lost)
         {
@@ -1503,6 +1698,9 @@ public sealed class WorkflowAutomationService(
 
         storage.Add(task);
 
+        if (step.ActionType != ProcessActionType.Email)
+            await InitializeStepTaskRunsAsync(storage, task, cancellationToken);
+
         if (step.ActionType == ProcessActionType.Email && renderContext.Relationship is not null)
         {
             bool isAccountOwnerHandoff = step.EmailRecipientTarget == ProcessEmailRecipientTarget.AccountOwner;
@@ -1520,9 +1718,26 @@ public sealed class WorkflowAutomationService(
 
             if (string.IsNullOrWhiteSpace(recipientAddress))
             {
+                await RecordEmailStepTaskRunsAsync(storage, task, null, null,
+                    ["A verified recipient email address is required."], now, cancellationToken);
                 loggingBroker.LogWarning(
                     "Did not create email draft for task {ProcessTaskId} because no recipient email address is available.",
                     task.Id);
+                return task;
+            }
+
+            IReadOnlyList<string> validationErrors = RecipientEmailContentValidator.Validate(
+                recipientAddress,
+                task.RenderedEmailSubject ?? task.RenderedTitle,
+                task.RenderedEmailBody);
+            if (validationErrors.Count > 0)
+            {
+                await RecordEmailStepTaskRunsAsync(storage, task, recipientAddress, null,
+                    validationErrors, now, cancellationToken);
+                loggingBroker.LogWarning(
+                    "Did not create email draft for task {ProcessTaskId}: {ValidationErrors}",
+                    task.Id,
+                    string.Join(" ", validationErrors));
                 return task;
             }
 
@@ -1571,6 +1786,8 @@ public sealed class WorkflowAutomationService(
 
             storage.Add(email);
             task.EmailId = email.Id;
+            await RecordEmailStepTaskRunsAsync(storage, task, recipientAddress, email.Id,
+                [], now, cancellationToken);
 
             if (!string.IsNullOrWhiteSpace(email.ToAddresses))
             {
@@ -1607,6 +1824,195 @@ public sealed class WorkflowAutomationService(
             task.DueOn);
 
         return task;
+    }
+
+    async ValueTask EnsureLeadContactResearchStepAsync(
+        IWorkflowBroker storage,
+        string tenantId,
+        CancellationToken cancellationToken)
+    {
+        List<PlatformEntities.ProcessDefinition> definitions = await storage.ProcessDefinitions
+            .Where(definition => definition.TenantId == tenantId
+                && definition.IsActive
+                && definition.ScopeType == ProcessScopeType.Lead)
+            .Include(definition => definition.Steps)
+                .ThenInclude(step => step.OutgoingTransitions)
+            .ToListAsync(cancellationToken);
+
+        foreach (PlatformEntities.ProcessDefinition definition in definitions)
+        {
+            PlatformEntities.ProcessStep activity = definition.Steps.FirstOrDefault(step => step.Key == "company-activity" && step.IsActive);
+            PlatformEntities.ProcessStep verify = definition.Steps.FirstOrDefault(step => step.Key == "verify-company" && step.IsActive);
+            if (activity is null || verify is null)
+                continue;
+
+            PlatformEntities.ProcessStep contactResearch = definition.Steps
+                .FirstOrDefault(step => step.Key == "contact-research" && step.IsActive);
+            if (contactResearch is null)
+            {
+                contactResearch = NewStep(definition, "contact-research", "Find a Relevant Contact Route", 22, false,
+                    ProcessActionType.Research, null, null, null, 0, 0,
+                    "Find a relevant contact route for {{Lead.RawCompanyName}}",
+                    "Research the public web, beginning with the company's own website and then relevant reputable business sources. Find a current contact route appropriate for business opportunity outreach: preferably a named person in a commercially relevant role, otherwise a role-based business address or switchboard. Do not use a Companies House officer merely because they are listed by the registrar. Verify the company identity before using a source. Record the source URL for every contact detail. Update the lead research record with the contact name, role, email address and/or phone number, website, and source evidence. Never invent or derive an email pattern. If no contact can be verified, record exactly which sources were checked and complete the task with no contact found.",
+                    null, null, null,
+                    "Contact found: yes or no.\nContact name: verified name or none.\nContact role: verified role or role-based route.\nContact point: verified email and/or phone, or none.\nSource URLs: one URL per asserted detail.\nSources checked: concise list.");
+                contactResearch.ProducedFacts = "lead.contact-name, lead.contact-role, lead.contact-point, lead.contact-source";
+                contactResearch.ViabilityImpact = "A verified, outreach-appropriate contact route is mandatory before opportunity conversion; failure to find one defers rather than fabricates a contact.";
+                contactResearch.Objective = "Find and evidence a real, publicly listed contact route suitable for commercial outreach.";
+                contactResearch.RequiredFacts = "company.identity-verification";
+                storage.Add(contactResearch);
+            }
+
+            // Sequence is also the diagram's stable execution order. Keep this step
+            // between activity research (20) and company scale (25), including for
+            // definitions created before this ordering rule was introduced.
+            contactResearch.Sequence = 22;
+            contactResearch.LastUpdatedBy = CurrentUserId;
+            contactResearch.LastUpdated = DateTimeOffset.UtcNow;
+
+            List<PlatformEntities.ProcessTransition> activityTransitions = await storage.ProcessTransitions
+                .Where(transition => transition.ProcessStepId == activity.Id)
+                .ToListAsync(cancellationToken);
+            PlatformEntities.ProcessTransition priorRoute = activityTransitions
+                .OrderByDescending(transition => transition.IsDefaultOutcome)
+                .FirstOrDefault();
+            PlatformEntities.ProcessStep priorDestination = definition.Steps
+                .FirstOrDefault(step => step.Id == priorRoute?.NextProcessStepId) ?? verify;
+            bool contactIsLinked = activityTransitions.Any(transition => transition.NextProcessStepId == contactResearch.Id);
+            if (!contactIsLinked)
+            {
+                storage.RemoveRange(activityTransitions);
+                storage.Add(NewTransition(
+                    activity,
+                    contactResearch,
+                    priorRoute?.OutcomeKey ?? "activity-described",
+                    priorRoute?.OutcomeLabel ?? "Company activity described",
+                    true,
+                    ProcessTransitionEffect.None));
+                bool hasContactTransition = await storage.ProcessTransitions.AnyAsync(
+                    transition => transition.ProcessStepId == contactResearch.Id
+                        && transition.NextProcessStepId == priorDestination.Id,
+                    cancellationToken);
+                if (!hasContactTransition)
+                {
+                    storage.Add(NewTransition(contactResearch, priorDestination, "contact-researched", "Contact research completed", true,
+                        ProcessTransitionEffect.None));
+                }
+            }
+        }
+    }
+
+    async ValueTask EnsureLeadContactGateContractsAsync(
+        IWorkflowBroker storage,
+        string tenantId,
+        CancellationToken cancellationToken)
+    {
+        List<PlatformEntities.ProcessStep> steps = await storage.ProcessSteps
+            .Where(step => step.ProcessDefinition.TenantId == tenantId
+                && step.ProcessDefinition.IsActive
+                && step.ProcessDefinition.ScopeType == ProcessScopeType.Lead
+                && (step.Key == "commercial-fit" || step.Key == "qualify-lead"))
+            .ToListAsync(cancellationToken);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        foreach (PlatformEntities.ProcessStep step in steps)
+        {
+            if (step.Key == "commercial-fit")
+                step.ProducedFacts = "company.fit-score, company.opening-angle, lead.contact-name, lead.contact-role, lead.contact-point, lead.contact-source";
+            else
+            {
+                step.RequiredFacts = "company.identity-verification, company.status, company.fit-score, lead.contact-point, lead.contact-source";
+                step.ProducedFacts = "company.qualification-decision, lead.contact-gate-result";
+            }
+            step.LastUpdatedBy = CurrentUserId;
+            step.LastUpdated = now;
+        }
+    }
+
+    async ValueTask InitializeStepTaskRunsAsync(
+        IWorkflowBroker storage,
+        PlatformEntities.ProcessTask processTask,
+        CancellationToken cancellationToken)
+    {
+        List<PlatformEntities.ProcessStepTask> definitions = await storage.ProcessStepTasks
+            .Where(item => item.ProcessStepId == processTask.ProcessStepId && item.IsActive)
+            .OrderBy(item => item.Sequence)
+            .ToListAsync(cancellationToken);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        string context = JsonSerializer.Serialize(new
+        {
+            processTask.LeadId, processTask.TenantCompanyRelationshipId,
+            processTask.OpportunityId, processTask.ClientAccountId
+        });
+        foreach (PlatformEntities.ProcessStepTask definition in definitions)
+        {
+            storage.Add(new PlatformEntities.ProcessStepTaskRun
+            {
+                Id = Guid.NewGuid(), ProcessTaskId = processTask.Id, ProcessStepTaskId = definition.Id,
+                State = ProcessStepTaskRunState.Pending, ContextJson = context,
+                CreatedBy = CurrentUserId, LastUpdatedBy = CurrentUserId, CreatedOn = now, LastUpdated = now
+            });
+        }
+    }
+
+    async ValueTask RecordEmailStepTaskRunsAsync(
+        IWorkflowBroker storage,
+        PlatformEntities.ProcessTask processTask,
+        string recipientAddress,
+        Guid? emailId,
+        IReadOnlyList<string> errors,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        List<PlatformEntities.ProcessStepTask> definitions = await storage.ProcessStepTasks
+            .Where(item => item.ProcessStepId == processTask.ProcessStepId && item.IsActive)
+            .OrderBy(item => item.Sequence)
+            .ToListAsync(cancellationToken);
+        if (definitions.Count == 0)
+            return;
+
+        string context = JsonSerializer.Serialize(new
+        {
+            recipient = new { email = recipientAddress },
+            email = new { id = emailId, subject = processTask.RenderedEmailSubject, body = processTask.RenderedEmailBody }
+        });
+        bool recipientResolved = !string.IsNullOrWhiteSpace(recipientAddress);
+        bool valid = recipientResolved && errors.Count == 0;
+
+        foreach (PlatformEntities.ProcessStepTask definition in definitions)
+        {
+            bool isResolve = definition.Key == "resolve-recipient";
+            bool isGenerate = definition.Key == "generate-email";
+            bool isValidate = definition.Key == "validate-email";
+            bool isCreate = definition.Key == "create-draft";
+            bool completed = isResolve ? recipientResolved
+                : isGenerate ? recipientResolved
+                : isValidate ? valid
+                : isCreate && emailId.HasValue;
+            bool failed = (isResolve && !recipientResolved) || (isValidate && recipientResolved && !valid);
+            ProcessStepTaskRunState state = completed
+                ? ProcessStepTaskRunState.Completed
+                : failed ? ProcessStepTaskRunState.Blocked : ProcessStepTaskRunState.Pending;
+            string validationErrors = failed ? string.Join("\n", errors) : null;
+            PlatformEntities.ProcessStepTaskRun run = new()
+            {
+                Id = Guid.NewGuid(), ProcessTaskId = processTask.Id, ProcessStepTaskId = definition.Id,
+                State = state, AttemptCount = completed || failed ? 1 : 0,
+                ContextJson = context, ValidationErrors = validationErrors,
+                StartedOn = completed || failed ? now : null, CompletedOn = completed ? now : null,
+                CreatedBy = CurrentUserId, LastUpdatedBy = CurrentUserId, CreatedOn = now, LastUpdated = now
+            };
+            storage.Add(run);
+            if (run.AttemptCount == 1)
+            {
+                storage.Add(new PlatformEntities.ProcessStepTaskAttempt
+                {
+                    Id = Guid.NewGuid(), ProcessStepTaskRunId = run.Id, AttemptNumber = 1,
+                    State = state, InputContextJson = context,
+                    OutputContextJson = completed ? context : null, ValidationErrors = validationErrors,
+                    CreatedBy = CurrentUserId, LastUpdatedBy = CurrentUserId, CreatedOn = now, LastUpdated = now
+                });
+            }
+        }
     }
 
     async ValueTask RefreshPendingTaskAsync(
@@ -1760,6 +2166,7 @@ public sealed class WorkflowAutomationService(
             .ToListAsync(cancellationToken);
 
         PlatformEntities.ProcessTransition transition = ResolveTransition(transitions, outcomeKey);
+        await CompleteStepTaskRunsAsync(storage, task.Id, completionNote, cancellationToken);
         PlatformEntities.ProcessStep nextStep = null;
         if (!transition.IsTerminal && transition.NextProcessStepId.HasValue)
         {
@@ -2202,18 +2609,39 @@ public sealed class WorkflowAutomationService(
             await ResolveOrCreateRelationshipContactAsync(storage, relationship.Id, companyContact.Id, leadContact, now, cancellationToken);
         }
 
+        PlatformEntities.RelationshipContact primaryContact = await storage.RelationshipContacts
+            .Include(item => item.CompanyContact)
+            .Where(item => item.TenantCompanyRelationshipId == relationship.Id
+                && (!string.IsNullOrWhiteSpace(item.CompanyContact.EmailAddress)
+                    || !string.IsNullOrWhiteSpace(item.CompanyContact.PhoneNumber)))
+            .OrderByDescending(item => item.IsPrimary)
+            .ThenBy(item => item.CreatedOn)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (primaryContact is null)
+        {
+            lead.Status = LeadStatus.Deferred;
+            lead.QualificationNotes = AppendNote(
+                lead.QualificationNotes,
+                "Opportunity creation deferred: no verified contact email address or phone number is available.");
+            lead.LastUpdatedBy = CurrentUserId;
+            lead.LastUpdated = now;
+            relationship.Status = RelationshipStatus.Prospect;
+            relationship.CurrentStage = SalesPipelineStage.Researched;
+            relationship.LastUpdatedBy = CurrentUserId;
+            relationship.LastUpdated = now;
+            loggingBroker.LogWarning(
+                "Lead {LeadId} was not converted because no usable contact point exists.",
+                lead.Id);
+            return;
+        }
+
         PlatformEntities.Opportunity opportunity = lead.OpportunityId.HasValue
             ? await storage.Opportunities.FirstOrDefaultAsync(item => item.Id == lead.OpportunityId.Value, cancellationToken)
             : null;
 
         if (opportunity is null)
         {
-            PlatformEntities.RelationshipContact primaryContact = await storage.RelationshipContacts
-                .Where(item => item.TenantCompanyRelationshipId == relationship.Id)
-                .OrderByDescending(item => item.IsPrimary)
-                .ThenBy(item => item.CreatedOn)
-                .FirstOrDefaultAsync(cancellationToken);
-
             opportunity = new PlatformEntities.Opportunity
             {
                 Id = Guid.NewGuid(),
@@ -2238,6 +2666,54 @@ public sealed class WorkflowAutomationService(
         lead.LastUpdatedBy = CurrentUserId;
         lead.LastUpdated = now;
     }
+
+    async ValueTask CompleteStepTaskRunsAsync(
+        IWorkflowBroker storage,
+        Guid processTaskId,
+        string completionNote,
+        CancellationToken cancellationToken)
+    {
+        List<PlatformEntities.ProcessStepTaskRun> runs = await storage.ProcessStepTaskRuns
+            .Where(item => item.ProcessTaskId == processTaskId
+                && item.State != ProcessStepTaskRunState.Completed
+                && item.State != ProcessStepTaskRunState.Cancelled)
+            .OrderBy(item => item.ProcessStepTask.Sequence)
+            .ToListAsync(cancellationToken);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        foreach (PlatformEntities.ProcessStepTaskRun run in runs)
+        {
+            int attemptNumber = run.AttemptCount + 1;
+            run.State = ProcessStepTaskRunState.Completed;
+            run.AttemptCount = attemptNumber;
+            run.StartedOn ??= now;
+            run.CompletedOn = now;
+            run.ValidationErrors = null;
+            run.LastUpdatedBy = CurrentUserId;
+            run.LastUpdated = now;
+            storage.Add(new PlatformEntities.ProcessStepTaskAttempt
+            {
+                Id = Guid.NewGuid(), ProcessStepTaskRunId = run.Id, AttemptNumber = attemptNumber,
+                State = ProcessStepTaskRunState.Completed, InputContextJson = run.ContextJson,
+                OutputContextJson = JsonSerializer.Serialize(new { completionNote }),
+                CreatedBy = CurrentUserId, LastUpdatedBy = CurrentUserId, CreatedOn = now, LastUpdated = now
+            });
+        }
+    }
+
+    static async ValueTask<bool> HasUsableRelationshipContactAsync(
+        IWorkflowBroker storage,
+        Guid relationshipId,
+        CancellationToken cancellationToken) =>
+        await storage.RelationshipContacts.AnyAsync(
+            item => item.TenantCompanyRelationshipId == relationshipId
+                && (!string.IsNullOrWhiteSpace(item.CompanyContact.EmailAddress)
+                    || !string.IsNullOrWhiteSpace(item.CompanyContact.PhoneNumber)),
+            cancellationToken);
+
+    static string AppendNote(string existing, string note) =>
+        string.IsNullOrWhiteSpace(existing)
+            ? note
+            : $"{existing.Trim()}\n\n{note}";
 
     async ValueTask CreateClientAccountAsync(
         IWorkflowBroker storage,

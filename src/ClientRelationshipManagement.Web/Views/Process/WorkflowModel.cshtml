@@ -5,10 +5,10 @@
     ViewData["Title"] = "Full Company Process Model";
     const int nodeStartLeft = 36;
     const int nodeColumnWidth = 240;
-    const int portalColumnInset = 8;
+    const int portalColumnInset = 0;
     const int topRowOffset = 70;
     const int nodeRowSpacing = 210;
-    const int nodeHeight = 132;
+    const int nodeHeight = 144;
     const int terminalNodeHeight = 42;
     const int terminalNodeGap = 6;
     Dictionary<Guid, int> portalColumns = [];
@@ -19,14 +19,17 @@
     int maximumUsedColumn = 0;
 
     if (Model.Processes.Count > 0)
-        portalColumns[Model.Processes[0].Id] = 0;
+        // Keep the left-most grid column free for terminal outcomes. This lets a
+        // terminal card sit beside its decision without blocking a lane hand-off.
+        portalColumns[Model.Processes[0].Id] = 1;
 
     foreach (WorkflowProcessViewModel process in Model.Processes)
     {
         int portalColumn = portalColumns.GetValueOrDefault(process.Id, 0);
-        int columnSpan = process.Steps.Count <= 8
-            ? Math.Max(1, process.Steps.Count / 2)
-            : Math.Clamp((int)Math.Ceiling(Math.Sqrt(process.Steps.Count)), 3, 5);
+        // Use the available width before adding another row. A five-node run
+        // keeps the common seven-step lane to two clean strokes of the snake and
+        // leaves the second row's outside cells available for exits.
+        int columnSpan = Math.Clamp(process.Steps.Count, 1, 5);
         Dictionary<Guid, (int Row, int Column)> layout = [];
         int stepIndex = 0;
         int row = 0;
@@ -166,7 +169,7 @@
         <div class="workflow-workspace__body">
             <div class="workflow-surface-viewport" id="workflowViewport" tabindex="0" aria-label="Workflow canvas. Drag the background to pan and use the toolbar to zoom.">
                 <div class="workflow-surface-space" id="workflowSpace">
-                    <div class="workflow-surface-stage" id="workflowStage" style="width:@(stageWidth)px;height:@(stageHeight)px" data-width="@stageWidth" data-height="@stageHeight">
+                    <div class="workflow-surface-stage" id="workflowStage" style="width:@(stageWidth)px;height:@(stageHeight)px" data-width="@stageWidth" data-height="@stageHeight" data-nodes-per-stroke="5" data-terminal-column-reserved="true">
                         <svg class="workflow-connectors" id="workflowConnectors" width="@stageWidth" height="@stageHeight" aria-hidden="true">
                             <defs>
                                 <marker id="workflowArrowDefault" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="7" markerHeight="7" orient="auto"><path d="M 1 1 L 11 6 L 1 11 z"></path></marker>
@@ -270,6 +273,10 @@
                                         <span class="workflow-node__iteration" title="This step can repeat" aria-label="Repeating step">↻</span>
                                     }
                                     <span class="workflow-node__meta"><b>@step.Sequence</b> @step.ActionType</span>
+                                    @if (step.Tasks.Count > 0)
+                                    {
+                                        <span class="workflow-node__tasks" title="@string.Join(" → ", step.Tasks.Select(task => task.Name))">@step.Tasks.Count child task@(step.Tasks.Count == 1 ? "" : "s")</span>
+                                    }
                                     <strong>@step.Name</strong>
                                     <small>@step.Objective</small>
                                     <span class="workflow-node__footer" data-live-key="step-@step.Id.ToString("N")">
@@ -319,9 +326,12 @@
                                 int leftColumn = sourceColumn - 1;
                                 bool hasFreeCellOnRight = !occupiedCells.Contains((sourceRow, rightColumn)) && !reservedExitCells.Contains((sourceRow, rightColumn));
                                 bool hasFreeCellOnLeft = leftColumn >= 0 && !occupiedCells.Contains((sourceRow, leftColumn)) && !reservedExitCells.Contains((sourceRow, leftColumn));
-                                bool placeOnRight = hasFreeCellOnRight && (!hasFreeCellOnLeft || sourceColumn > portalColumn);
-                                bool useTerminalShelf = !placeOnRight && !hasFreeCellOnLeft;
-                                int exitColumn = placeOnRight ? rightColumn : hasFreeCellOnLeft ? leftColumn : sourceColumn;
+                                // Prefer the outside/left side. The centre and right-hand
+                                // corridors are reserved for the direct process hand-off.
+                                bool placeOnLeft = hasFreeCellOnLeft;
+                                bool placeOnRight = !placeOnLeft && hasFreeCellOnRight;
+                                bool useTerminalShelf = !placeOnLeft && !placeOnRight;
+                                int exitColumn = placeOnLeft ? leftColumn : placeOnRight ? rightColumn : sourceColumn;
                                 int exitRow = sourceRow;
                                 if (!useTerminalShelf)
                                     reservedExitCells.Add((exitRow, exitColumn));
@@ -343,7 +353,7 @@
                                             data-node-row="@(useTerminalShelf ? maximumNodeRow + 1 : exitRow)"
                                             data-node-column="@exitColumn"
                                             data-lane-id="@process.Id"
-                                            data-inspector-template="step-template-@exit.Step.Id.ToString("N")">
+                                            data-inspector-template="transition-template-@exit.Transition.Id.ToString("N")">
                                         <span>@exit.Transition.OutcomeLabel</span>
                                         <strong>@exit.Transition.DestinationLabel</strong>
                                         <small data-live-key="exit-@exit.Transition.Id.ToString("N")">@exit.Transition.CurrentStateCount.ToString("N0") here</small>
@@ -431,6 +441,24 @@
                             <div><dt>Due</dt><dd>@(step.DueAfterDays == 0 && step.DueAfterHours == 0 ? "Immediately" : $"After {step.DueAfterDays} day(s), {step.DueAfterHours} hour(s)")</dd></div>
                         </dl>
 
+                        <h3>Execution tasks</h3>
+                        @if (step.Tasks.Count == 0)
+                        {
+                            <p class="workflow-inspector__implicit-task">Implicit inference — this step has no explicit child-task sequence.</p>
+                        }
+                        else
+                        {
+                            <ol class="workflow-inspector__tasks">
+                                @foreach (WorkflowStepTaskViewModel task in step.Tasks)
+                                {
+                                    <li>
+                                        <span>@task.Sequence</span>
+                                        <div><strong>@task.Name</strong><small>@task.Type · <code>@task.HandlerKey</code> · max @task.MaxAttempts attempt@(task.MaxAttempts == 1 ? "" : "s")</small></div>
+                                    </li>
+                                }
+                            </ol>
+                        }
+
                         @if (!string.IsNullOrWhiteSpace(step.QuestionSetTemplate))
                         {
                             <details class="workflow-inspector__questions"><summary>Expected answer shape</summary><p class="preserve-lines">@step.QuestionSetTemplate</p></details>
@@ -469,6 +497,58 @@
                         </div>
                     </section>
                 </template>
+
+                @foreach (WorkflowTransitionViewModel transition in step.Transitions.Where(transition => transition.IsTerminal))
+                {
+                    long outcomePopulation = step.Transitions
+                        .Where(candidate => candidate.IsTerminal || candidate.GraphTargetId.StartsWith("portal-", StringComparison.Ordinal))
+                        .Sum(candidate => candidate.CurrentStateCount);
+                    decimal share = outcomePopulation == 0 ? 0 : (decimal)transition.CurrentStateCount / outcomePopulation;
+                    <template id="transition-template-@transition.Id.ToString("N")"
+                              data-heading="@transition.DestinationLabel"
+                              data-context="@process.Name · @step.Name · @transition.OutcomeLabel"
+                              data-lane="@process.LaneKey"
+                              data-live-template>
+                        <section class="workflow-inspector__step workflow-inspector__step--@process.LaneKey">
+                            <p class="workflow-inspector__objective">Companies currently held in this end state, and the evidence explaining why they are here.</p>
+                            <dl class="workflow-inspector__contract">
+                                <div><dt>Current companies</dt><dd>@transition.CurrentStateCount.ToString("N0")</dd></div>
+                                <div><dt>Share of this step's current outcomes</dt><dd>@share.ToString("P1")</dd></div>
+                                <div><dt>Historical route uses</dt><dd>@transition.HistoricalCompletedCount.ToString("N0") task completions</dd></div>
+                                <div><dt>Resulting state</dt><dd>@transition.ResultingState</dd></div>
+                            </dl>
+
+                            <h3>Why companies are here</h3>
+                            @if (transition.CurrentStateReasons.Count == 0)
+                            {
+                                <p>No more specific reason is recorded for this outcome yet.</p>
+                            }
+                            else
+                            {
+                                <table class="data-table">
+                                    <thead><tr><th>Reason</th><th>Companies</th><th>Share</th></tr></thead>
+                                    <tbody>
+                                    @foreach (WorkflowOutcomeReasonViewModel reason in transition.CurrentStateReasons)
+                                    {
+                                        decimal reasonShare = transition.CurrentStateCount == 0 ? 0 : (decimal)reason.Count / transition.CurrentStateCount;
+                                        <tr>
+                                            <td><strong>@reason.Label</strong><br /><small>@reason.Detail</small></td>
+                                            <td>@reason.Count.ToString("N0")</td>
+                                            <td>@reasonShare.ToString("P1")</td>
+                                        </tr>
+                                    }
+                                    </tbody>
+                                </table>
+                            }
+
+                            @if (!string.IsNullOrWhiteSpace(transition.CurrentStateHref))
+                            {
+                                <a class="primary-action" href="@transition.CurrentStateHref">View these companies</a>
+                            }
+                            <button type="button" class="secondary-action" data-inspector-template="step-template-@step.Id.ToString("N")">View the decision step</button>
+                        </section>
+                    </template>
+                }
             }
         }
     </div>

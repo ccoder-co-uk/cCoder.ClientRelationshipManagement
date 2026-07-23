@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using cCoder.ClientRelationshipManagement.Platform.Data;
 
@@ -11,9 +12,11 @@ using cCoder.ClientRelationshipManagement.Platform.Data;
 namespace cCoder.ClientRelationshipManagement.Platform.Data.Migrations
 {
     [DbContext(typeof(ClientRelationshipDbContext))]
-    partial class ClientRelationshipDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260717075517_AddProcessStepTasks")]
+    partial class AddProcessStepTasks
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

@@ -18,6 +18,7 @@ public sealed class EmailsPageViewModel
     public IReadOnlyList<SelectListItem> StateOptions { get; init; } = Array.Empty<SelectListItem>();
     public int TotalEmails { get; init; }
     public int DraftEmails { get; init; }
+    public int FailedEmails { get; init; }
     public int ApprovedEmails { get; init; }
     public int SentEmails { get; init; }
     public IReadOnlyList<EmailListItemViewModel> Emails { get; init; } = Array.Empty<EmailListItemViewModel>();

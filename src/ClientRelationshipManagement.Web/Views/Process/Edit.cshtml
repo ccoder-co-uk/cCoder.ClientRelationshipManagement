@@ -89,6 +89,7 @@
                         <th>Entry</th>
                         <th>Active</th>
                         <th>Transitions</th>
+                        <th>Tasks</th>
                         <th></th>
                     </tr>
                 </thead>
@@ -104,6 +105,7 @@
                             <td>@(step.IsEntryPoint ? "Yes" : "No")</td>
                             <td>@(step.IsActive ? "Yes" : "No")</td>
                             <td>@(step.Transitions.Count - 1)</td>
+                            <td>@(step.Tasks.Count == 0 ? "Implicit inference" : $"{step.Tasks.Count} tasks")</td>
                             <td class="table-actions">
                                 <button type="button" class="secondary-action" onclick="document.getElementById('stepDialog-@step.Id').showModal()">Edit</button>
                                 <form asp-action="DeleteStep" method="post" class="inline-form">

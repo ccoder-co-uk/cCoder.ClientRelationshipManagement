@@ -2,6 +2,7 @@ using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using ClientRelationshipManagement.AcceptanceTests.Infrastructure;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 
 namespace ClientRelationshipManagement.AcceptanceTests.Tests;
 
@@ -14,7 +15,8 @@ public sealed partial class ProcessControllerTests
 
         ProcessDefinition definition = await QueryInAdminContextAsync(db =>
             db.ProcessDefinitions
-                .Where(item => item.TenantId == AcceptanceSettings.TenantId)
+                .Where(item => item.TenantId == AcceptanceSettings.TenantId
+                    && item.ScopeType == ProcessScopeType.Opportunity)
                 .OrderByDescending(item => item.IsDefault)
                 .ThenBy(item => item.Name)
                 .FirstAsync());
@@ -28,6 +30,9 @@ public sealed partial class ProcessControllerTests
         editResponse.Should().Contain("Process Details");
         editResponse.Should().Contain("Step List");
         editResponse.Should().Contain("Supported Tokens");
+        editResponse.Should().Contain("4 tasks");
+        editResponse.Should().Contain("Validate complete sendable email");
+        editResponse.Should().Contain("CRM.ValidateRecipientEmail");
     }
 
     [CRMAcceptanceFact]
@@ -77,5 +82,16 @@ public sealed partial class ProcessControllerTests
         html.Should().Contain("parallel-return");
         html.Should().Contain("workflow-node__iteration");
         html.Should().Contain("Repeating step");
+        html.Should().Contain("child tasks");
+        html.Should().Contain("Execution tasks");
+        html.Should().Contain("Resolve and verify recipient");
+        html.Should().Contain("CRM.ValidateRecipientEmail");
+        html.Should().Contain("Implicit inference");
+        html.Should().Contain("Find a Relevant Contact Route");
+        html.Should().Contain("transition-template-");
+        html.Should().Contain("Current companies");
+        html.Should().Contain("Why companies are here");
+        html.Should().Contain("data-nodes-per-stroke=\"5\"");
+        html.Should().Contain("data-terminal-column-reserved=\"true\"");
     }
 }
