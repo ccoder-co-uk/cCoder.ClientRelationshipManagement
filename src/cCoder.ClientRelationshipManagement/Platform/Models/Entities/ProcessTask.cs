@@ -42,4 +42,5 @@ public class ProcessTask : ICrmEntity
     public virtual Opportunity Opportunity { get; set; }
     public virtual ClientAccount ClientAccount { get; set; }
     public virtual Email Email { get; set; }
+    public virtual ICollection<ProcessStepTaskRun> StepTaskRuns { get; set; } = new List<ProcessStepTaskRun>();
 }

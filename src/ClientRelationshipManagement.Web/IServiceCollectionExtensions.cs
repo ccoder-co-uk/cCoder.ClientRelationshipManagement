@@ -172,6 +172,7 @@ public static class IServiceCollectionExtensions
         services.AddScoped<IMicrosoftGraphMailboxClient, MicrosoftGraphMailboxClient>();
         services.AddScoped<IEmailTaskEvidenceService, EmailTaskEvidenceService>();
         services.AddScoped<IEmailDispatchProcessor, EmailDispatchProcessor>();
+        services.AddSingleton<IMailboxSyncLockBroker>(new MailboxSyncLockBroker(crmConnection));
         services.AddScoped<IMailboxSyncProcessor, MailboxSyncProcessor>();
         services.AddScoped<ILeadIngestionService, LeadIngestionService>();
         services.AddScoped<IAuthorityDataImportCoordinationService, AuthorityDataImportCoordinationService>();

@@ -6,6 +6,9 @@ namespace ClientRelationshipManagement.Web.Services.Processes;
 public interface IWorkflowAutomationService
 {
     ValueTask EnsureSeedProcessesAsync(CancellationToken cancellationToken = default);
+    ValueTask EnsureDefinitionStepTasksAsync(
+        Guid processDefinitionId,
+        CancellationToken cancellationToken = default);
     ValueTask EnsureCoverageAsync(
         Guid? leadId = null,
         Guid? opportunityId = null,

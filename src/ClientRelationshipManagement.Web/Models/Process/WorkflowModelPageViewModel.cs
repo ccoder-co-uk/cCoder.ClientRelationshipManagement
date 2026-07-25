@@ -64,8 +64,19 @@ public sealed class WorkflowStepViewModel
     public int DueAfterHours { get; init; }
     public string StateOnActivate { get; init; } = string.Empty;
     public int CurrentInstances { get; init; }
+    public IReadOnlyList<WorkflowStepTaskViewModel> Tasks { get; init; } = [];
     public WorkflowStepHealthViewModel Health { get; init; } = new();
     public IReadOnlyList<WorkflowTransitionViewModel> Transitions { get; init; } = [];
+}
+
+public sealed class WorkflowStepTaskViewModel
+{
+    public string Key { get; init; } = string.Empty;
+    public string Name { get; init; } = string.Empty;
+    public int Sequence { get; init; }
+    public string Type { get; init; } = string.Empty;
+    public string HandlerKey { get; init; } = string.Empty;
+    public int MaxAttempts { get; init; }
 }
 
 public sealed class WorkflowTransitionViewModel
@@ -84,6 +95,15 @@ public sealed class WorkflowTransitionViewModel
     public string DestinationLabel { get; init; } = string.Empty;
     public int HistoricalCompletedCount { get; init; }
     public long CurrentStateCount { get; init; }
+    public string CurrentStateHref { get; init; } = string.Empty;
+    public IReadOnlyList<WorkflowOutcomeReasonViewModel> CurrentStateReasons { get; init; } = [];
+}
+
+public sealed class WorkflowOutcomeReasonViewModel
+{
+    public string Label { get; init; } = string.Empty;
+    public string Detail { get; init; } = string.Empty;
+    public long Count { get; init; }
 }
 
 public sealed class WorkflowStepHealthViewModel
@@ -147,9 +167,14 @@ public sealed class WorkflowTransitionOutcomeProjection
 
 public sealed class WorkflowLeadCompanyProjection
 {
+    public Guid LeadId { get; init; }
     public Guid CompanyId { get; init; }
     public LeadStatus Status { get; init; }
     public DateTimeOffset LastUpdated { get; init; }
+    public string CompanyStatus { get; init; } = string.Empty;
+    public bool CompanyIsDissolved { get; init; }
+    public bool HasUsableContact { get; init; }
+    public string QualificationNotes { get; init; } = string.Empty;
 }
 
 public sealed class WorkflowOpportunityCompanyProjection

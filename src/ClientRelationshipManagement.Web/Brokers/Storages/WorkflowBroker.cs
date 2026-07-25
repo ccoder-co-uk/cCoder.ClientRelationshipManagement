@@ -15,7 +15,9 @@ public sealed class WorkflowBroker(IClientRelationshipDbContextFactory factory) 
     public IQueryable<Email> Emails => context.Emails; public IQueryable<LeadContact> LeadContacts => context.LeadContacts; public IQueryable<Lead> Leads => context.Leads;
     public IQueryable<Material> Materials => context.Materials; public IQueryable<Opportunity> Opportunities => context.Opportunities;
     public IQueryable<ProcessDefinition> ProcessDefinitions => context.ProcessDefinitions; public IQueryable<ProcessInstance> ProcessInstances => context.ProcessInstances;
-    public IQueryable<ProcessStep> ProcessSteps => context.ProcessSteps; public IQueryable<ProcessTask> ProcessTasks => context.ProcessTasks;
+    public IQueryable<ProcessStep> ProcessSteps => context.ProcessSteps; public IQueryable<ProcessStepTask> ProcessStepTasks => context.ProcessStepTasks;
+    public IQueryable<ProcessStepTaskRun> ProcessStepTaskRuns => context.ProcessStepTaskRuns; public IQueryable<ProcessStepTaskAttempt> ProcessStepTaskAttempts => context.ProcessStepTaskAttempts;
+    public IQueryable<ProcessTask> ProcessTasks => context.ProcessTasks;
     public IQueryable<ProcessTransition> ProcessTransitions => context.ProcessTransitions; public IQueryable<RelationshipContact> RelationshipContacts => context.RelationshipContacts;
     public IQueryable<TenantCompanyRelationship> TenantCompanyRelationships => context.TenantCompanyRelationships;
     public void Add(object entity) => context.Add(entity); public void AddRange(params object[] entities) => context.AddRange(entities);

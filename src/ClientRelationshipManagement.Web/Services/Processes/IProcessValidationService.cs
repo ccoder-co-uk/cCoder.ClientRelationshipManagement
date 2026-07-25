@@ -9,6 +9,10 @@ public interface IProcessValidationService
     ValueTask<ProcessValidationResult> ValidateDefinitionAsync(
         Guid processDefinitionId,
         CancellationToken cancellationToken = default);
+
+    ValueTask<ProcessValidationResult> ValidateActivationAsync(
+        Guid processDefinitionId,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class ProcessValidationResult

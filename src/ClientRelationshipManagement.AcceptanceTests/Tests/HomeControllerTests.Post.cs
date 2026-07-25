@@ -16,7 +16,7 @@ public sealed partial class HomeControllerTests
         (Guid leadId, _) = await SeedLeadAsync();
         await ExecuteWorkflowAsync(service => service.EnsureCoverageAsync(leadId: leadId, forceCreate: true).AsTask());
 
-        string[] outcomes = ["identity-checked", "activity-described", "scale-assessed", "quality-assessed", "fit-assessed", "deferred"];
+        string[] outcomes = ["identity-checked", "activity-described", "contact-researched", "scale-assessed", "quality-assessed", "fit-assessed", "deferred"];
         foreach (string outcome in outcomes)
         {
             Guid taskId = await QueryInAdminContextAsync(db => db.ProcessTasks
@@ -138,7 +138,7 @@ public sealed partial class HomeControllerTests
     }
 
     [CRMAcceptanceFact]
-    public async Task Post_CompleteTodo_ForConfirmRoute_CreatesPrimaryContactAndDraftRecipient()
+    public async Task EnsureCoverage_OpportunityWithoutContact_DoesNotStartOpportunityProcess()
     {
         Guid companyId = Guid.NewGuid();
         Guid relationshipId = Guid.NewGuid();
@@ -194,40 +194,13 @@ public sealed partial class HomeControllerTests
 
         await ExecuteWorkflowAsync(service => service.EnsureCoverageAsync(opportunityId: opportunityId, forceCreate: true).AsTask());
 
-        ProcessTask firstTask = await QueryInAdminContextAsync(db =>
-            db.ProcessTasks.FirstAsync(item => item.OpportunityId == opportunityId && item.State == ProcessTaskState.Pending));
-
-        using HttpResponseMessage response = await Client.PostAsync("/Home/CompleteTodo", new FormUrlEncodedContent(new Dictionary<string, string>
-        {
-            ["Id"] = firstTask.Id.ToString(),
-            ["SourceType"] = "process",
-            ["CompletionNote"] = "Use John Doe at john.doe@ccoder.co.uk as the initial contact. Opening angle: supplier payment visibility for software services.",
-            ["OutcomeKey"] = "ready"
-        }));
-
-        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
-
         Opportunity updatedOpportunity = await QueryInAdminContextAsync(db =>
             db.Opportunities.FirstAsync(item => item.Id == opportunityId));
-        TenantCompanyRelationship updatedRelationship = await QueryInAdminContextAsync(db =>
-            db.TenantCompanyRelationships.FirstAsync(item => item.Id == relationshipId));
-        RelationshipContact createdRelationshipContact = await QueryInAdminContextAsync(db =>
-            db.RelationshipContacts
-                .Include(item => item.CompanyContact)
-                .FirstAsync(item => item.TenantCompanyRelationshipId == relationshipId));
-        ProcessTask emailTask = await QueryInAdminContextAsync(db =>
-            db.ProcessTasks
-                .Include(item => item.Email)
-                .FirstAsync(item => item.OpportunityId == opportunityId && item.State == ProcessTaskState.Pending));
+        int processTaskCount = await QueryInAdminContextAsync(db =>
+            db.ProcessTasks.CountAsync(item => item.OpportunityId == opportunityId));
 
-        updatedOpportunity.PrimaryRelationshipContactId.Should().Be(createdRelationshipContact.Id);
-        updatedRelationship.PreferredOpeningAngle.Should().Be("supplier payment visibility for software services.");
-        createdRelationshipContact.CompanyContact.Name.Should().Be("John Doe");
-        createdRelationshipContact.CompanyContact.EmailAddress.Should().Be("john.doe@ccoder.co.uk");
-        createdRelationshipContact.RelationshipRoute.Should().Be("supplier payment visibility for software services.");
-        emailTask.Email.Should().NotBeNull();
-        emailTask.Email!.ToAddresses.Should().Be("john.doe@ccoder.co.uk");
-        emailTask.Email.BodyText.Should().Contain("John Doe");
+        updatedOpportunity.Stage.Should().Be(SalesPipelineStage.Nurture);
+        processTaskCount.Should().Be(0);
     }
 
     [CRMAcceptanceFact]

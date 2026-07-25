@@ -29,11 +29,12 @@ public static class ProcessProposalComparisonService
         {
             int count = changes.Count(change => string.Equals(change.StepKey, step.Key, StringComparison.OrdinalIgnoreCase));
             return new ProcessProposalStepViewModel { Key = step.Key, Name = step.Name, Sequence = step.Sequence,
-                ActionType = step.ActionType.ToString(), ChangeState = oldSteps.ContainsKey(step.Key) ? (count > 0 ? "modified" : "unchanged") : "added", ChangeCount = count };
+                ActionType = step.ActionType.ToString(), ChangeState = oldSteps.ContainsKey(step.Key) ? (count > 0 ? "modified" : "unchanged") : "added", ChangeCount = count,
+                TaskCount = step.StepTasks.Count > 0 ? step.StepTasks.Count : oldSteps.GetValueOrDefault(step.Key)?.StepTasks.Count ?? 0 };
         }).ToList();
         foreach (ProcessStep removed in oldSteps.Values.Where(step => !newSteps.ContainsKey(step.Key)).OrderBy(step => step.Sequence))
             steps.Add(new ProcessProposalStepViewModel { Key = removed.Key, Name = removed.Name, Sequence = removed.Sequence,
-                ActionType = removed.ActionType.ToString(), ChangeState = "removed", ChangeCount = 1 });
+                ActionType = removed.ActionType.ToString(), ChangeState = "removed", ChangeCount = 1, TaskCount = removed.StepTasks.Count });
 
         return new ProcessProposalReviewViewModel { Id = proposed.Id, Name = proposed.Name, ScopeType = proposed.ScopeType.ToString(),
             CurrentVersion = current.VersionNumber, ProposedVersion = proposed.VersionNumber, ChangeSummary = proposed.ChangeSummary ?? "No rationale supplied.",

@@ -22,6 +22,15 @@ public sealed class ScheduledTaskAgentHostedService(
             "Scheduled task agent hosted service started with interval {IntervalMinutes} minute(s).",
             interval.TotalMinutes);
 
+        using (IServiceScope recoveryScope = serviceScopeFactory.CreateScope())
+        {
+            int recovered = await recoveryScope.ServiceProvider
+                .GetRequiredService<IAgentRunJournalService>()
+                .FailAbandonedAsync(AgentRunKind.TaskAgent, DateTimeOffset.UtcNow.AddSeconds(1), stoppingToken);
+            if (recovered > 0)
+                loggingBroker.LogWarning("Recovered {RunCount} interrupted task agent run(s) and released their task claims.", recovered);
+        }
+
         while (!stoppingToken.IsCancellationRequested)
         {
             await RunOnceAsync(stoppingToken);

@@ -39,4 +39,5 @@ public class ProcessStep : ICrmEntity
     public virtual ICollection<ProcessTransition> IncomingTransitions { get; set; } = new List<ProcessTransition>();
     public virtual ICollection<ProcessInstance> CurrentInstances { get; set; } = new List<ProcessInstance>();
     public virtual ICollection<ProcessTask> Tasks { get; set; } = new List<ProcessTask>();
+    public virtual ICollection<ProcessStepTask> StepTasks { get; set; } = new List<ProcessStepTask>();
 }

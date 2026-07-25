@@ -37,6 +37,9 @@ public sealed class ClientRelationshipManagementModelBuilder
         Add<EmailRecipient>("EmailRecipients");
         Add<ProcessDefinition>("ProcessDefinitions");
         Add<ProcessStep>("ProcessSteps");
+        Add<ProcessStepTask>("ProcessStepTasks");
+        Add<ProcessStepTaskRun>("ProcessStepTaskRuns");
+        Add<ProcessStepTaskAttempt>("ProcessStepTaskAttempts");
         Add<ProcessTransition>("ProcessTransitions");
         Add<ProcessInstance>("ProcessInstances");
         Add<ProcessTask>("ProcessTasks");

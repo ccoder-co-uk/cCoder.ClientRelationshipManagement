@@ -8,6 +8,7 @@ using ClientRelationshipManagement.Web.Utilities;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.EntityFrameworkCore;
+using System.Text.RegularExpressions;
 using PlatformEntities = cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 
 namespace ClientRelationshipManagement.Web.Controllers;
@@ -45,6 +46,8 @@ public sealed class ProcessController(
             .Where(item => tenantIds.Contains(item.TenantId) && item.IsActive)
             .Include(item => item.Steps.Where(step => step.IsActive))
                 .ThenInclude(step => step.OutgoingTransitions)
+            .Include(item => item.Steps.Where(step => step.IsActive))
+                .ThenInclude(step => step.StepTasks)
             .OrderBy(item => item.ScopeType)
             .ThenBy(item => item.Name)
             .ToListAsync(cancellationToken);
@@ -147,6 +150,8 @@ public sealed class ProcessController(
                 && item.LifecycleState == ProcessDefinitionLifecycleState.Active)
             .Include(item => item.Steps.Where(step => step.IsActive))
                 .ThenInclude(step => step.OutgoingTransitions)
+            .Include(item => item.Steps.Where(step => step.IsActive))
+                .ThenInclude(step => step.StepTasks)
             .OrderBy(item => item.ScopeType)
             .ThenByDescending(item => item.IsDefault)
             .ThenBy(item => item.Name)
@@ -281,9 +286,19 @@ public sealed class ProcessController(
             .Where(lead => tenantIds.Contains(lead.TenantId))
             .Select(lead => new WorkflowLeadCompanyProjection
             {
+                LeadId = lead.Id,
                 CompanyId = lead.CompanyId,
                 Status = lead.Status,
-                LastUpdated = lead.LastUpdated
+                LastUpdated = lead.LastUpdated,
+                CompanyStatus = lead.Company.CompanyStatus,
+                CompanyIsDissolved = lead.Company.DissolvedOn.HasValue,
+                HasUsableContact = !string.IsNullOrWhiteSpace(lead.RawContactEmailAddress)
+                    || !string.IsNullOrWhiteSpace(lead.RawContactPhoneNumber)
+                    || !string.IsNullOrWhiteSpace(lead.Company.ContactEmailAddress)
+                    || !string.IsNullOrWhiteSpace(lead.Company.ContactPhoneNumber)
+                    || lead.Contacts.Any(contact => !string.IsNullOrWhiteSpace(contact.EmailAddress)
+                        || !string.IsNullOrWhiteSpace(contact.PhoneNumber)),
+                QualificationNotes = lead.QualificationNotes
             })
             .ToListAsync(cancellationToken);
         Dictionary<Guid, WorkflowLeadCompanyProjection> latestLeads = leadRows
@@ -381,6 +396,72 @@ public sealed class ProcessController(
                 _ => 0
             };
 
+        IReadOnlyList<WorkflowOutcomeReasonViewModel> CurrentStateReasons(
+            ProcessScopeType scopeType,
+            ProcessTransitionEffect effect)
+        {
+            if (scopeType != ProcessScopeType.Lead || effect != ProcessTransitionEffect.DeferLead)
+                return [];
+
+            List<WorkflowLeadCompanyProjection> deferred = latestLeads.Values
+                .Where(item => item.Status == LeadStatus.Deferred)
+                .ToList();
+            long noContact = deferred.LongCount(item => !item.HasUsableContact);
+            long inactive = deferred.LongCount(item => item.HasUsableContact
+                && (item.CompanyIsDissolved || Regex.IsMatch(item.CompanyStatus ?? string.Empty,
+                    "dissolved|liquidation|removed|closed|inactive|converted-closed",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)));
+            long incompleteEvidence = deferred.LongCount(item => item.HasUsableContact
+                && !item.CompanyIsDissolved
+                && !Regex.IsMatch(item.CompanyStatus ?? string.Empty,
+                    "dissolved|liquidation|removed|closed|inactive|converted-closed",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+                && (!Regex.IsMatch(item.QualificationNotes ?? string.Empty,
+                        @"(?im)^Identity result:\s*(matched|partially matched)\b",
+                        RegexOptions.CultureInvariant)
+                    || !Regex.IsMatch(item.QualificationNotes ?? string.Empty,
+                        @"(?im)^Fit score:\s*\d{1,3}\b",
+                        RegexOptions.CultureInvariant)));
+            long other = deferred.Count - noContact - inactive - incompleteEvidence;
+
+            return new[]
+            {
+                new WorkflowOutcomeReasonViewModel
+                {
+                    Label = "No usable contact point",
+                    Detail = "No email address or phone number is recorded on the lead, company, or lead contacts. Contact discovery did not produce the information the qualification gate requires.",
+                    Count = noContact
+                },
+                new WorkflowOutcomeReasonViewModel
+                {
+                    Label = "Qualification evidence incomplete",
+                    Detail = "A contact exists, but identity coherence or the fit score is missing from the recorded research.",
+                    Count = incompleteEvidence
+                },
+                new WorkflowOutcomeReasonViewModel
+                {
+                    Label = "Company inactive or dissolved",
+                    Detail = "The registry state indicates that conversion should not proceed.",
+                    Count = inactive
+                },
+                new WorkflowOutcomeReasonViewModel
+                {
+                    Label = "Other recorded qualification result",
+                    Detail = "The available evidence was processed under an older or unclassified decision rule.",
+                    Count = other
+                }
+            }.Where(reason => reason.Count > 0).ToList();
+        }
+
+        string CurrentStateHref(ProcessScopeType scopeType, ProcessTransitionEffect effect) =>
+            (scopeType, effect) switch
+            {
+                (ProcessScopeType.Lead, ProcessTransitionEffect.DeferLead) => "/Leads?status=Deferred",
+                (ProcessScopeType.Lead, ProcessTransitionEffect.RejectLead) => "/Leads?status=Rejected",
+                (ProcessScopeType.Lead, ProcessTransitionEffect.QualifyLeadAndCreateOpportunity) => "/Leads?status=Converted",
+                _ => string.Empty
+            };
+
         Dictionary<string, PlatformEntities.ProcessStep> entrySteps = definitions
             .GroupBy(item => $"{item.TenantId}|{item.ScopeType}", StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
@@ -461,6 +542,17 @@ public sealed class ProcessController(
                                 TaskTitleTemplate = step.TaskTitleTemplate ?? string.Empty,
                                 TaskInstructionsTemplate = step.TaskInstructionsTemplate ?? string.Empty,
                                 QuestionSetTemplate = step.QuestionSetTemplate ?? string.Empty,
+                                Tasks = step.StepTasks.Where(task => task.IsActive)
+                                    .OrderBy(task => task.Sequence)
+                                    .Select(task => new WorkflowStepTaskViewModel
+                                    {
+                                        Key = task.Key,
+                                        Name = task.Name,
+                                        Sequence = task.Sequence,
+                                        Type = DisplayText.Humanize(task.Type),
+                                        HandlerKey = task.HandlerKey ?? string.Empty,
+                                        MaxAttempts = task.MaxAttempts
+                                    }).ToList(),
                                 DueAfterDays = step.DueAfterDays,
                                 DueAfterHours = step.DueAfterHours,
                                 StateOnActivate = DescribeState(
@@ -509,7 +601,9 @@ public sealed class ProcessController(
                                             GraphTargetId = graphTargetId,
                                             DestinationLabel = destinationLabel,
                                             HistoricalCompletedCount = historicalOutcomeCount,
-                                            CurrentStateCount = CurrentStateCount(definition.ScopeType, transition.Effect)
+                                            CurrentStateCount = CurrentStateCount(definition.ScopeType, transition.Effect),
+                                            CurrentStateHref = CurrentStateHref(definition.ScopeType, transition.Effect),
+                                            CurrentStateReasons = CurrentStateReasons(definition.ScopeType, transition.Effect)
                                         };
                                     })
                                     .ToList()
@@ -1130,6 +1224,7 @@ public sealed class ProcessController(
 
         List<PlatformEntities.ProcessStep> steps = await processWorkspace.RetrieveSteps()
             .AsNoTracking()
+            .Include(item => item.StepTasks)
             .Where(item => item.ProcessDefinitionId == definition.Id)
             .OrderBy(item => item.Sequence)
             .ThenBy(item => item.Name)
@@ -1189,6 +1284,13 @@ public sealed class ProcessController(
                     RelationshipStatusOptions = BuildRelationshipStatusOptions(step.RelationshipStatusOnActivate),
                     SalesStageOptions = BuildSalesStageOptions(step.SalesStageOnActivate),
                     ClientAccountStatusOptions = BuildClientAccountStatusOptions(step.ClientAccountStatusOnActivate),
+                    Tasks = [.. step.StepTasks.Where(item => item.IsActive).OrderBy(item => item.Sequence).Select(item => new ProcessStepTaskViewModel
+                    {
+                        Key = item.Key, Name = item.Name, Sequence = item.Sequence, Type = DisplayText.Humanize(item.Type),
+                        HandlerKey = item.HandlerKey ?? string.Empty, RequiredContextKeys = item.RequiredContextKeys ?? string.Empty,
+                        ProducedContextKeys = item.ProducedContextKeys ?? string.Empty, MaxAttempts = item.MaxAttempts,
+                        NextTaskKey = item.NextTaskKey ?? string.Empty, FailureTaskKey = item.FailureTaskKey ?? string.Empty
+                    })],
                     Transitions =
                     [
                         .. transitions

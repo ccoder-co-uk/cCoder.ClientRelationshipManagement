@@ -84,7 +84,12 @@ internal sealed class MailboxMessageRecordFoundationService(IMailboxMessageRecor
         await broker.DeleteAsync(existing, cancellationToken);
     }
 
-    IQueryable<MailboxMessageRecord> Scope(IQueryable<MailboxMessageRecord> source, string[] tenants) => source.Where(item => item.TenantCompanyRelationshipId.HasValue && tenants.Contains(item.TenantCompanyRelationship.TenantId));
+    IQueryable<MailboxMessageRecord> Scope(IQueryable<MailboxMessageRecord> source, string[] tenants) =>
+        source.Where(item =>
+            (item.TenantCompanyRelationshipId.HasValue
+                && tenants.Contains(item.TenantCompanyRelationship.TenantId))
+            || (!item.TenantCompanyRelationshipId.HasValue
+                && item.CreatedBy == auth.SSOUserId));
 
     static MailboxMessageRecord Copy(MailboxMessageRecord source) => new()
     {

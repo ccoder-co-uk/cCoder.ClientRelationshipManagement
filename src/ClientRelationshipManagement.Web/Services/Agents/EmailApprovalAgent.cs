@@ -28,6 +28,7 @@ public sealed class EmailApprovalAgent(
     : IEmailApprovalAgent
 {
     const string ReviewRequiredPrefix = "AUTO_APPROVAL_REVIEW_REQUIRED:";
+    const int MaxValidationAttempts = 3;
 
     public async ValueTask<int> RunAsync(CancellationToken cancellationToken = default)
     {
@@ -266,19 +267,72 @@ public sealed class EmailApprovalAgent(
             subject = candidate.Subject,
             body = candidate.Body
         });
+        IReadOnlyList<string> candidateErrors = RecipientEmailContentValidator.Validate(
+            candidate.ToAddresses,
+            candidate.Subject,
+            candidate.Body);
+        string recipientError = candidateErrors.FirstOrDefault(error =>
+            error.StartsWith("A recipient", StringComparison.OrdinalIgnoreCase)
+            || error.StartsWith("Every recipient", StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(recipientError))
+            return new ReviewDecision(false, candidate.Subject, candidate.Body, recipientError);
 
-        var response = await completionProviderService.CompleteChatAsync(
-            aiSelection.Profile.ProviderKey,
-            aiSelection.Model,
-            [
-                new ChatCompletionMessage("system", instructions),
-                new ChatCompletionMessage("user", reviewInput)
-            ],
-            temperature: 0.1,
-            enableShellTooling: false,
-            cancellationToken: cancellationToken);
+        string retryContext = string.Empty;
+        List<string> attemptErrors = [];
+        for (int attempt = 1; attempt <= MaxValidationAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var response = await completionProviderService.CompleteChatAsync(
+                aiSelection.Profile.ProviderKey,
+                aiSelection.Model,
+                [
+                    new ChatCompletionMessage("system", instructions),
+                    new ChatCompletionMessage("user", reviewInput
+                        + (string.IsNullOrWhiteSpace(retryContext)
+                            ? string.Empty
+                            : $"\n\nRetry feedback:\n{retryContext}"))
+                ],
+                temperature: 0.1,
+                enableShellTooling: false,
+                cancellationToken: cancellationToken);
 
-        return ParseDecision(response.Content, candidate.Subject, candidate.Body);
+            try
+            {
+                ReviewDecision decision = ParseDecision(response.Content, candidate.Subject, candidate.Body);
+                if (!decision.Approved)
+                    return decision;
+
+                IReadOnlyList<string> validationErrors = RecipientEmailContentValidator.Validate(
+                    candidate.ToAddresses,
+                    decision.Subject,
+                    decision.Body);
+                if (validationErrors.Count == 0)
+                    return decision;
+
+                string failure = $"Attempt {attempt}: {string.Join(" ", validationErrors)}";
+                attemptErrors.Add(failure);
+                retryContext = JsonSerializer.Serialize(new
+                {
+                    previousOutput = response.Content,
+                    validationFailed = validationErrors,
+                    instruction = "Correct every validation failure and return a complete replacement JSON object."
+                });
+            }
+            catch (JsonException exception)
+            {
+                string failure = $"Attempt {attempt}: invalid JSON ({exception.Message})";
+                attemptErrors.Add(failure);
+                retryContext = JsonSerializer.Serialize(new
+                {
+                    previousOutput = response.Content,
+                    validationFailed = new[] { "Return exactly one valid JSON object with all four required keys." },
+                    instruction = "Correct the response and try again."
+                });
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Email review failed validation after {MaxValidationAttempts} attempts. {string.Join(" | ", attemptErrors)}");
     }
 
     async ValueTask FlagForHumanReviewAsync(

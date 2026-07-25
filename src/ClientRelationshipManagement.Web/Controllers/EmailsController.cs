@@ -97,8 +97,8 @@ public sealed class EmailsController(
         int totalPages = Math.Max(1, (int)Math.Ceiling(totalCount / (double)pageSize));
         page = Math.Clamp(page, 1, totalPages);
 
-        int draftEmails = await query.CountAsync(item =>
-            item.State == EmailState.Draft || item.State == EmailState.Failed);
+        int draftEmails = await query.CountAsync(item => item.State == EmailState.Draft);
+        int failedEmails = await query.CountAsync(item => item.State == EmailState.Failed);
         int approvedEmails = await query.CountAsync(item =>
             item.State == EmailState.Approved || item.State == EmailState.Sending);
         int sentEmails = await query.CountAsync(item => item.State == EmailState.Sent);
@@ -124,6 +124,7 @@ public sealed class EmailsController(
             StateOptions = BuildStateOptions(parsedState?.ToString()),
             TotalEmails = totalCount,
             DraftEmails = draftEmails,
+            FailedEmails = failedEmails,
             ApprovedEmails = approvedEmails,
             SentEmails = sentEmails,
             Emails =
@@ -134,7 +135,9 @@ public sealed class EmailsController(
                     ClientId = item.ClientId,
                     ClientMaterialId = item.ClientMaterialId,
                     ClientName = item.ClientName,
-                    StateLabel = DisplayText.Humanize(item.State),
+                    StateLabel = item.State == EmailState.Sending
+                        ? "Approved"
+                        : DisplayText.Humanize(item.State),
                     ToAddresses = item.ToAddresses,
                     FromDisplayName = item.FromDisplayName,
                     FromEmailAddress = item.FromEmailAddress,

@@ -9,7 +9,8 @@ public interface IWorkflowBroker
     IQueryable<CompanyHistoryItem> CompanyHistory { get; } IQueryable<EmailRecipient> EmailRecipients { get; } IQueryable<Email> Emails { get; }
     IQueryable<LeadContact> LeadContacts { get; } IQueryable<Lead> Leads { get; } IQueryable<Material> Materials { get; }
     IQueryable<Opportunity> Opportunities { get; } IQueryable<ProcessDefinition> ProcessDefinitions { get; } IQueryable<ProcessInstance> ProcessInstances { get; }
-    IQueryable<ProcessStep> ProcessSteps { get; } IQueryable<ProcessTask> ProcessTasks { get; } IQueryable<ProcessTransition> ProcessTransitions { get; }
+    IQueryable<ProcessStep> ProcessSteps { get; } IQueryable<ProcessStepTask> ProcessStepTasks { get; } IQueryable<ProcessStepTaskRun> ProcessStepTaskRuns { get; }
+    IQueryable<ProcessStepTaskAttempt> ProcessStepTaskAttempts { get; } IQueryable<ProcessTask> ProcessTasks { get; } IQueryable<ProcessTransition> ProcessTransitions { get; }
     IQueryable<RelationshipContact> RelationshipContacts { get; } IQueryable<TenantCompanyRelationship> TenantCompanyRelationships { get; }
     void Add(object entity); void AddRange(params object[] entities); void RemoveRange(IEnumerable<object> entities);
     bool IsAdded(object entity); ValueTask ReloadAsync(object entity, CancellationToken token = default);

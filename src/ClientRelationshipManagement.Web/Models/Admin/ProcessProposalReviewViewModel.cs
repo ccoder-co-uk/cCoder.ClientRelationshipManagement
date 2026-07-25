@@ -26,6 +26,7 @@ public sealed class ProcessProposalStepViewModel
     public string ActionType { get; init; } = string.Empty;
     public string ChangeState { get; init; } = "unchanged";
     public int ChangeCount { get; init; }
+    public int TaskCount { get; init; }
 }
 
 public sealed class ProcessProposalChangeViewModel

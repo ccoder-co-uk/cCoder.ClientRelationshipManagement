@@ -15,6 +15,7 @@ public sealed class MailboxSyncProcessor(
     IMicrosoftGraphMailboxClient mailboxClient,
     IOperationsCoordinationService operations,
     ISalesCoordinationService sales,
+    IMailboxSyncLockBroker syncLock,
     IAgentAutomationSettingsService automationSettingsService,
     IOptions<MailOptions> mailOptions,
     IOptions<AgentWorkflowOptions> agentWorkflowOptions,
@@ -32,6 +33,8 @@ public sealed class MailboxSyncProcessor(
         {
             return 0;
         }
+
+        await using IAsyncDisposable syncLease = await syncLock.AcquireAsync(cancellationToken);
 
         AgentAutomationSetting setting = await automationSettingsService.GetAsync(executionUserId, cancellationToken);
         DateTimeOffset syncStartedOn = DateTimeOffset.UtcNow;

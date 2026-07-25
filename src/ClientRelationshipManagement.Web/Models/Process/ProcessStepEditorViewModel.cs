@@ -35,4 +35,5 @@ public sealed class ProcessStepEditorViewModel
     public IReadOnlyList<SelectListItem> SalesStageOptions { get; init; } = Array.Empty<SelectListItem>();
     public IReadOnlyList<SelectListItem> ClientAccountStatusOptions { get; init; } = Array.Empty<SelectListItem>();
     public IReadOnlyList<ProcessTransitionEditorViewModel> Transitions { get; init; } = Array.Empty<ProcessTransitionEditorViewModel>();
+    public IReadOnlyList<ProcessStepTaskViewModel> Tasks { get; init; } = Array.Empty<ProcessStepTaskViewModel>();
 }

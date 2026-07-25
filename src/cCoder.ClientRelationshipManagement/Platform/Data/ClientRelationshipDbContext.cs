@@ -45,6 +45,9 @@ public partial class ClientRelationshipDbContext(
         ConfigureEmailRecipient(modelBuilder);
         ConfigureProcessDefinition(modelBuilder);
         ConfigureProcessStep(modelBuilder);
+        ConfigureProcessStepTask(modelBuilder);
+        ConfigureProcessStepTaskRun(modelBuilder);
+        ConfigureProcessStepTaskAttempt(modelBuilder);
         ConfigureProcessTransition(modelBuilder);
         ConfigureProcessInstance(modelBuilder);
         ConfigureProcessTask(modelBuilder);

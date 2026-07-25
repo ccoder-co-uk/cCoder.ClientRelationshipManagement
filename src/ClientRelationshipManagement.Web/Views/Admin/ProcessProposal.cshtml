@@ -2,6 +2,13 @@
 @{ ViewData["Title"] = $"Review {Model.Name}"; }
 
 <main class="page-shell proposal-review-page">
+    @if (TempData["AdminNotice"] is string notice)
+    {
+        <div class="data-panel process-validation-summary has-errors" role="alert">
+            <strong>Proposal not activated</strong>
+            <p>@notice</p>
+        </div>
+    }
     <section class="page-hero proposal-review-hero">
         <div>
             <span class="proposal-eyebrow">Process proposal · v@(Model.CurrentVersion) → v@(Model.ProposedVersion)</span>
@@ -49,7 +56,7 @@
             {
                 <a role="listitem" class="proposal-workflow__step is-@step.ChangeState"
                    href="@(step.ChangeCount > 0 ? $"#change-{step.Key.ToLowerInvariant()}" : "#")">
-                    <span>@step.Sequence</span><strong>@step.Name</strong><small>@step.ActionType</small>
+                    <span>@step.Sequence</span><strong>@step.Name</strong><small>@step.ActionType · @(step.TaskCount == 0 ? "implicit inference" : $"{step.TaskCount} tasks")</small>
                     @if (step.ChangeCount > 0) { <b>@step.ChangeCount change@(step.ChangeCount == 1 ? "" : "s")</b> }
                 </a>
             }
