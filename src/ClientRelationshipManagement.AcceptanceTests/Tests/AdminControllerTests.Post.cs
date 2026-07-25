@@ -75,7 +75,7 @@ public sealed partial class AdminControllerTests
                 ["ApprovalModel"] = "gpt-5.6-luna",
                 ["ApprovalConcurrency"] = "2",
                 ["LeadProfileKey"] = "local-ollama",
-                ["LeadModel"] = "qwen3.5:4b",
+                ["LeadModel"] = "ministral-3:14b",
                 ["LeadConcurrency"] = "1",
                 ["OpportunityProfileKey"] = "open-ai",
                 ["OpportunityModel"] = "gpt-5.6-luna",
@@ -93,7 +93,7 @@ public sealed partial class AdminControllerTests
         setting.SelectedAiModel.Should().Be("gpt-5.6-luna");
         setting.ApprovalAgentConcurrency.Should().Be(2);
         setting.LeadAiProfileKey.Should().Be("local-ollama");
-        setting.LeadAiModel.Should().Be("qwen3.5:4b");
+        setting.LeadAiModel.Should().Be("ministral-3:14b");
         setting.LeadAgentConcurrency.Should().Be(1);
         setting.OpportunityAiProfileKey.Should().Be("open-ai");
         setting.OpportunityAiModel.Should().Be("gpt-5.6-luna");

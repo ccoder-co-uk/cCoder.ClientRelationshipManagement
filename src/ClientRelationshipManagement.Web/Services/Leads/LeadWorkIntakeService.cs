@@ -25,6 +25,12 @@ public sealed class LeadWorkIntakeService(
     {
         AuthorityDataOptions options = authorityOptions.Value;
         DateTimeOffset now = DateTimeOffset.UtcNow;
+        string[] priorityCompanyNumbers = options.PriorityCompanyNumbers
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim().ToUpperInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        bool priorityDiscoveryOnly = options.PriorityDiscoveryOnly && priorityCompanyNumbers.Length > 0;
 
         IQueryable<ProcessTask> pending = processes.RetrieveTasks().Where(task =>
             task.State == ProcessTaskState.Pending
@@ -73,20 +79,57 @@ public sealed class LeadWorkIntakeService(
             return new(activeWorkItems, runnableWorkItems, 0);
 
         string sourceSystem = options.SourceSystem?.Trim() ?? "CompaniesHouse";
-        List<Company> candidates = await sales.RetrieveCompanies()
+        IQueryable<Company> candidateQuery = sales.RetrieveCompanies()
             .Include(company => company.RegisteredAddress)
             .Where(company => company.SourceSystem == sourceSystem
+                && company.IsVerified
                 && !company.IsProspectingSuppressed
                 && (company.CompanyStatus == null || company.CompanyStatus.ToLower() == "active")
                 && !sales.RetrieveLeads().Any(lead => lead.CompanyId == company.Id)
-                && !sales.RetrieveRelationships().Any(relationship => relationship.CompanyId == company.Id))
-            .OrderByDescending(company => company.RankingScore)
-            .ThenByDescending(company => company.AnnualRevenue)
-            .ThenByDescending(company => company.EmployeeCount)
-            .ThenBy(company => company.IncorporatedOn)
-            .ThenBy(company => company.Id)
-            .Take(capacity)
-            .ToListAsync(cancellationToken);
+                && !sales.RetrieveRelationships().Any(relationship => relationship.CompanyId == company.Id));
+        List<Company> candidates;
+        if (priorityDiscoveryOnly)
+        {
+            List<Company> availablePriorityCompanies = await candidateQuery
+                .Where(company => priorityCompanyNumbers.Contains(company.CompanyNumber))
+                .Take(priorityCompanyNumbers.Length)
+                .ToListAsync(cancellationToken);
+            if (availablePriorityCompanies.Count > 0)
+            {
+                candidates = availablePriorityCompanies
+                    .OrderBy(company => Array.FindIndex(
+                        priorityCompanyNumbers,
+                        number => string.Equals(number, company.CompanyNumber, StringComparison.OrdinalIgnoreCase)))
+                    .Take(capacity)
+                    .ToList();
+            }
+            else
+            {
+                // The named frontier is exhausted. Related-company discoveries
+                // already occupy runnable capacity, so this fallback is reached
+                // only when both the priority and discovered frontiers are empty.
+                candidates = await candidateQuery
+                    .OrderByDescending(company => company.RankingScore)
+                    .ThenByDescending(company => company.AnnualRevenue)
+                    .ThenByDescending(company => company.EmployeeCount)
+                    .ThenBy(company => company.IncorporatedOn)
+                    .ThenBy(company => company.Id)
+                    .Take(capacity)
+                    .ToListAsync(cancellationToken);
+            }
+        }
+        else
+        {
+            candidates = await candidateQuery
+                .OrderByDescending(company => priorityCompanyNumbers.Contains(company.CompanyNumber))
+                .ThenByDescending(company => company.RankingScore)
+                .ThenByDescending(company => company.AnnualRevenue)
+                .ThenByDescending(company => company.EmployeeCount)
+                .ThenBy(company => company.IncorporatedOn)
+                .ThenBy(company => company.Id)
+                .Take(capacity)
+                .ToListAsync(cancellationToken);
+        }
 
         string executionUserId = string.IsNullOrWhiteSpace(workflowOptions.Value.ExecutionUserId)
             ? "system"
@@ -95,12 +138,15 @@ public sealed class LeadWorkIntakeService(
 
         foreach (Company company in candidates)
         {
+            bool isPrioritySeed = priorityCompanyNumbers.Contains(company.CompanyNumber);
             Lead lead = new()
             {
                 Id = Guid.NewGuid(),
                 SourceSystem = company.SourceSystem,
                 SourceRecordId = company.SourceRecordId ?? company.CompanyNumber,
-                SourceFileName = "Bounded company intake",
+                SourceFileName = isPrioritySeed
+                    ? "Target discovery: known-company seed"
+                    : "Bounded company intake",
                 TenantId = options.DefaultTenantId,
                 Status = LeadStatus.Imported,
                 RawCompanyName = company.OfficialName,
@@ -110,9 +156,11 @@ public sealed class LeadWorkIntakeService(
                 RawWebsiteUrl = company.WebsiteUrl,
                 RawContactEmailAddress = company.ContactEmailAddress,
                 RawContactPhoneNumber = company.ContactPhoneNumber,
-                QualificationNotes = BuildQualificationNotes(company),
-                RankingScore = company.RankingScore,
-                RankingRationale = company.RankingRationale,
+                QualificationNotes = BuildQualificationNotes(company, isPrioritySeed),
+                RankingScore = isPrioritySeed ? Math.Max(100, company.RankingScore ?? 0) : company.RankingScore,
+                RankingRationale = isPrioritySeed
+                    ? "Target discovery seed: known substantial company; exact scale facts are optional for the initial pitch-and-contact pass."
+                    : company.RankingRationale,
                 CompanyId = company.Id,
                 CreatedBy = executionUserId,
                 LastUpdatedBy = executionUserId,
@@ -144,10 +192,11 @@ public sealed class LeadWorkIntakeService(
         return new(activeWorkItems + leadIds.Count, runnableWorkItems + leadIds.Count, leadIds.Count);
     }
 
-    static string BuildQualificationNotes(Company company) => string.Join(
+    static string BuildQualificationNotes(Company company, bool isPrioritySeed) => string.Join(
         Environment.NewLine,
         new[]
         {
+            isPrioritySeed ? "Target discovery seed: known substantial company" : null,
             $"Authority source status: {company.CompanyStatus}",
             $"Category: {company.CompanyCategory}",
             $"Origin: {company.CountryOfOrigin}",

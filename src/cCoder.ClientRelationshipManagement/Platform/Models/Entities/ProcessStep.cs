@@ -20,7 +20,10 @@ public class ProcessStep : ICrmEntity
     public int Sequence { get; set; }
     public bool IsEntryPoint { get; set; }
     public bool IsActive { get; set; }
+    public ProcessStepType StepType { get; set; } = ProcessStepType.AskAgent;
+    public string ConfigurationJson { get; set; }
     public ProcessActionType ActionType { get; set; }
+    public ProcessStepExecutionMode ExecutionMode { get; set; } = ProcessStepExecutionMode.AgentManaged;
     public int DueAfterDays { get; set; }
     public int DueAfterHours { get; set; }
     public RelationshipStatus? RelationshipStatusOnActivate { get; set; }

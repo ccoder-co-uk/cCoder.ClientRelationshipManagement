@@ -35,8 +35,20 @@
             <input name="Sequence" type="number" value="@Model.Sequence" />
         </label>
         <label class="auth-field">
+            <span>Executable Type</span>
+            <select name="StepType" asp-items="Model.StepTypeOptions"></select>
+        </label>
+        <label class="auth-field auth-field--full auth-field--multiline">
+            <span>Typed Configuration (JSON)</span>
+            <textarea name="ConfigurationJson" rows="4" placeholder='{"query":"site:{company.website} employees","evidenceKey":"company.employee-count"}'>@Model.ConfigurationJson</textarea>
+        </label>
+        <label class="auth-field">
             <span>Action Type</span>
             <select name="ActionType" asp-items="Model.ActionTypeOptions"></select>
+        </label>
+        <label class="auth-field">
+            <span>Execution</span>
+            <select name="ExecutionMode" asp-items="Model.ExecutionModeOptions"></select>
         </label>
         <label class="auth-field">
             <span>Relationship Status On Activate</span>
@@ -104,10 +116,10 @@
 @if (Model.Id.HasValue)
 {
     <div class="workspace-card__subsection">
-        <h3 class="workspace-card__title">Execution tasks</h3>
+        <h3 class="workspace-card__title">Legacy child tasks</h3>
         @if (Model.Tasks.Count == 0)
         {
-            <p>This step has no explicit task sequence and is executed as one implicit inference task.</p>
+            <p>This typed step is one independently executable unit of work.</p>
         }
         else
         {

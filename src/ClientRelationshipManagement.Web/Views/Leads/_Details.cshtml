@@ -28,6 +28,27 @@
         {
             <div class="company-detail__notes detail-evidence"><strong>Initial ranking rationale</strong><p>@Model.RankingRationale</p></div>
         }
+        @if (Model.ProcessStepOptions.Count > 0)
+        {
+            <form class="process-state-control" method="post" action="/Leads/@Model.Id/MoveToProcessStep">
+                @Html.AntiForgeryToken()
+                <div>
+                    <label for="process-step-@suffix">Move this company to</label>
+                    <select id="process-step-@suffix" name="processStepId" required>
+                        <option value="">Choose a process state</option>
+                        @foreach (var step in Model.ProcessStepOptions)
+                        {
+                            <option value="@step.Id">@step.Name</option>
+                        }
+                    </select>
+                </div>
+                <div>
+                    <label for="process-reason-@suffix">Reason for the move</label>
+                    <input id="process-reason-@suffix" name="reason" maxlength="1000" placeholder="What was corrected or why should this be reprocessed?" />
+                </div>
+                <button class="secondary-action" type="submit">Move company</button>
+            </form>
+        }
     </section>
     <section class="tab-panel" data-detail-panel="contacts-@suffix" hidden>
         <div class="table-shell"><table class="crm-table"><thead><tr><th>Name</th><th>Position</th><th>Email</th><th>Role</th></tr></thead><tbody>

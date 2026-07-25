@@ -5,6 +5,7 @@ namespace ClientRelationshipManagement.Web.Models.Process;
 
 public sealed class WorkflowModelPageViewModel
 {
+    public string Notice { get; init; } = string.Empty;
     public DateTimeOffset GeneratedOn { get; init; }
     public bool IsValid { get; init; }
     public IReadOnlyList<ProcessValidationIssue> Issues { get; init; } = [];
@@ -43,6 +44,23 @@ public sealed class WorkflowProcessViewModel
     public int UnmappedActiveInstances { get; init; }
     public long PortalCount { get; init; }
     public IReadOnlyList<WorkflowStepViewModel> Steps { get; init; } = [];
+    public IReadOnlyList<WorkflowTerminalNodeViewModel> TerminalNodes { get; init; } = [];
+}
+
+public sealed class WorkflowTerminalNodeViewModel
+{
+    public string GraphTargetId { get; init; } = string.Empty;
+    public string Name { get; init; } = string.Empty;
+    public string OutcomeLabel { get; init; } = string.Empty;
+    public ProcessTransitionEffect Effect { get; init; }
+    public string EffectLabel { get; init; } = string.Empty;
+    public string ResultingState { get; init; } = string.Empty;
+    public long CurrentStateCount { get; init; }
+    public int InboundRouteCount { get; init; }
+    public int HistoricalCompletedCount { get; init; }
+    public string CurrentStateHref { get; init; } = string.Empty;
+    public IReadOnlyList<WorkflowOutcomeReasonViewModel> CurrentStateReasons { get; init; } = [];
+    public IReadOnlyList<Guid> SourceStepIds { get; init; } = [];
 }
 
 public sealed class WorkflowStepViewModel
@@ -53,6 +71,8 @@ public sealed class WorkflowStepViewModel
     public int Sequence { get; init; }
     public bool IsEntryPoint { get; init; }
     public string ActionType { get; init; } = string.Empty;
+    public string StepType { get; init; } = string.Empty;
+    public string ExecutionMode { get; init; } = string.Empty;
     public string Objective { get; init; } = string.Empty;
     public string RequiredFacts { get; init; } = string.Empty;
     public string ProducedFacts { get; init; } = string.Empty;
@@ -175,6 +195,7 @@ public sealed class WorkflowLeadCompanyProjection
     public bool CompanyIsDissolved { get; init; }
     public bool HasUsableContact { get; init; }
     public string QualificationNotes { get; init; } = string.Empty;
+    public string SuppressionReason { get; init; } = string.Empty;
 }
 
 public sealed class WorkflowOpportunityCompanyProjection

@@ -14,11 +14,22 @@ internal static class WorkflowTaskQueue
                     : task.LeadId.HasValue
                         ? 1
                         : task.TenantCompanyRelationshipId.HasValue && !task.ClientAccountId.HasValue
-                            ? 1
-                            : task.ClientAccountId.HasValue
-                                ? 2
-                                : 3)
+                        ? 1
+                        : task.ClientAccountId.HasValue
+                            ? 2
+                            : 3)
+            // Finish work already furthest through its process before admitting
+            // another record at an earlier step. This lets relationship tip-in
+            // self-propagate and prevents high-value pool records from starving
+            // resource, fit, contact, and qualification work.
             .ThenByDescending(task => task.ProcessStep.Sequence)
+            // Intake/research records the commercial priority on the lead once.
+            // Reuse it here instead of joining the full company table and
+            // recalculating turnover, sector, headcount, and contact heuristics
+            // every time a worker claims a task.
+            .ThenByDescending(task => task.LeadId.HasValue
+                ? task.Lead.RankingScore
+                : null)
             .ThenBy(task => task.DueOn)
             .ThenBy(task => task.ActionType == ProcessActionType.Email
                 || task.ActionType == ProcessActionType.Call

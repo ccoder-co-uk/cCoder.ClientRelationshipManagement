@@ -5,7 +5,7 @@ namespace ClientRelationshipManagement.Web.Brokers.Storages;
 public interface IWorkflowBroker
 {
     IQueryable<Activity> Activities { get; } IQueryable<AgentMessageEntry> AgentMessageEntries { get; } IQueryable<AgentMessage> AgentMessages { get; }
-    IQueryable<ClientAccount> ClientAccounts { get; } IQueryable<Company> Companies { get; } IQueryable<CompanyContact> CompanyContacts { get; }
+    IQueryable<ClientAccount> ClientAccounts { get; } IQueryable<Company> Companies { get; } IQueryable<CompanyContact> CompanyContacts { get; } IQueryable<CompanyEvidence> CompanyEvidence { get; }
     IQueryable<CompanyHistoryItem> CompanyHistory { get; } IQueryable<EmailRecipient> EmailRecipients { get; } IQueryable<Email> Emails { get; }
     IQueryable<LeadContact> LeadContacts { get; } IQueryable<Lead> Leads { get; } IQueryable<Material> Materials { get; }
     IQueryable<Opportunity> Opportunities { get; } IQueryable<ProcessDefinition> ProcessDefinitions { get; } IQueryable<ProcessInstance> ProcessInstances { get; }

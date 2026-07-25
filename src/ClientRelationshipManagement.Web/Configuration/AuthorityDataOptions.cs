@@ -17,4 +17,6 @@ public sealed class AuthorityDataOptions
     public int MaxRunMinutes { get; set; } = 55;
     public int LeadIntakeIntervalSeconds { get; set; } = 60;
     public int MinimumRunnableWorkItems { get; set; } = 10;
+    public string[] PriorityCompanyNumbers { get; set; } = [];
+    public bool PriorityDiscoveryOnly { get; set; }
 }

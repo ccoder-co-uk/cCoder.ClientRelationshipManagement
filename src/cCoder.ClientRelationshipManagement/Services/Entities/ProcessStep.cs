@@ -103,7 +103,10 @@ internal sealed class ProcessStepFoundationService(IProcessStepStorageBroker bro
             Sequence = source.Sequence,
             IsEntryPoint = source.IsEntryPoint,
             IsActive = source.IsActive,
+            StepType = source.StepType,
+            ConfigurationJson = source.ConfigurationJson,
             ActionType = source.ActionType,
+            ExecutionMode = source.ExecutionMode,
             DueAfterDays = source.DueAfterDays,
             DueAfterHours = source.DueAfterHours,
             RelationshipStatusOnActivate = source.RelationshipStatusOnActivate,
@@ -135,7 +138,10 @@ internal sealed class ProcessStepFoundationService(IProcessStepStorageBroker bro
         target.Sequence = source.Sequence;
         target.IsEntryPoint = source.IsEntryPoint;
         target.IsActive = source.IsActive;
+        target.StepType = source.StepType;
+        target.ConfigurationJson = source.ConfigurationJson;
         target.ActionType = source.ActionType;
+        target.ExecutionMode = source.ExecutionMode;
         target.DueAfterDays = source.DueAfterDays;
         target.DueAfterHours = source.DueAfterHours;
         target.RelationshipStatusOnActivate = source.RelationshipStatusOnActivate;

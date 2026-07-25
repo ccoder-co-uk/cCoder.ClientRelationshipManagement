@@ -32,6 +32,7 @@ public partial class ClientRelationshipDbContext(
         ConfigureCompany(modelBuilder);
         ConfigureCompanyHistory(modelBuilder);
         ConfigureCompanyContact(modelBuilder);
+        ConfigureCompanyEvidence(modelBuilder);
         ConfigureLead(modelBuilder);
         ConfigureLeadContact(modelBuilder);
         ConfigureTenantCompanyRelationship(modelBuilder);

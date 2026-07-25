@@ -149,7 +149,6 @@ public sealed class AiProviderSelectionService : IAiProviderSelectionService
         AiProviderProfile sharedProfile = FindProfile(sharedProfileKey)
             ?? throw new ArgumentException("The selected shared-services AI profile is not configured.", nameof(sharedProfileKey));
         EnsureAvailable(sharedProfile);
-        string selectedSharedModel = ResolveModel(sharedProfile, sharedModel);
 
         IReadOnlyList<AiWorkLaneUpdate> updates = workLanes ?? [];
         if (updates.Count != Enum.GetValues<AgentWorkLane>().Length
@@ -157,6 +156,11 @@ public sealed class AiProviderSelectionService : IAiProviderSelectionService
         {
             throw new ArgumentException("A single configuration is required for every commercial work lane.", nameof(workLanes));
         }
+
+        AgentAutomationSetting setting = await GetOrCreateAsync(userId, cancellationToken);
+        string selectedSharedModel = ResolveModel(
+            sharedProfile,
+            ProfileChanged(setting.SelectedAiProfileKey, sharedProfile.Key) ? null : sharedModel);
 
         List<AiWorkLaneSelection> selections = [];
         foreach (AiWorkLaneUpdate update in updates)
@@ -169,7 +173,11 @@ public sealed class AiProviderSelectionService : IAiProviderSelectionService
                 : null;
             if (enabled)
                 EnsureAvailable(profile);
-            string selectedModel = enabled ? ResolveModel(profile, update.Model) : string.Empty;
+            string selectedModel = enabled
+                ? ResolveModel(
+                    profile,
+                    ProfileChanged(GetLaneProfileKey(setting, update.Lane), profile.Key) ? null : update.Model)
+                : string.Empty;
 
             selections.Add(new AiWorkLaneSelection(
                 update.Lane,
@@ -179,7 +187,6 @@ public sealed class AiProviderSelectionService : IAiProviderSelectionService
                 enabled ? ClampConcurrency(update.Concurrency, profile) : 1));
         }
 
-        AgentAutomationSetting setting = await GetOrCreateAsync(userId, cancellationToken);
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
         setting.SelectedAiProfileKey = sharedProfile.Key;
@@ -266,6 +273,17 @@ public sealed class AiProviderSelectionService : IAiProviderSelectionService
                 throw new ArgumentOutOfRangeException(nameof(lane), lane, "Unsupported AI work lane.");
         }
     }
+
+    static string GetLaneProfileKey(AgentAutomationSetting setting, AgentWorkLane lane) => lane switch
+    {
+        AgentWorkLane.Lead => setting.LeadAiProfileKey,
+        AgentWorkLane.Opportunity => setting.OpportunityAiProfileKey,
+        AgentWorkLane.Client => setting.ClientAiProfileKey,
+        _ => string.Empty
+    };
+
+    static bool ProfileChanged(string currentProfileKey, string requestedProfileKey) =>
+        !string.Equals(currentProfileKey?.Trim(), requestedProfileKey?.Trim(), StringComparison.OrdinalIgnoreCase);
 
     static IReadOnlyList<AiProviderProfile> BuildProfiles(
         AIConfiguration aiConfiguration,

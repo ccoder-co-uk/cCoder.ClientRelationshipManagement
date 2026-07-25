@@ -1,4 +1,5 @@
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
+using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace cCoder.ClientRelationshipManagement.Platform.Data;
@@ -10,6 +11,8 @@ public partial class ClientRelationshipDbContext
     {
         modelBuilder.Entity<ProcessStep>().ToTable("ProcessSteps", ProcessSchema);
         ConfigureAuditable<ProcessStep>(modelBuilder);
+        modelBuilder.Entity<ProcessStep>().Property(entity => entity.ExecutionMode).HasDefaultValue(ProcessStepExecutionMode.AgentManaged);
+        modelBuilder.Entity<ProcessStep>().Property(entity => entity.StepType).HasDefaultValue(ProcessStepType.AskAgent);
 
         modelBuilder.Entity<ProcessStep>().Property(entity => entity.Key).HasMaxLength(128).IsRequired();
         modelBuilder.Entity<ProcessStep>().Property(entity => entity.Name).HasMaxLength(256).IsRequired();

@@ -15,7 +15,10 @@ public sealed class SaveProcessStepRequest
     public int Sequence { get; set; }
     public bool IsEntryPoint { get; set; }
     public bool IsActive { get; set; } = true;
+    public ProcessStepType StepType { get; set; } = ProcessStepType.AskAgent;
+    public string ConfigurationJson { get; set; } = string.Empty;
     public ProcessActionType ActionType { get; set; }
+    public ProcessStepExecutionMode ExecutionMode { get; set; } = ProcessStepExecutionMode.AgentManaged;
     public RelationshipStatus? RelationshipStatusOnActivate { get; set; }
     public SalesPipelineStage? SalesStageOnActivate { get; set; }
     public ClientAccountStatus? ClientAccountStatusOnActivate { get; set; }

@@ -18,6 +18,9 @@ public class CompanyContact : ICrmEntity
     public string EmailAddress { get; set; }
     public string PhoneNumber { get; set; }
     public string LinkedInUrl { get; set; }
+    public string SourceUrl { get; set; }
+    public string SourceTitle { get; set; }
+    public DateTimeOffset? ObservedOn { get; set; }
     public string Notes { get; set; }
 
     public virtual Company Company { get; set; }

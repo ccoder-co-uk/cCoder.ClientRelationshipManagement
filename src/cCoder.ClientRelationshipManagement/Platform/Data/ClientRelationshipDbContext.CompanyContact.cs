@@ -13,11 +13,13 @@ public partial class ClientRelationshipDbContext
 
         modelBuilder.Entity<CompanyContact>().Property(entity => entity.LegacyId).HasMaxLength(128);
         modelBuilder.Entity<CompanyContact>().Property(entity => entity.SourceSystem).HasMaxLength(128);
-        modelBuilder.Entity<CompanyContact>().Property(entity => entity.Name).HasMaxLength(256).IsRequired();
+        modelBuilder.Entity<CompanyContact>().Property(entity => entity.Name).HasMaxLength(256);
         modelBuilder.Entity<CompanyContact>().Property(entity => entity.Position).HasMaxLength(256);
         modelBuilder.Entity<CompanyContact>().Property(entity => entity.EmailAddress).HasMaxLength(256);
         modelBuilder.Entity<CompanyContact>().Property(entity => entity.PhoneNumber).HasMaxLength(64);
         modelBuilder.Entity<CompanyContact>().Property(entity => entity.LinkedInUrl).HasMaxLength(512);
+        modelBuilder.Entity<CompanyContact>().Property(entity => entity.SourceUrl).HasMaxLength(2048);
+        modelBuilder.Entity<CompanyContact>().Property(entity => entity.SourceTitle).HasMaxLength(512);
 
         modelBuilder.Entity<CompanyContact>()
             .HasOne(entity => entity.Company)

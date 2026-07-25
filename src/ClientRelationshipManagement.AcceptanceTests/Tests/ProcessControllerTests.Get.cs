@@ -44,7 +44,10 @@ public sealed partial class ProcessControllerTests
         html.Should().Contain("Lead Generation");
         html.Should().Contain("Opportunity Conversion");
         html.Should().Contain("Client Maintenance");
-        html.Should().Contain("Assess Company Scale");
+        html.Should().Contain("Search Official Website");
+        html.Should().Contain("Evaluate Supply-Chain Finance Fit");
+        html.Should().Contain("Extract Published Contact Routes");
+        html.Should().Contain("Extract Related Companies");
         html.Should().Contain("Build Opportunity Summary");
         html.Should().Contain("Record Client Baseline");
         html.Should().Contain("Process contracts are complete");
@@ -87,11 +90,14 @@ public sealed partial class ProcessControllerTests
         html.Should().Contain("Resolve and verify recipient");
         html.Should().Contain("CRM.ValidateRecipientEmail");
         html.Should().Contain("Implicit inference");
-        html.Should().Contain("Find a Relevant Contact Route");
-        html.Should().Contain("transition-template-");
+        html.Should().Contain("Search Official Website");
+        html.Should().Contain("Evaluate Supply-Chain Finance Fit");
+        html.Should().Contain("Extract Published Contact Routes");
+        html.Should().Contain("Extract Related Companies");
+        html.Should().Contain("terminal-template-");
         html.Should().Contain("Current companies");
         html.Should().Contain("Why companies are here");
-        html.Should().Contain("data-nodes-per-stroke=\"5\"");
+        html.Should().Contain("data-layout=\"topology-aware\"");
         html.Should().Contain("data-terminal-column-reserved=\"true\"");
     }
 }

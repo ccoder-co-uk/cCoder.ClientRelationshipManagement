@@ -15,6 +15,7 @@ namespace ClientRelationshipManagement.Web.Controllers;
 
 public sealed class LeadsController(
     ISalesCoordinationService salesWorkspaceService,
+    IProcessCoordinationService processWorkspaceService,
     ILeadIngestionService leadIngestionService,
     IWorkflowAutomationService workflowAutomationService,
     ICRMAuthInfo authInfo,
@@ -29,8 +30,6 @@ public sealed class LeadsController(
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
-
-        await workflowAutomationService.EnsureCoverageAsync();
 
         string[] readableTenantIds = GetReadableTenantIds();
         string normalizedScope = scope?.Trim().ToLowerInvariant() ?? string.Empty;
@@ -232,6 +231,16 @@ public sealed class LeadsController(
                 Confidence = item.Confidence ?? string.Empty
             })
             .ToListAsync(cancellationToken);
+        List<LeadProcessStepOptionViewModel> processStepOptions = await processWorkspaceService.RetrieveSteps()
+            .AsNoTracking()
+            .Where(step => step.IsActive
+                && step.ProcessDefinition.TenantId == lead.TenantId
+                && step.ProcessDefinition.ScopeType == ProcessScopeType.Lead
+                && step.ProcessDefinition.IsActive
+                && step.ProcessDefinition.LifecycleState == ProcessDefinitionLifecycleState.Active)
+            .OrderBy(step => step.Sequence)
+            .Select(step => new LeadProcessStepOptionViewModel { Id = step.Id, Name = step.Name })
+            .ToListAsync(cancellationToken);
 
         return PartialView("_Details", new LeadDetailsViewModel
         {
@@ -244,6 +253,7 @@ public sealed class LeadsController(
             RankingRationale = lead.RankingRationale ?? lead.Company.RankingRationale ?? string.Empty,
             QualificationNotes = lead.QualificationNotes ?? string.Empty,
             SuppressionReason = lead.Company.ProspectingSuppressedReason ?? string.Empty,
+            ProcessStepOptions = processStepOptions,
             Contacts = [.. lead.Contacts.OrderByDescending(item => item.IsPrimary).Select(item => new LeadDetailContactViewModel
             {
                 Name = item.Name,
@@ -254,6 +264,40 @@ public sealed class LeadsController(
             Tasks = tasks,
             Artifacts = artifacts
         });
+    }
+
+    [HttpPost("/Leads/{id:guid}/MoveToProcessStep")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> MoveToProcessStep(
+        Guid id,
+        Guid processStepId,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        if (RedirectIfUnauthenticated() is IActionResult redirect)
+            return redirect;
+
+        string[] tenantIds = GetWriteableTenantIds();
+        bool canMove = await salesWorkspaceService.RetrieveLeads()
+            .AsNoTracking()
+            .AnyAsync(lead => lead.Id == id && tenantIds.Contains(lead.TenantId), cancellationToken);
+        if (!canMove)
+            return NotFound();
+
+        try
+        {
+            int moved = await workflowAutomationService.MoveLeadsToStepAsync(
+                [id], processStepId, reason, cancellationToken);
+            TempData["LeadsNotice"] = moved == 1
+                ? "Company moved to the selected process state."
+                : "The company could not be moved because it already has an opportunity.";
+        }
+        catch (WorkflowRuleViolationException exception)
+        {
+            TempData["LeadsNotice"] = exception.Message;
+        }
+
+        return RedirectToAction(nameof(Index));
     }
 
     static string NormalizeTaskFilter(string value) => value?.Trim().ToLowerInvariant() switch

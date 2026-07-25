@@ -437,6 +437,9 @@ public sealed class AgentWorkflowController(
                 CompanyRegistryUrl = company?.RegistryUri ?? string.Empty,
                 CompanySicCodes = company?.PrimarySicCodes ?? string.Empty,
                 CompanyRegisteredOffice = AddressRecordMapper.Format(company?.RegisteredAddress),
+                CompanyEmployeeCount = company?.EmployeeCount,
+                CompanyAnnualRevenue = company?.AnnualRevenue,
+                CompanyRevenueCurrency = company?.RevenueCurrency ?? string.Empty,
                 ExistingResearchSummary = company?.ResearchSummary ?? string.Empty,
                 ExistingQualificationNotes = task.Lead?.QualificationNotes ?? string.Empty,
                 ContactName = primaryContact?.CompanyContact?.Name ?? task.Lead?.Contacts.FirstOrDefault()?.Name ?? string.Empty,
@@ -481,7 +484,7 @@ public sealed class AgentWorkflowController(
             var taskContext = await processWorkspace.RetrieveTasks()
                 .AsNoTracking()
                 .Where(item => item.Id == processTaskId)
-                .Select(item => new { item.ActionType, StepKey = item.ProcessStep.Key })
+                .Select(item => new { item.ActionType, item.ProcessStep.ExecutionMode, StepKey = item.ProcessStep.Key })
                 .FirstOrDefaultAsync(cancellationToken);
 
             if (taskContext is null)
@@ -489,6 +492,9 @@ public sealed class AgentWorkflowController(
 
             if (taskContext.ActionType == ProcessActionType.Approval)
                 return Conflict("This workflow decision requires a human account owner.");
+
+            if (taskContext.ExecutionMode == ProcessStepExecutionMode.HumanManaged)
+                return Conflict("This workflow step is human managed and cannot be completed by an agent.");
 
             if (string.Equals(taskContext.StepKey, "review-response", StringComparison.OrdinalIgnoreCase))
             {
@@ -1110,6 +1116,37 @@ public sealed class AgentWorkflowController(
             return NotFound();
 
         DateTimeOffset now = DateTimeOffset.UtcNow;
+        string companyStatus = Normalize(request.CompanyStatus);
+        string companyStatusSourceUrl = Normalize(request.CompanyStatusSourceUrl);
+        if (companyStatus is not null)
+        {
+            if (!Regex.IsMatch(
+                    companyStatus,
+                    "^(dissolved|cancelled|canceled|closed|inactive|liquidation|removed|converted-closed)$",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                return BadRequest("Only an authoritative inactive company status may be applied through lead research.");
+            }
+
+            if (!IsAuthoritativeRegistryUrl(companyStatusSourceUrl))
+                return BadRequest("An authoritative Companies House, FCA, OSCR, or Charity Commission source URL is required to change company status.");
+
+            lead.Company.CompanyStatus = companyStatus;
+            lead.Company.DissolvedOn = request.DissolvedOn ?? lead.Company.DissolvedOn;
+            lead.Company.IsProspectingSuppressed = true;
+            lead.Company.ProspectingSuppressedOn ??= now;
+            lead.Company.ProspectingSuppressedReason = $"Authoritative public registry reports {companyStatus}. Source: {companyStatusSourceUrl}";
+            lead.Company.VerificationNotes = string.Join(
+                "\n",
+                new[]
+                {
+                    lead.Company.VerificationNotes?.Trim(),
+                    $"Current-status verification: {companyStatus}. Source: {companyStatusSourceUrl}"
+                }.Where(value => !string.IsNullOrWhiteSpace(value)));
+            lead.Company.LastUpdatedBy = CurrentExecutionUserId;
+            lead.Company.LastUpdated = now;
+        }
+
         lead.RawCompanyName = FirstNonEmpty(request.RawCompanyName, lead.RawCompanyName);
         lead.RawTradingName = Normalize(request.RawTradingName) ?? lead.RawTradingName;
         lead.RawCompanyNumber = Normalize(request.RawCompanyNumber) ?? lead.RawCompanyNumber;
@@ -1140,6 +1177,19 @@ public sealed class AgentWorkflowController(
         lead.QualificationNotes = Normalize(request.QualificationNotes) ?? lead.QualificationNotes;
         lead.LastUpdatedBy = CurrentExecutionUserId;
         lead.LastUpdated = now;
+
+        if (request.EmployeeCount.HasValue)
+            lead.Company.EmployeeCount = request.EmployeeCount.Value;
+        if (request.AnnualRevenue.HasValue)
+            lead.Company.AnnualRevenue = request.AnnualRevenue.Value;
+        string revenueCurrency = Normalize(request.RevenueCurrency);
+        if (revenueCurrency is not null)
+            lead.Company.RevenueCurrency = revenueCurrency;
+        if (request.EmployeeCount.HasValue || request.AnnualRevenue.HasValue || revenueCurrency is not null)
+        {
+            lead.Company.LastUpdatedBy = CurrentExecutionUserId;
+            lead.Company.LastUpdated = now;
+        }
 
         if (!string.IsNullOrWhiteSpace(request.ContactName)
             || !string.IsNullOrWhiteSpace(request.ContactEmailAddress)
@@ -1196,8 +1246,26 @@ public sealed class AgentWorkflowController(
             lead.Id,
             lead.RawCompanyName,
             lead.RawCompanyNumber,
-            lead.RawWebsiteUrl
+            lead.RawWebsiteUrl,
+            lead.Company.CompanyStatus,
+            lead.Company.DissolvedOn
         });
+    }
+
+    static bool IsAuthoritativeRegistryUrl(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out Uri uri) || uri.Scheme != Uri.UriSchemeHttps)
+            return false;
+
+        string host = uri.Host;
+        return host.Equals("find-and-update.company-information.service.gov.uk", StringComparison.OrdinalIgnoreCase)
+            || host.Equals("www.fca.org.uk", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".fca.org.uk", StringComparison.OrdinalIgnoreCase)
+            || (host.Equals("fcastoragemprprod.blob.core.windows.net", StringComparison.OrdinalIgnoreCase)
+                && uri.AbsolutePath.StartsWith("/societylist/", StringComparison.OrdinalIgnoreCase))
+            || host.Equals("www.oscr.org.uk", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".oscr.org.uk", StringComparison.OrdinalIgnoreCase)
+            || host.Equals("register-of-charities.charitycommission.gov.uk", StringComparison.OrdinalIgnoreCase);
     }
 
     [HttpPost("Leads/{leadId:guid}/ResearchFindings")]

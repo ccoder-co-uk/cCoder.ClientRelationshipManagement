@@ -48,7 +48,7 @@ public sealed class WorkflowAutomationService(
                 @Resource = N'crm.process-seed',
                 @LockMode = 'Exclusive',
                 @LockOwner = 'Transaction',
-                @LockTimeout = 30000;
+                @LockTimeout = 600000;
             """,
             cancellationToken);
 
@@ -162,7 +162,8 @@ public sealed class WorkflowAutomationService(
         string[] multiActionKeys =
         [
             "lead-research", "company-activity", "company-scale", "verify-company",
-            "commercial-fit", "qualify-lead", "confirm-route", "review-response", "opportunity-summary"
+            "gather-company-resources", "assess-scf-fit", "contact-research", "extract-related-companies",
+            "tip-related-companies", "commercial-fit", "qualify-lead", "confirm-route", "review-response", "opportunity-summary"
         ];
         List<PlatformEntities.ProcessStep> inferredSteps = await storage.ProcessSteps
             .Where(step => ((!processDefinitionId.HasValue
@@ -179,6 +180,12 @@ public sealed class WorkflowAutomationService(
 
     void AddInferredStepTasks(IWorkflowBroker storage, PlatformEntities.ProcessStep step, DateTimeOffset now)
     {
+        if (step.Key == "contact-research")
+        {
+            AddContactResearchStepTasks(storage, step, now);
+            return;
+        }
+
         string gatherHandler = step.Key switch
         {
             "confirm-route" => "CRM.ResolvePreferredContact",
@@ -200,6 +207,32 @@ public sealed class WorkflowAutomationService(
         infer.NextTaskKey = validate.Key;
         validate.FailureTaskKey = infer.Key;
         storage.AddRange(gather, infer, validate);
+    }
+
+    void AddContactResearchStepTasks(IWorkflowBroker storage, PlatformEntities.ProcessStep step, DateTimeOffset now)
+    {
+        PlatformEntities.ProcessStepTask gather = NewStepTask(step, "gather-company-resource-pack", "Gather company resource pack", 10,
+            ProcessStepTaskType.Operation, "CRM.GatherCompanyResourcePack",
+            "Deterministically discover a bounded set of identity-matched company pages, public profiles, reports, policies, and linked PDF resources. Record each fetched URL and retrieval result; do not infer a contact during collection.",
+            "company.identity-verification,company.website", "company.resource-pack", 1, now);
+        PlatformEntities.ProcessStepTask extract = NewStepTask(step, "extract-company-resource-text", "Extract resource text and passages", 20,
+            ProcessStepTaskType.Operation, "CRM.ExtractCompanyResourceText",
+            "Deterministically convert fetched HTML and PDF resources into normalized text, extracted emails, phones, links, and ranked source-addressable passages. Preserve URL provenance and do not decide which person is relevant.",
+            "company.resource-pack", "company.evidence-passages", 1, now);
+        PlatformEntities.ProcessStepTask infer = NewStepTask(step, "infer-company-fact", "Infer the requested company fact", 30,
+            ProcessStepTaskType.Inference, "CRM.InferCompanyFact",
+            "From the supplied evidence passages only, identify a current named financial decision-maker or procurement lead and that same person's explicitly published email. Interpret arbitrary source layouts and reason across sources. Do not browse, guess an email, or treat a generic mailbox as a person.",
+            "company.evidence-passages", "contact.proposed", 3, now);
+        PlatformEntities.ProcessStepTask persist = NewStepTask(step, "validate-and-persist-company-fact", "Validate and persist the company fact", 40,
+            ProcessStepTaskType.Validation, "CRM.ValidateAndPersistCompanyFact",
+            "Deterministically require the cited opened passages to prove the company match, allowed current role, full person name, and the exact published personal email. Persist the structured contact and source URLs only after validation; otherwise record the inspected resource pack as a no-contact result.",
+            "company.evidence-passages,contact.proposed", "lead.contact-name,lead.contact-role,lead.contact-email,lead.contact-source,contact.outcome", 3, now);
+        gather.NextTaskKey = extract.Key;
+        extract.NextTaskKey = infer.Key;
+        infer.NextTaskKey = persist.Key;
+        infer.FailureTaskKey = extract.Key;
+        persist.FailureTaskKey = infer.Key;
+        storage.AddRange(gather, extract, infer, persist);
     }
 
     PlatformEntities.ProcessStepTask NewStepTask(
@@ -725,6 +758,7 @@ public sealed class WorkflowAutomationService(
         await EnsureRequiredEvidenceStepsAsync(storage, tenantId, cancellationToken);
         await EnsureLeadContactResearchStepAsync(storage, tenantId, cancellationToken);
         await EnsureLeadContactGateContractsAsync(storage, tenantId, cancellationToken);
+        await EnsureMinimalLeadQualificationShapeAsync(storage, tenantId, cancellationToken);
         await storage.SaveAsync(cancellationToken);
 
         List<PlatformEntities.ProcessStep> steps = await storage.ProcessSteps
@@ -752,6 +786,8 @@ public sealed class WorkflowAutomationService(
 
         await storage.SaveAsync(cancellationToken);
         await ReevaluateDeferredLeadsMissingContactResearchAsync(storage, tenantId, cancellationToken);
+        await ReevaluateDeferredLeadsWithUnpersistedContactResearchAsync(storage, tenantId, cancellationToken);
+        await ReevaluateDeferredLeadsWithObsoleteNoContactResearchAsync(storage, tenantId, cancellationToken);
     }
 
     async ValueTask ReevaluateDeferredLeadsMissingContactResearchAsync(
@@ -763,7 +799,11 @@ public sealed class WorkflowAutomationService(
             .Where(lead => lead.TenantId == tenantId
                 && lead.Status == LeadStatus.Deferred
                 && !storage.ProcessTasks.Any(task => task.LeadId == lead.Id
-                    && task.ProcessStep.Key == "contact-research"))
+                    && task.ProcessStep.Key == "contact-research")
+                && !storage.ProcessTasks.Any(task => task.LeadId == lead.Id
+                    && task.ProcessStep.Key == "commercial-fit"
+                    && task.State == ProcessTaskState.Completed
+                    && task.CompletionNotes.Contains("Supplier complexity:")))
             .ToListAsync(cancellationToken);
 
         foreach (PlatformEntities.Lead lead in leads)
@@ -779,6 +819,78 @@ public sealed class WorkflowAutomationService(
             await storage.SaveAsync(cancellationToken);
             loggingBroker.LogInformation(
                 "Requeued {LeadCount} deferred lead(s) that had never received public-web contact research.",
+                leads.Count);
+        }
+    }
+
+    async ValueTask ReevaluateDeferredLeadsWithUnpersistedContactResearchAsync(
+        IWorkflowBroker storage,
+        string tenantId,
+        CancellationToken cancellationToken)
+    {
+        List<PlatformEntities.Lead> leads = await storage.Leads
+            .Where(lead => lead.TenantId == tenantId
+                && lead.Status == LeadStatus.Deferred
+                && !storage.LeadContacts.Any(contact => contact.LeadId == lead.Id
+                    && !string.IsNullOrWhiteSpace(contact.Name)
+                    && contact.Name != "Researched contact"
+                    && !string.IsNullOrWhiteSpace(contact.EmailAddress))
+                && storage.ProcessTasks.Any(task => task.LeadId == lead.Id
+                    && task.ProcessStep.Key == "contact-research"
+                    && task.State == ProcessTaskState.Completed
+                    && task.CompletionNotes.Contains("Contact found: yes")
+                    && !task.CompletionNotes.Contains("[RETRACTED:")))
+            .ToListAsync(cancellationToken);
+
+        foreach (PlatformEntities.Lead lead in leads)
+        {
+            lead.Status = LeadStatus.Imported;
+            lead.LastUpdatedBy = CurrentUserId;
+            lead.LastUpdated = DateTimeOffset.UtcNow;
+            await EnsureLeadCoverageAsync(storage, lead, true, cancellationToken);
+        }
+
+        if (leads.Count > 0)
+        {
+            await storage.SaveAsync(cancellationToken);
+            loggingBroker.LogInformation(
+                "Requeued {LeadCount} deferred lead(s) whose completed contact research claimed a contact without structured persistence.",
+                leads.Count);
+        }
+    }
+
+    async ValueTask ReevaluateDeferredLeadsWithObsoleteNoContactResearchAsync(
+        IWorkflowBroker storage,
+        string tenantId,
+        CancellationToken cancellationToken)
+    {
+        List<PlatformEntities.Lead> leads = await storage.Leads
+            .Where(lead => lead.TenantId == tenantId
+                && lead.Status == LeadStatus.Deferred
+                && !storage.LeadContacts.Any(contact => contact.LeadId == lead.Id
+                    && !string.IsNullOrWhiteSpace(contact.Name)
+                    && contact.Name != "Researched contact"
+                    && !string.IsNullOrWhiteSpace(contact.EmailAddress))
+                && storage.ProcessTasks.Any(task => task.LeadId == lead.Id
+                    && task.ProcessStep.Key == "contact-research"
+                    && task.State == ProcessTaskState.Completed
+                    && task.CompletionNotes.Contains("Contact found: no")
+                    && !task.CompletionNotes.Contains("Leadership searches:")))
+            .ToListAsync(cancellationToken);
+
+        foreach (PlatformEntities.Lead lead in leads)
+        {
+            lead.Status = LeadStatus.Imported;
+            lead.LastUpdatedBy = CurrentUserId;
+            lead.LastUpdated = DateTimeOffset.UtcNow;
+            await EnsureLeadCoverageAsync(storage, lead, true, cancellationToken);
+        }
+
+        if (leads.Count > 0)
+        {
+            await storage.SaveAsync(cancellationToken);
+            loggingBroker.LogInformation(
+                "Requeued {LeadCount} deferred lead(s) whose no-contact research predates the focused leadership-search contract.",
                 leads.Count);
         }
     }
@@ -937,25 +1049,50 @@ public sealed class WorkflowAutomationService(
                 "company.primary-activity",
                 "Evidence: the activity description informs fit without deciding it."),
             (ProcessScopeType.Lead, "company-scale") => new(
-                "Establish the strongest evidence available for organisational scale without guessing.",
+                "Establish annual turnover as the primary commercial scale measure and employee count as supporting evidence, without guessing.",
                 "company.identity, company.primary-activity",
-                "company.scale",
-                "Evidence: scale supports prioritisation and fit; unknown evidence holds only decisions that require a size threshold."),
+                "company.annual-turnover, company.employee-count, company.scale",
+                "Gate evidence: turnover is primary; headcount is retained and used only as a fallback when turnover is unavailable."),
             (ProcessScopeType.Lead, "verify-company") => new(
                 "Assess whether the record has enough reliable evidence for commercial scoring.",
                 "company.identity-verification, company.primary-activity, company.status",
                 "company.data-quality",
                 "Gate: missing critical evidence is held for remediation; missing optional evidence is recorded."),
             (ProcessScopeType.Lead, "commercial-fit") => new(
-                "Score whether this organisation is commercially worth pursuing using verified evidence only.",
-                "company.identity-verification, company.primary-activity, company.data-quality, company.scale",
-                "company.fit-score, company.opening-angle",
-                "Score: increases or decreases qualification viability and supplies the first outreach angle."),
+                "Decide whether scale and supplier complexity justify named-contact research for Corporate Linx supply-chain-finance products.",
+                "company.identity-verification, company.current-status, company.primary-activity, company.data-quality, company.scale",
+                "company.fit-score, company.opening-angle, company.contact-research-decision",
+                "Gate: only scores of at least 60 proceed; turnover under 2m defers, while turnover under 10m or unknown requires strong supplier-complexity evidence."),
+            (ProcessScopeType.Lead, "gather-company-resources") => new(
+                "Build one bounded, reusable evidence pack from the authoritative company's own website.",
+                "company.authoritative-source",
+                "company.first-party-resource-pack",
+                "Evidence only: collection does not decide commercial fit, contact relevance, or qualification."),
+            (ProcessScopeType.Lead, "assess-scf-fit") => new(
+                "Decide whether the first-party evidence supports a credible supply-chain-finance conversation and record one opening angle.",
+                "company.first-party-resource-pack",
+                "company.activity, company.pitchable, company.opening-angle, company.scale-observations",
+                "Gate evidence: the result informs final qualification but does not perform contact research."),
+            (ProcessScopeType.Lead, "contact-research") => new(
+                "Extract every published contact route from the evidence pack and select the best usable route into the company.",
+                "company.first-party-resource-pack",
+                "company.published-contacts, lead.primary-contact, lead.reachability",
+                "Gate evidence: direct or indirect reachability requires an explicitly published email; no address may be inferred."),
+            (ProcessScopeType.Lead, "extract-related-companies") => new(
+                "Extract explicitly named customers, suppliers and commercial partners from the evidence pack with source provenance.",
+                "company.first-party-resource-pack",
+                "company.related-companies",
+                "Discovery only: relationships expand the target frontier but never qualify either company by themselves."),
+            (ProcessScopeType.Lead, "tip-related-companies") => new(
+                "Match first-party related-company evidence to the existing Companies House pool and queue unseen exact matches.",
+                "company.related-companies",
+                "lead.related-company-tip-in",
+                "Discovery: expands the bounded target frontier before general pool intake; the relationship is supporting evidence, not automatic qualification."),
             (ProcessScopeType.Lead, "qualify-lead") => new(
-                "Apply the declared qualification rule without doing additional research.",
-                "company.identity-verification, company.status, company.scale, company.fit-score",
+                "Create an opportunity when the authoritative company record is current, pitchable, and reachable through a published email route.",
+                "company.authoritative-source, company.pitchable, lead.reachability, lead.primary-contact",
                 "company.qualification-decision",
-                "Gate: qualified creates an opportunity; inactive or proven-invalid records stop; current low-fit or insufficient-evidence records are deferred for later reassessment."),
+                "Gate: pitchable plus a published direct or indirect email route qualifies; inactive entities stop and other incomplete records defer."),
             (ProcessScopeType.Opportunity, "confirm-route") => new(
                 "Identify a usable decision-maker or contact route for the qualified opportunity.",
                 "company.qualification-decision, company.opening-angle",
@@ -1017,9 +1154,6 @@ public sealed class WorkflowAutomationService(
         bool forceCreate = false,
         CancellationToken cancellationToken = default)
     {
-        await EnsureSeedProcessesAsync(cancellationToken);
-
-
         await NormaliseImportedCompanyNamesAsync(storage, cancellationToken);
         await NormaliseImportedEmailStatesAsync(storage, opportunityId, clientAccountId, cancellationToken);
 
@@ -1070,6 +1204,345 @@ public sealed class WorkflowAutomationService(
         return leads.Count;
     }
 
+    public async ValueTask<int> MoveLeadsToStepAsync(
+        IReadOnlyCollection<Guid> leadIds,
+        Guid processStepId,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        Guid[] distinctLeadIds = [.. (leadIds ?? []).Where(id => id != Guid.Empty).Distinct()];
+        if (distinctLeadIds.Length == 0)
+            return 0;
+
+        PlatformEntities.ProcessStep targetStep = await storage.ProcessSteps
+            .Include(step => step.ProcessDefinition)
+            .FirstOrDefaultAsync(step => step.Id == processStepId
+                && step.IsActive
+                && step.ProcessDefinition.IsActive
+                && step.ProcessDefinition.LifecycleState == ProcessDefinitionLifecycleState.Active
+                && step.ProcessDefinition.ScopeType == ProcessScopeType.Lead,
+                cancellationToken)
+            ?? throw new WorkflowRuleViolationException("The selected lead process state is not active.");
+
+        List<PlatformEntities.Lead> leads = await storage.Leads
+            .Include(lead => lead.Company)
+            .Where(lead => distinctLeadIds.Contains(lead.Id)
+                && lead.TenantId == targetStep.ProcessDefinition.TenantId
+                && lead.OpportunityId == null)
+            .ToListAsync(cancellationToken);
+        if (leads.Count == 0)
+            return 0;
+
+        Guid[] eligibleLeadIds = [.. leads.Select(lead => lead.Id)];
+        List<PlatformEntities.ProcessInstance> activeInstances = await storage.ProcessInstances
+            .Where(instance => instance.LeadId.HasValue
+                && eligibleLeadIds.Contains(instance.LeadId.Value)
+                && instance.State == ProcessInstanceState.Active)
+            .ToListAsync(cancellationToken);
+        Guid[] activeInstanceIds = [.. activeInstances.Select(instance => instance.Id)];
+        List<PlatformEntities.ProcessTask> pendingTasks = activeInstanceIds.Length == 0
+            ? []
+            : await storage.ProcessTasks
+                .Include(task => task.StepTaskRuns)
+                .Where(task => activeInstanceIds.Contains(task.ProcessInstanceId)
+                    && task.State == ProcessTaskState.Pending)
+                .ToListAsync(cancellationToken);
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        string moveReason = FirstNonEmpty(Normalize(reason), "Manually moved by an operator after reviewing the company evidence.");
+        foreach (PlatformEntities.ProcessTask task in pendingTasks)
+        {
+            task.State = ProcessTaskState.Cancelled;
+            task.CompletionOutcomeKey = "operator-state-move";
+            task.CompletionNotes = moveReason;
+            task.CompletedBy = CurrentUserId;
+            task.CompletedOn = now;
+            task.AgentClaimId = null;
+            task.AgentClaimedBy = null;
+            task.AgentClaimedOn = null;
+            task.AgentClaimExpiresOn = null;
+            task.LastUpdatedBy = CurrentUserId;
+            task.LastUpdated = now;
+            foreach (PlatformEntities.ProcessStepTaskRun run in task.StepTaskRuns
+                .Where(run => run.State != ProcessStepTaskRunState.Completed
+                    && run.State != ProcessStepTaskRunState.Cancelled))
+            {
+                run.State = ProcessStepTaskRunState.Cancelled;
+                run.CompletedOn = now;
+                run.ValidationErrors = "Superseded by an operator process-state move.";
+                run.LastUpdatedBy = CurrentUserId;
+                run.LastUpdated = now;
+            }
+        }
+
+        foreach (PlatformEntities.ProcessInstance instance in activeInstances)
+        {
+            instance.State = ProcessInstanceState.Cancelled;
+            instance.CompletionOutcomeKey = "operator-state-move";
+            instance.CompletedOn = now;
+            instance.CurrentProcessStepId = null;
+            instance.CurrentProcessTaskId = null;
+            instance.LastUpdatedBy = CurrentUserId;
+            instance.LastUpdated = now;
+        }
+
+        foreach (PlatformEntities.Lead lead in leads)
+        {
+            lead.Status = LeadStatus.Imported;
+            lead.QualificationNotes = AppendNote(
+                lead.QualificationNotes,
+                $"## Operator process-state move\nTarget: {targetStep.Name}\nReason: {moveReason}\nRecorded: {now:O}");
+            lead.LastUpdatedBy = CurrentUserId;
+            lead.LastUpdated = now;
+            if (lead.Company is not null)
+            {
+                lead.Company.IsProspectingSuppressed = false;
+                lead.Company.ProspectingSuppressedReason = null;
+                lead.Company.ProspectingSuppressedOn = null;
+                Touch(lead.Company, now);
+            }
+
+            PlatformEntities.ProcessInstance instance = new()
+            {
+                Id = Guid.NewGuid(),
+                ProcessDefinitionId = targetStep.ProcessDefinitionId,
+                LeadId = lead.Id,
+                CurrentProcessStepId = targetStep.Id,
+                State = ProcessInstanceState.Active,
+                StartedOn = now,
+                CreatedBy = CurrentUserId,
+                LastUpdatedBy = CurrentUserId,
+                CreatedOn = now,
+                LastUpdated = now
+            };
+            storage.Add(instance);
+            storage.Add(new PlatformEntities.CompanyHistoryItem
+            {
+                Id = Guid.NewGuid(),
+                CompanyId = lead.CompanyId,
+                TenantId = lead.TenantId,
+                OccurredOn = now,
+                Lane = "Lead",
+                EventType = "lead-process-state-moved",
+                Summary = $"Moved to {targetStep.Name}",
+                Details = moveReason,
+                FactKey = "lead.process-state",
+                FactValue = targetStep.Key,
+                Confidence = "operator",
+                SourceType = "Manual",
+                ProcessDefinitionId = targetStep.ProcessDefinitionId,
+                ProcessInstanceId = instance.Id,
+                ProcessStepId = targetStep.Id,
+                IsPrivate = true,
+                CreatedBy = CurrentUserId,
+                LastUpdatedBy = CurrentUserId,
+                CreatedOn = now,
+                LastUpdated = now
+            });
+            await storage.SaveAsync(cancellationToken);
+            PlatformEntities.ProcessTask task = await CreateTaskForStepAsync(storage, instance, targetStep, cancellationToken);
+            instance.CurrentProcessTaskId = task.Id;
+        }
+
+        await storage.SaveAsync(cancellationToken);
+        return leads.Count;
+    }
+
+    public async ValueTask<RelatedCompanyTipInResult> PromoteRelatedCompaniesAsync(
+        Guid sourceLeadId,
+        CancellationToken cancellationToken = default)
+    {
+        PlatformEntities.Lead sourceLead = await storage.Leads
+            .Include(lead => lead.Company)
+            .FirstOrDefaultAsync(lead => lead.Id == sourceLeadId, cancellationToken);
+        if (sourceLead?.Company is null)
+            return new(0, 0, 0, [], [], []);
+
+        List<string> recordedValues = await storage.CompanyHistory
+            .AsNoTracking()
+            .Where(item => item.CompanyId == sourceLead.CompanyId
+                && item.TenantId == sourceLead.TenantId
+                && item.FactKey == "company.related-companies"
+                && item.FactValue != null)
+            .OrderByDescending(item => item.OccurredOn)
+            .Select(item => item.FactValue)
+            .Take(10)
+            .ToListAsync(cancellationToken);
+        recordedValues = [.. recordedValues.Select(ExtractRelatedCompanyFactValue)];
+        recordedValues.AddRange(Regex.Matches(
+                sourceLead.QualificationNotes ?? string.Empty,
+                @"(?im)^Related companies:[\t ]*(?<value>[^\r\n]*)$",
+                RegexOptions.CultureInvariant)
+            .Select(match => match.Groups["value"].Value));
+
+        string sourceName = CompanyNames.ResolvePreferredName(sourceLead.Company);
+        List<string> candidates = recordedValues
+            .SelectMany(value => (value ?? string.Empty).Split(
+                [';', '\r', '\n'],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Select(NormalizeRelatedCompanyName)
+            .Where(name => !string.IsNullOrWhiteSpace(name)
+                && !string.Equals(name, "none", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(name, sourceName, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(40)
+            .ToList();
+        if (candidates.Count == 0)
+            return new(0, 0, 0, [], [], []);
+
+        string[] expandedNames = [.. candidates
+            .SelectMany(ExpandCompanyNameVariants)
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
+        // OfficialName is the canonical Companies House name and is indexed. The
+        // expanded variants already cover common legal suffixes, so including the
+        // unindexed legal/trading columns here turns a small exact-name lookup into
+        // a scan of the entire company pool for little additional matching value.
+        List<PlatformEntities.Company> possibleMatches = await storage.Companies
+            .AsNoTracking()
+            .Where(company => company.SourceSystem == "CompaniesHouse"
+                && company.IsVerified
+                && expandedNames.Contains(company.OfficialName))
+            .ToListAsync(cancellationToken);
+
+        Dictionary<string, PlatformEntities.Company> matchedByCandidate = [];
+        foreach (string candidate in candidates)
+        {
+            string normalizedCandidate = NormalizeCompanyNameForMatch(candidate);
+            PlatformEntities.Company match = possibleMatches
+                .Where(company => !company.IsProspectingSuppressed)
+                .Where(company => company.SourceSystem == "CompaniesHouse" && company.IsVerified)
+                .OrderByDescending(company => string.Equals(company.CompanyStatus, "active", StringComparison.OrdinalIgnoreCase))
+                .ThenByDescending(company => company.AnnualRevenue)
+                .FirstOrDefault(company => new[]
+                {
+                    company.OfficialName, company.LegalEntityName, company.TradingName
+                }.Any(name => NormalizeCompanyNameForMatch(name) == normalizedCandidate));
+            if (match is not null)
+                matchedByCandidate[candidate] = match;
+        }
+
+        Guid[] matchedCompanyIds = [.. matchedByCandidate.Values.Select(company => company.Id).Distinct()];
+        HashSet<Guid> existingLeadCompanyIds = matchedCompanyIds.Length == 0
+            ? []
+            : await storage.Leads.AsNoTracking()
+                .Where(lead => lead.TenantId == sourceLead.TenantId && matchedCompanyIds.Contains(lead.CompanyId))
+                .Select(lead => lead.CompanyId)
+                .ToHashSetAsync(cancellationToken);
+        HashSet<Guid> existingRelationshipCompanyIds = matchedCompanyIds.Length == 0
+            ? []
+            : await storage.TenantCompanyRelationships.AsNoTracking()
+                .Where(relationship => relationship.TenantId == sourceLead.TenantId
+                    && matchedCompanyIds.Contains(relationship.CompanyId))
+                .Select(relationship => relationship.CompanyId)
+                .ToHashSetAsync(cancellationToken);
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        List<PlatformEntities.Lead> promoted = [];
+        List<string> alreadyKnown = [];
+        foreach ((string candidate, PlatformEntities.Company company) in matchedByCandidate)
+        {
+            if (existingLeadCompanyIds.Contains(company.Id)
+                || existingRelationshipCompanyIds.Contains(company.Id)
+                || promoted.Any(lead => lead.CompanyId == company.Id))
+            {
+                alreadyKnown.Add(CompanyNames.ResolvePreferredName(company));
+                continue;
+            }
+
+            string companyName = CompanyNames.ResolvePreferredName(company);
+            PlatformEntities.Lead lead = new()
+            {
+                Id = Guid.NewGuid(),
+                SourceSystem = company.SourceSystem,
+                SourceRecordId = company.SourceRecordId ?? company.CompanyNumber,
+                SourceFileName = "Related-company discovery",
+                TenantId = sourceLead.TenantId,
+                Status = LeadStatus.Imported,
+                RawCompanyName = companyName,
+                RawTradingName = company.TradingName,
+                RawCompanyNumber = company.CompanyNumber,
+                RawVatNumber = company.VatNumber,
+                RawWebsiteUrl = company.WebsiteUrl,
+                RawContactEmailAddress = company.ContactEmailAddress,
+                RawContactPhoneNumber = company.ContactPhoneNumber,
+                QualificationNotes = $"Related-company discovery seed: named by {sourceName} on first-party published material.\nRelated name observed: {candidate}",
+                RankingScore = Math.Max(90, company.RankingScore ?? 0),
+                RankingRationale = $"Related to researched company {sourceName}; relationship is first-party evidence and must be independently qualified.",
+                CompanyId = company.Id,
+                CreatedBy = CurrentUserId,
+                LastUpdatedBy = CurrentUserId,
+                CreatedOn = now,
+                LastUpdated = now
+            };
+            storage.Add(lead);
+            storage.Add(new PlatformEntities.CompanyHistoryItem
+            {
+                Id = Guid.NewGuid(), CompanyId = company.Id, TenantId = sourceLead.TenantId,
+                OccurredOn = now, Lane = "Lead", EventType = "related-company-tipped-in",
+                Summary = $"Tipped in from {sourceName}",
+                Details = $"The official research for {sourceName} explicitly named {candidate}.",
+                FactKey = "lead.discovery-source", FactValue = sourceLead.CompanyId.ToString(),
+                Confidence = "medium", SourceType = "ProcessTask", SourceId = sourceLead.Id,
+                IsPrivate = true, CreatedBy = CurrentUserId, LastUpdatedBy = CurrentUserId,
+                CreatedOn = now, LastUpdated = now
+            });
+            promoted.Add(lead);
+        }
+
+        await storage.SaveAsync(cancellationToken);
+        foreach (PlatformEntities.Lead lead in promoted)
+            await EnsureCoverageAsync(leadId: lead.Id, forceCreate: true, cancellationToken: cancellationToken);
+
+        List<string> unmatched = [.. candidates.Where(candidate => !matchedByCandidate.ContainsKey(candidate))];
+        return new(
+            candidates.Count,
+            matchedByCandidate.Count,
+            promoted.Count,
+            [.. promoted.Select(lead => lead.RawCompanyName)],
+            [.. alreadyKnown.Distinct(StringComparer.OrdinalIgnoreCase)],
+            unmatched);
+    }
+
+    static string NormalizeRelatedCompanyName(string value) => Regex.Replace(
+        (value ?? string.Empty).Trim().Trim('.', ',', ':', '-', '–', '—'),
+        @"^(?:customer|client|supplier|partner|works? with|including)\s*[:\-]?\s*",
+        string.Empty,
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Trim();
+
+    static string ExtractRelatedCompanyFactValue(string value)
+    {
+        Match match = Regex.Match(
+            value ?? string.Empty,
+            @"(?im)^Related companies:[\t ]*(?<value>[^\r\n]*)$",
+            RegexOptions.CultureInvariant);
+        return match.Success
+            ? match.Groups["value"].Value.Trim()
+            : (value ?? string.Empty).Trim();
+    }
+
+    static IEnumerable<string> ExpandCompanyNameVariants(string value)
+    {
+        string name = NormalizeRelatedCompanyName(value);
+        if (string.IsNullOrWhiteSpace(name))
+            return [];
+        string stem = Regex.Replace(
+            name,
+            @"\s+(?:PUBLIC LIMITED COMPANY|PLC|LIMITED|LTD|LLP)$",
+            string.Empty,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Trim();
+        return new[] { name, stem, $"{stem} PLC", $"{stem} LIMITED", $"{stem} LTD" };
+    }
+
+    static string NormalizeCompanyNameForMatch(string value) => Regex.Replace(
+        Regex.Replace(
+            (value ?? string.Empty).ToUpperInvariant(),
+            @"\s+(?:PUBLIC LIMITED COMPANY|PLC|LIMITED|LTD|LLP)$",
+            string.Empty,
+            RegexOptions.CultureInvariant),
+        @"[^A-Z0-9]",
+        string.Empty,
+        RegexOptions.CultureInvariant);
+
     public async ValueTask<PlatformEntities.ProcessTask> CompleteTaskAsync(
         ProcessTaskCompletionCommand command,
         CancellationToken cancellationToken = default)
@@ -1084,6 +1557,20 @@ public sealed class WorkflowAutomationService(
 
         if (task is null)
             return null;
+
+        // Agent CLI work completes through the web app while the hosted worker
+        // retains its scoped workflow context. Refresh both entities so the next
+        // step is checked against the process pointer written by that external
+        // completion, not an earlier tracked snapshot.
+        await storage.ReloadAsync(task, cancellationToken);
+        if (task.ProcessInstance is not null)
+            await storage.ReloadAsync(task.ProcessInstance, cancellationToken);
+
+        if (task.ProcessStep.Key == "current-status-research" && task.LeadId.HasValue)
+            await ValidateCurrentStatusCompletionAsync(storage, task.LeadId.Value, command.OutcomeKey, command.CompletionNote, cancellationToken);
+
+        if (task.ProcessStep.Key == "contact-research" && task.LeadId.HasValue)
+            await ValidateContactResearchCompletionAsync(storage, task.LeadId.Value, command.CompletionNote, cancellationToken);
 
         await CompleteTaskAsync(storage, task, command.OutcomeKey, command.CompletionNote, cancellationToken);
         await storage.SaveAsync(cancellationToken);
@@ -1826,6 +2313,109 @@ public sealed class WorkflowAutomationService(
         return task;
     }
 
+    static async ValueTask ValidateCurrentStatusCompletionAsync(
+        IWorkflowBroker storage,
+        Guid leadId,
+        string outcomeKey,
+        string completionNote,
+        CancellationToken cancellationToken)
+    {
+        PlatformEntities.Lead lead = await storage.Leads.AsNoTracking()
+            .Include(item => item.Company)
+            .FirstOrDefaultAsync(item => item.Id == leadId, cancellationToken);
+        if (lead?.Company is null)
+            throw new WorkflowRuleViolationException("The current-status lead no longer exists.");
+
+        string note = completionNote ?? string.Empty;
+        string[] authoritativeUrls = [.. Regex.Matches(note, @"https?://[^\s;,]+", RegexOptions.IgnoreCase)
+            .Select(match => match.Value.TrimEnd('.', ')', ']'))
+            .Where(IsAuthoritativeStatusSource)
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
+
+        if (string.Equals(outcomeKey, "status-current", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!note.Contains("Current status: active", StringComparison.OrdinalIgnoreCase)
+                || authoritativeUrls.Length == 0)
+            {
+                throw new WorkflowRuleViolationException("The status-current outcome requires an exact active finding and an authoritative registry source URL.");
+            }
+        }
+        else if (string.Equals(outcomeKey, "status-inactive", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!IsPersistedInactiveStatus(lead.Company.CompanyStatus) || authoritativeUrls.Length == 0)
+                throw new WorkflowRuleViolationException("The status-inactive outcome requires persisted inactive company status and an authoritative registry source URL.");
+        }
+        else if (!string.Equals(outcomeKey, "status-unconfirmed", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new WorkflowRuleViolationException("Use status-current, status-inactive, or status-unconfirmed for current-status research.");
+        }
+    }
+
+    static bool IsAuthoritativeStatusSource(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out Uri uri) || uri.Scheme != Uri.UriSchemeHttps)
+            return false;
+
+        string host = uri.Host;
+        return host.Equals("find-and-update.company-information.service.gov.uk", StringComparison.OrdinalIgnoreCase)
+            || host.Equals("www.fca.org.uk", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".fca.org.uk", StringComparison.OrdinalIgnoreCase)
+            || (host.Equals("fcastoragemprprod.blob.core.windows.net", StringComparison.OrdinalIgnoreCase)
+                && uri.AbsolutePath.StartsWith("/societylist/", StringComparison.OrdinalIgnoreCase))
+            || host.Equals("www.oscr.org.uk", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".oscr.org.uk", StringComparison.OrdinalIgnoreCase)
+            || host.Equals("register-of-charities.charitycommission.gov.uk", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static bool IsPersistedInactiveStatus(string status) =>
+        Regex.IsMatch(
+            status ?? string.Empty,
+            "dissolved|cancelled|canceled|liquidation|removed|closed|inactive|converted-closed",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    static async ValueTask ValidateContactResearchCompletionAsync(
+        IWorkflowBroker storage,
+        Guid leadId,
+        string completionNote,
+        CancellationToken cancellationToken)
+    {
+        PlatformEntities.Lead lead = await storage.Leads.AsNoTracking()
+            .FirstOrDefaultAsync(item => item.Id == leadId, cancellationToken);
+        if (lead is null)
+            throw new WorkflowRuleViolationException("The contact-research lead no longer exists.");
+
+        string note = completionNote ?? string.Empty;
+        Match reachabilityMatch = Regex.Match(
+            note,
+            @"(?im)^\s*Reachability:\s*(?<value>direct|indirect|none)\.?\s*$",
+            RegexOptions.CultureInvariant);
+        if (!reachabilityMatch.Success)
+            throw new WorkflowRuleViolationException("Published-contact research must explicitly record Reachability as direct, indirect, or none.");
+
+        string reachability = reachabilityMatch.Groups["value"].Value;
+        bool claimsReachable = !reachability.Equals("none", StringComparison.OrdinalIgnoreCase);
+        bool hasPersistedEmail = await storage.LeadContacts.AsNoTracking().AnyAsync(
+            contact => contact.LeadId == leadId && !string.IsNullOrWhiteSpace(contact.EmailAddress),
+            cancellationToken);
+        if (claimsReachable && !hasPersistedEmail)
+            throw new WorkflowRuleViolationException("Direct or indirect reachability requires a published email to be persisted on the lead before completion.");
+
+        Match pagesInspected = Regex.Match(
+            note,
+            @"(?im)^\s*Pages inspected:\s*(?<urls>[^\r\n]*)$",
+            RegexOptions.CultureInvariant);
+        string[] inspectedUrls = [.. Regex.Matches(
+                pagesInspected.Success ? pagesInspected.Groups["urls"].Value : string.Empty,
+                @"https?://[^\s;,]+",
+                RegexOptions.IgnoreCase)
+            .Select(match => match.Value.TrimEnd('.', ')', ']'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
+        if (claimsReachable && inspectedUrls.Length == 0)
+        {
+            throw new WorkflowRuleViolationException("A positive reachability result requires at least one opened official website URL on Pages inspected.");
+        }
+    }
+
     async ValueTask EnsureLeadContactResearchStepAsync(
         IWorkflowBroker storage,
         string tenantId,
@@ -1843,32 +2433,149 @@ public sealed class WorkflowAutomationService(
         {
             PlatformEntities.ProcessStep activity = definition.Steps.FirstOrDefault(step => step.Key == "company-activity" && step.IsActive);
             PlatformEntities.ProcessStep verify = definition.Steps.FirstOrDefault(step => step.Key == "verify-company" && step.IsActive);
-            if (activity is null || verify is null)
+            PlatformEntities.ProcessStep scale = definition.Steps.FirstOrDefault(step => step.Key == "company-scale" && step.IsActive);
+            PlatformEntities.ProcessStep commercialFit = definition.Steps.FirstOrDefault(step => step.Key == "commercial-fit" && step.IsActive);
+            PlatformEntities.ProcessStep qualify = definition.Steps.FirstOrDefault(step => step.Key == "qualify-lead" && step.IsActive);
+            if (activity is null || verify is null || scale is null || commercialFit is null || qualify is null)
                 continue;
+
+            bool statusStepCreated = false;
+            PlatformEntities.ProcessStep currentStatus = definition.Steps
+                .FirstOrDefault(step => step.Key == "current-status-research" && step.IsActive);
+            if (currentStatus is null)
+            {
+                statusStepCreated = true;
+                currentStatus = NewStep(definition, "current-status-research", "Confirm Current Operating Status", 21, false,
+                    ProcessActionType.Research, null, null, null, 0, 0,
+                    "Confirm the current operating status of {{Lead.RawCompanyName}}",
+                    "Verify the entity's current status against a live, authoritative public registry before contact research. First use the current-company-status helper with the exact registration number and legal name. It reads Companies House or the FCA's live Mutuals register. Only if that helper returns unconfirmed, search the exact legal name and registration number together with current status, active, dissolved, and cancelled and inspect an official Companies House, FCA, OSCR, or Charity Commission result. Do not search for contacts. If an official source reports the entity inactive, persist that status and source through structured lead research before completing the inactive outcome. If no authoritative current result can be verified, use the unconfirmed outcome rather than assuming the imported status is current.",
+                    null, null, null,
+                    "Current status: active, inactive, or unconfirmed.\nOfficial source URL: exact regulator URL, or none.\nEvidence: one concise statement.\nStructured status persistence: completed before the inactive outcome.");
+                storage.Add(currentStatus);
+            }
+
+            currentStatus.Sequence = 21;
+            ApplyCurrentStatusExecutionContract(currentStatus);
+            currentStatus.LastUpdatedBy = CurrentUserId;
+            currentStatus.LastUpdated = DateTimeOffset.UtcNow;
 
             PlatformEntities.ProcessStep contactResearch = definition.Steps
                 .FirstOrDefault(step => step.Key == "contact-research" && step.IsActive);
             if (contactResearch is null)
             {
-                contactResearch = NewStep(definition, "contact-research", "Find a Relevant Contact Route", 22, false,
+                contactResearch = NewStep(definition, "contact-research", "Find a Relevant Contact Route", 45, false,
                     ProcessActionType.Research, null, null, null, 0, 0,
                     "Find a relevant contact route for {{Lead.RawCompanyName}}",
-                    "Research the public web, beginning with the company's own website and then relevant reputable business sources. Find a current contact route appropriate for business opportunity outreach: preferably a named person in a commercially relevant role, otherwise a role-based business address or switchboard. Do not use a Companies House officer merely because they are listed by the registrar. Verify the company identity before using a source. Record the source URL for every contact detail. Update the lead research record with the contact name, role, email address and/or phone number, website, and source evidence. Never invent or derive an email pattern. If no contact can be verified, record exactly which sources were checked and complete the task with no contact found.",
+                    "Research the public web, beginning with the company's own website and then relevant reputable business sources. Find a current named financial decision-maker, procurement lead, or—for a small company—a Managing Director/owner who plausibly owns financial decisions, and verify a published email address for that same person. A switchboard, generic role mailbox, or named person without a verified email is not a usable opportunity contact. Do not use a Companies House officer merely because they are listed by the registrar. Verify the company identity before using a source. Record the source URL for the person's role and email. Update the lead research record with the verified name, role, email address, optional phone number, website, and source evidence. Never invent or derive an email pattern. If no named person with a verified email can be found, record exactly which sources were checked and complete the task with no contact found.",
                     null, null, null,
-                    "Contact found: yes or no.\nContact name: verified name or none.\nContact role: verified role or role-based route.\nContact point: verified email and/or phone, or none.\nSource URLs: one URL per asserted detail.\nSources checked: concise list.");
-                contactResearch.ProducedFacts = "lead.contact-name, lead.contact-role, lead.contact-point, lead.contact-source";
+                    "Contact found: yes or no.\nContact name: verified full name or none.\nContact role: verified financial decision-making role or none.\nContact email: verified email for that named person or none.\nContact phone: optional verified phone or none.\nSource URLs: one URL per asserted detail.\nSources checked: concise list.");
+                contactResearch.ProducedFacts = "lead.contact-name, lead.contact-role, lead.contact-email, lead.contact-source";
                 contactResearch.ViabilityImpact = "A verified, outreach-appropriate contact route is mandatory before opportunity conversion; failure to find one defers rather than fabricates a contact.";
                 contactResearch.Objective = "Find and evidence a real, publicly listed contact route suitable for commercial outreach.";
-                contactResearch.RequiredFacts = "company.identity-verification";
+                contactResearch.RequiredFacts = "company.identity-verification, company.current-status, company.scale, company.fit-score";
                 storage.Add(contactResearch);
             }
 
-            // Sequence is also the diagram's stable execution order. Keep this step
-            // between activity research (20) and company scale (25), including for
-            // definitions created before this ordering rule was introduced.
-            contactResearch.Sequence = 22;
+            // Contact research is intentionally late: only a current company that
+            // survives scale, quality, and supply-chain-finance fit checks should
+            // incur the slower public-web search.
+            contactResearch.Sequence = 45;
+            ApplyContactResearchExecutionContract(contactResearch);
             contactResearch.LastUpdatedBy = CurrentUserId;
             contactResearch.LastUpdated = DateTimeOffset.UtcNow;
+
+            List<PlatformEntities.ProcessStepTask> contactStepTasks = await storage.ProcessStepTasks
+                .Where(item => item.ProcessStepId == contactResearch.Id && item.IsActive)
+                .ToListAsync(cancellationToken);
+            foreach (PlatformEntities.ProcessStepTask stepTask in contactStepTasks)
+            {
+                switch (stepTask.Key)
+                {
+                    case "search-financial-decision-makers":
+                    case "gather-company-resource-pack":
+                        stepTask.Key = "gather-company-resource-pack";
+                        stepTask.Name = "Gather company resource pack";
+                        stepTask.Sequence = 10;
+                        stepTask.Type = ProcessStepTaskType.Operation;
+                        stepTask.HandlerKey = "CRM.GatherCompanyResourcePack";
+                        stepTask.InstructionsTemplate = "Deterministically discover a bounded set of identity-matched company pages, public profiles, reports, policies, and linked PDF resources. Record every fetched URL; do not infer a contact during collection.";
+                        stepTask.RequiredContextKeys = "company.identity-verification,company.website";
+                        stepTask.ProducedContextKeys = "company.resource-pack";
+                        stepTask.MaxAttempts = 1;
+                        stepTask.NextTaskKey = "extract-company-resource-text";
+                        stepTask.FailureTaskKey = null;
+                        break;
+                    case "verify-financial-relevance":
+                    case "extract-company-resource-text":
+                        stepTask.Key = "extract-company-resource-text";
+                        stepTask.Name = "Extract resource text and passages";
+                        stepTask.Sequence = 20;
+                        stepTask.Type = ProcessStepTaskType.Operation;
+                        stepTask.HandlerKey = "CRM.ExtractCompanyResourceText";
+                        stepTask.InstructionsTemplate = "Deterministically convert fetched HTML and PDF resources into normalized text, extracted emails, phones, links, and ranked source-addressable passages. Preserve URL provenance and make no relevance decision.";
+                        stepTask.RequiredContextKeys = "company.resource-pack";
+                        stepTask.ProducedContextKeys = "company.evidence-passages";
+                        stepTask.MaxAttempts = 1;
+                        stepTask.NextTaskKey = "infer-company-fact";
+                        stepTask.FailureTaskKey = null;
+                        break;
+                    case "persist-verified-contact":
+                    case "infer-company-fact":
+                        stepTask.Key = "infer-company-fact";
+                        stepTask.Name = "Infer the requested company fact";
+                        stepTask.Sequence = 30;
+                        stepTask.Type = ProcessStepTaskType.Inference;
+                        stepTask.HandlerKey = "CRM.InferCompanyFact";
+                        stepTask.InstructionsTemplate = "From supplied evidence passages only, identify a current named financial decision-maker or procurement lead and that same person's explicitly published email. Interpret arbitrary layouts and reason across sources; do not browse or guess.";
+                        stepTask.RequiredContextKeys = "company.evidence-passages";
+                        stepTask.ProducedContextKeys = "contact.proposed";
+                        stepTask.MaxAttempts = 3;
+                        stepTask.NextTaskKey = "validate-and-persist-company-fact";
+                        stepTask.FailureTaskKey = "extract-company-resource-text";
+                        break;
+                    case "validate-contact-outcome":
+                    case "validate-and-persist-company-fact":
+                        stepTask.Key = "validate-and-persist-company-fact";
+                        stepTask.Name = "Validate and persist the company fact";
+                        stepTask.Sequence = 40;
+                        stepTask.Type = ProcessStepTaskType.Validation;
+                        stepTask.HandlerKey = "CRM.ValidateAndPersistCompanyFact";
+                        stepTask.InstructionsTemplate = "Deterministically require cited opened passages to prove the company match, allowed current role, full person name, and exact published personal email. Persist the structured contact and provenance only after validation; otherwise record the inspected resource pack as a no-contact result.";
+                        stepTask.RequiredContextKeys = "company.evidence-passages,contact.proposed";
+                        stepTask.ProducedContextKeys = "lead.contact-name,lead.contact-role,lead.contact-email,lead.contact-source,contact.outcome";
+                        stepTask.MaxAttempts = 3;
+                        stepTask.NextTaskKey = null;
+                        stepTask.FailureTaskKey = "infer-company-fact";
+                        break;
+                }
+                stepTask.LastUpdatedBy = CurrentUserId;
+                stepTask.LastUpdated = DateTimeOffset.UtcNow;
+            }
+
+            // Process tasks retain rendered copies of the contract. Refresh pending
+            // contact work so a tightened evidence rule takes effect immediately,
+            // including tasks recovered after an agent host restart.
+            List<PlatformEntities.ProcessTask> pendingContactContractTasks = await storage.ProcessTasks
+                .Where(task => task.ProcessStepId == contactResearch.Id
+                    && task.State == ProcessTaskState.Pending)
+                .ToListAsync(cancellationToken);
+            DateTimeOffset contractRefreshTime = DateTimeOffset.UtcNow;
+            foreach (PlatformEntities.ProcessTask task in pendingContactContractTasks)
+            {
+                TaskRenderContext renderContext = await BuildTaskRenderContextAsync(
+                    storage,
+                    task.LeadId,
+                    task.TenantCompanyRelationshipId,
+                    task.OpportunityId,
+                    task.ClientAccountId,
+                    cancellationToken);
+                TaskRenderValues rendered = RenderTaskValues(contactResearch, renderContext, contractRefreshTime);
+                task.RenderedTitle = string.IsNullOrWhiteSpace(rendered.Title) ? contactResearch.Name : rendered.Title;
+                task.RenderedInstructions = rendered.Instructions;
+                task.RenderedQuestionSet = rendered.QuestionSet;
+                task.LastUpdatedBy = CurrentUserId;
+                task.LastUpdated = contractRefreshTime;
+            }
 
             List<PlatformEntities.ProcessTransition> activityTransitions = await storage.ProcessTransitions
                 .Where(transition => transition.ProcessStepId == activity.Id)
@@ -1876,30 +2583,206 @@ public sealed class WorkflowAutomationService(
             PlatformEntities.ProcessTransition priorRoute = activityTransitions
                 .OrderByDescending(transition => transition.IsDefaultOutcome)
                 .FirstOrDefault();
-            PlatformEntities.ProcessStep priorDestination = definition.Steps
-                .FirstOrDefault(step => step.Id == priorRoute?.NextProcessStepId) ?? verify;
-            bool contactIsLinked = activityTransitions.Any(transition => transition.NextProcessStepId == contactResearch.Id);
-            if (!contactIsLinked)
+
+            List<PlatformEntities.ProcessTransition> contactTransitions = await storage.ProcessTransitions
+                .Where(transition => transition.ProcessStepId == contactResearch.Id)
+                .ToListAsync(cancellationToken);
+
+            bool activityWasDirectlyLinkedToContact = activityTransitions
+                .Any(transition => transition.NextProcessStepId == contactResearch.Id);
+            storage.RemoveRange(activityTransitions);
+            storage.Add(NewTransition(
+                activity,
+                currentStatus,
+                priorRoute?.OutcomeKey ?? "activity-described",
+                priorRoute?.OutcomeLabel ?? "Company activity described",
+                true,
+                ProcessTransitionEffect.None));
+
+            List<PlatformEntities.ProcessTransition> statusTransitions = await storage.ProcessTransitions
+                .Where(transition => transition.ProcessStepId == currentStatus.Id)
+                .ToListAsync(cancellationToken);
+            bool statusWasDirectlyLinkedToContact = statusTransitions.Any(transition =>
+                transition.OutcomeKey == "status-current"
+                && transition.NextProcessStepId == contactResearch.Id);
+            storage.RemoveRange(statusTransitions);
+            storage.AddRange(
+                NewTransition(currentStatus, scale, "status-current", "Current operating status verified", true,
+                    ProcessTransitionEffect.None),
+                NewTransition(currentStatus, null, "status-inactive", "Reject inactive entity", false,
+                    ProcessTransitionEffect.RejectLead, true),
+                NewTransition(currentStatus, null, "status-unconfirmed", "Defer until current status can be verified", false,
+                    ProcessTransitionEffect.DeferLead, true));
+
+            List<PlatformEntities.ProcessTransition> scaleTransitions = await storage.ProcessTransitions
+                .Where(transition => transition.ProcessStepId == scale.Id)
+                .ToListAsync(cancellationToken);
+            storage.RemoveRange(scaleTransitions);
+            storage.Add(NewTransition(scale, verify, "scale-assessed", "Company scale assessed", true,
+                ProcessTransitionEffect.None));
+
+            List<PlatformEntities.ProcessTransition> verifyTransitions = await storage.ProcessTransitions
+                .Where(transition => transition.ProcessStepId == verify.Id)
+                .ToListAsync(cancellationToken);
+            storage.RemoveRange(verifyTransitions);
+            storage.Add(NewTransition(verify, commercialFit, "quality-assessed", "Company data quality assessed", true,
+                ProcessTransitionEffect.None));
+
+            List<PlatformEntities.ProcessTransition> fitTransitions = await storage.ProcessTransitions
+                .Where(transition => transition.ProcessStepId == commercialFit.Id)
+                .ToListAsync(cancellationToken);
+            storage.RemoveRange(fitTransitions);
+            storage.AddRange(
+                NewTransition(commercialFit, contactResearch, "fit-assessed", "Supply-chain-finance fit justifies contact research", true,
+                    ProcessTransitionEffect.None),
+                NewTransition(commercialFit, null, "deferred-before-contact", "Defer company before contact research", false,
+                    ProcessTransitionEffect.DeferLead, true));
+
+            storage.RemoveRange(contactTransitions);
+            storage.Add(NewTransition(contactResearch, qualify, "contact-researched", "Named contact research completed", true,
+                ProcessTransitionEffect.None));
+
+            if (statusStepCreated || activityWasDirectlyLinkedToContact)
             {
-                storage.RemoveRange(activityTransitions);
-                storage.Add(NewTransition(
-                    activity,
-                    contactResearch,
-                    priorRoute?.OutcomeKey ?? "activity-described",
-                    priorRoute?.OutcomeLabel ?? "Company activity described",
-                    true,
-                    ProcessTransitionEffect.None));
-                bool hasContactTransition = await storage.ProcessTransitions.AnyAsync(
-                    transition => transition.ProcessStepId == contactResearch.Id
-                        && transition.NextProcessStepId == priorDestination.Id,
-                    cancellationToken);
-                if (!hasContactTransition)
+                List<PlatformEntities.ProcessTask> pendingContactTasks = await storage.ProcessTasks
+                    .Where(task => task.ProcessStepId == contactResearch.Id
+                        && task.State == ProcessTaskState.Pending)
+                    .ToListAsync(cancellationToken);
+                DateTimeOffset now = DateTimeOffset.UtcNow;
+                foreach (PlatformEntities.ProcessTask task in pendingContactTasks)
                 {
-                    storage.Add(NewTransition(contactResearch, priorDestination, "contact-researched", "Contact research completed", true,
-                        ProcessTransitionEffect.None));
+                    TaskRenderContext renderContext = await BuildTaskRenderContextAsync(
+                        storage,
+                        task.LeadId,
+                        task.TenantCompanyRelationshipId,
+                        task.OpportunityId,
+                        task.ClientAccountId,
+                        cancellationToken);
+                    TaskRenderValues rendered = RenderTaskValues(currentStatus, renderContext, now);
+                    task.ProcessStepId = currentStatus.Id;
+                    task.ActionType = currentStatus.ActionType;
+                    task.RenderedTitle = string.IsNullOrWhiteSpace(rendered.Title) ? currentStatus.Name : rendered.Title;
+                    task.RenderedInstructions = rendered.Instructions;
+                    task.RenderedEmailSubject = rendered.EmailSubject;
+                    task.RenderedEmailBody = rendered.EmailBody;
+                    task.RenderedCallScript = rendered.CallScript;
+                    task.RenderedQuestionSet = rendered.QuestionSet;
+                    task.AgentClaimId = null;
+                    task.AgentClaimedBy = null;
+                    task.AgentClaimedOn = null;
+                    task.AgentClaimExpiresOn = null;
+                    task.LastUpdatedBy = CurrentUserId;
+                    task.LastUpdated = now;
+                }
+            }
+
+            if (statusWasDirectlyLinkedToContact)
+            {
+                List<PlatformEntities.ProcessTask> pendingPrequalificationContactTasks = await storage.ProcessTasks
+                    .Where(task => task.ProcessStepId == contactResearch.Id
+                        && task.State == ProcessTaskState.Pending)
+                    .ToListAsync(cancellationToken);
+                DateTimeOffset now = DateTimeOffset.UtcNow;
+                foreach (PlatformEntities.ProcessTask task in pendingPrequalificationContactTasks)
+                {
+                    TaskRenderContext renderContext = await BuildTaskRenderContextAsync(
+                        storage,
+                        task.LeadId,
+                        task.TenantCompanyRelationshipId,
+                        task.OpportunityId,
+                        task.ClientAccountId,
+                        cancellationToken);
+                    TaskRenderValues rendered = RenderTaskValues(scale, renderContext, now);
+                    task.ProcessStepId = scale.Id;
+                    task.ActionType = scale.ActionType;
+                    task.RenderedTitle = string.IsNullOrWhiteSpace(rendered.Title) ? scale.Name : rendered.Title;
+                    task.RenderedInstructions = rendered.Instructions;
+                    task.RenderedEmailSubject = rendered.EmailSubject;
+                    task.RenderedEmailBody = rendered.EmailBody;
+                    task.RenderedCallScript = rendered.CallScript;
+                    task.RenderedQuestionSet = rendered.QuestionSet;
+                    task.AgentClaimId = null;
+                    task.AgentClaimedBy = null;
+                    task.AgentClaimedOn = null;
+                    task.AgentClaimExpiresOn = null;
+                    task.LastUpdatedBy = CurrentUserId;
+                    task.LastUpdated = now;
+                }
+            }
+
+            // A task carries its step independently from the process instance. When
+            // contact work is migrated to the new status gate, keep the instance's
+            // active-step pointer aligned with that same task. Reconcile this on
+            // every startup as well, so an installation that already performed the
+            // task migration can repair the pointer without recreating the step.
+            List<Guid> pendingStatusTaskIds = await storage.ProcessTasks
+                .Where(task => task.ProcessStepId == currentStatus.Id
+                    && task.State == ProcessTaskState.Pending)
+                .Select(task => task.Id)
+                .ToListAsync(cancellationToken);
+            if (pendingStatusTaskIds.Count > 0)
+            {
+                List<PlatformEntities.ProcessInstance> misalignedInstances = await storage.ProcessInstances
+                    .Where(instance => instance.State == ProcessInstanceState.Active
+                        && instance.CurrentProcessTaskId.HasValue
+                        && pendingStatusTaskIds.Contains(instance.CurrentProcessTaskId.Value)
+                        && instance.CurrentProcessStepId != currentStatus.Id)
+                    .ToListAsync(cancellationToken);
+                DateTimeOffset now = DateTimeOffset.UtcNow;
+                foreach (PlatformEntities.ProcessInstance instance in misalignedInstances)
+                {
+                    instance.CurrentProcessStepId = currentStatus.Id;
+                    instance.LastUpdatedBy = CurrentUserId;
+                    instance.LastUpdated = now;
+                }
+            }
+
+            List<Guid> pendingScaleTaskIds = await storage.ProcessTasks
+                .Where(task => task.ProcessStepId == scale.Id
+                    && task.State == ProcessTaskState.Pending)
+                .Select(task => task.Id)
+                .ToListAsync(cancellationToken);
+            if (pendingScaleTaskIds.Count > 0)
+            {
+                List<PlatformEntities.ProcessInstance> misalignedInstances = await storage.ProcessInstances
+                    .Where(instance => instance.State == ProcessInstanceState.Active
+                        && instance.CurrentProcessTaskId.HasValue
+                        && pendingScaleTaskIds.Contains(instance.CurrentProcessTaskId.Value)
+                        && instance.CurrentProcessStepId != scale.Id)
+                    .ToListAsync(cancellationToken);
+                DateTimeOffset now = DateTimeOffset.UtcNow;
+                foreach (PlatformEntities.ProcessInstance instance in misalignedInstances)
+                {
+                    instance.CurrentProcessStepId = scale.Id;
+                    instance.LastUpdatedBy = CurrentUserId;
+                    instance.LastUpdated = now;
                 }
             }
         }
+    }
+
+    static void ApplyCurrentStatusExecutionContract(PlatformEntities.ProcessStep step)
+    {
+        step.Objective = "Verify the entity's current operating status from a live authoritative registry before spending time on contact research.";
+        step.RequiredFacts = "company.identity-verification";
+        step.ProducedFacts = "company.current-status, company.current-status-source";
+        step.ViabilityImpact = "Inactive entities are rejected and unverifiable entities are deferred before contact research; only authoritatively current entities proceed.";
+        step.TaskInstructionsTemplate =
+            "First run the current-company-status helper with the exact registration number and legal name. It reads Companies House or the FCA's live Mutuals register. Only when it returns unconfirmed, search the exact legal name and registration number together with current status, active, dissolved, and cancelled and inspect an official Companies House, FCA, OSCR, or Charity Commission result. Do not search for contacts. If an official source reports the entity inactive, persist the exact inactive status, date when published, and official source URL through structured lead research before completing status-inactive. Complete status-current only when an official source currently reports the exact entity active. Otherwise complete status-unconfirmed; never treat the imported CRM status or a commercial directory as current proof.";
+        step.QuestionSetTemplate =
+            "Current status: active, inactive, or unconfirmed.\nOfficial source URL: exact regulator URL, or none.\nEvidence: one concise statement.\nStructured status persistence: completed before status-inactive.";
+    }
+
+    static void ApplyContactResearchExecutionContract(PlatformEntities.ProcessStep step)
+    {
+        step.Objective = "Find, persist, and evidence a real, publicly listed contact route suitable for commercial outreach.";
+        step.RequiredFacts = "company.identity-verification, company.current-status, company.scale, company.fit-score";
+        step.ProducedFacts = "lead.contact-name, lead.contact-role, lead.contact-email, lead.contact-source";
+        step.ViabilityImpact = "This slower search runs only after scale and supply-chain-finance fit justify pursuit. A verified named person and email are then mandatory before opportunity conversion.";
+        step.TaskInstructionsTemplate =
+            "Research the public web, beginning with the company's own website and then relevant reputable business sources. First search the exact legal or trading name with the company number, then with the full registered address or postcode plus website/contact; do not conclude that no company website exists until both identity searches have been attempted. Run separate exact-title searches for Chief Financial Officer, Finance Director, Financial Controller, Head of Finance, and Procurement Director; never bundle all roles into one broad query. Open and inspect any exact-company website discovered, including its contact, about, team, leadership, staff, privacy, terms, modern-slavery, gender-pay-gap, annual-report, and other signed policy/report pages where present. Signed reports often identify the CFO or Finance Director. Search every plausible person's quoted full name with the company and email; do not stop after the first candidate or an inaccessible page. A related group or sister-company leadership page may verify a person's email when another exact-company or group source verifies that person's current role. For a small company, also consider a Managing Director/owner who plausibly owns financial decisions. Verify a published email address for that same named person. A switchboard, generic role mailbox, or named person without a verified email is not a usable opportunity contact. Match both company identity and the person's current role before accepting a source. Do not use a Companies House officer merely because they are listed by the registrar. Record the source URL for the person's role and email. Before completing contact-researched as a success, persist the verified name, role, email address, optional phone number, website, and source evidence through structured lead research. Completion evidence alone is not sufficient. Never invent or derive an email pattern. If no named person with a verified email can be found, record exactly which sources were checked, confirm all five exact-title searches on the Leadership searches line, and put every non-registry URL actually opened on the Pages inspected line; search-result URLs and URLs mentioned only under Source URLs do not count as inspected pages.";
+        step.QuestionSetTemplate =
+            "Contact found: yes or no.\nContact name: verified full name or none.\nContact role: verified financial decision-making role or none.\nContact email: verified email for that named person or none.\nContact phone: optional verified phone or none.\nSource URLs: one URL per asserted detail.\nSources checked: concise list.\nLeadership searches: Chief Financial Officer; Finance Director; Financial Controller; Head of Finance; Procurement Director.\nPages inspected: non-registry URLs actually opened with the public-page helper, on this same line and separated by semicolons.\nStructured persistence: verified name and email persisted before contact-researched when contact found is yes.";
     }
 
     async ValueTask EnsureLeadContactGateContractsAsync(
@@ -1911,22 +2794,578 @@ public sealed class WorkflowAutomationService(
             .Where(step => step.ProcessDefinition.TenantId == tenantId
                 && step.ProcessDefinition.IsActive
                 && step.ProcessDefinition.ScopeType == ProcessScopeType.Lead
-                && (step.Key == "commercial-fit" || step.Key == "qualify-lead"))
+                && (step.Key == "company-scale" || step.Key == "commercial-fit" || step.Key == "qualify-lead"))
             .ToListAsync(cancellationToken);
         DateTimeOffset now = DateTimeOffset.UtcNow;
         foreach (PlatformEntities.ProcessStep step in steps)
         {
-            if (step.Key == "commercial-fit")
-                step.ProducedFacts = "company.fit-score, company.opening-angle, lead.contact-name, lead.contact-role, lead.contact-point, lead.contact-source";
+            if (step.Key == "company-scale")
+            {
+                step.Objective = "Gather annual turnover as the primary size measure and employee count as supporting evidence before deciding whether contact research is worthwhile.";
+                step.RequiredFacts = "company.identity-verification, company.current-status, company.primary-activity";
+                step.ProducedFacts = "company.annual-turnover, company.employee-count, company.scale";
+                step.ViabilityImpact = "Evidence gate: turnover is primary; headcount is stored and used only when turnover is unavailable. Never invent either value.";
+                step.TaskInstructionsTemplate = "Preserve existing verified values and search the public web only for missing annual turnover/revenue and employee count. Check the exact company's website, published accounts or annual report, and up to three exact-company sources. A filed-accounts category is only a size ceiling, not an exact turnover. Persist supported numeric values and their currency before completion; never infer a number from a label or search snippet. Treat turnover as primary: under 2m is micro, 2m to under 10m is small, 10m to under 100m is medium, 100m to under 1bn is large, and 1bn or more is enterprise. Use headcount only for the band when turnover remains unavailable; unknown after the bounded checks is valid.";
+                step.QuestionSetTemplate = "Annual turnover/revenue: verified value and currency, or unknown.\nTurnover source URL: exact public page, or none.\nEmployee count: verified value, or unknown.\nEmployee source URL: exact public page, or none.\nScale band: turnover-first result.\nConfidence: high, medium, or low.";
+            }
+            else if (step.Key == "commercial-fit")
+            {
+                step.Objective = "Decide whether the company's scale and supplier complexity justify the cost of named-contact research for Corporate Linx supply-chain-finance products.";
+                step.RequiredFacts = "company.identity-verification, company.current-status, company.primary-activity, company.data-quality, company.scale";
+                step.ProducedFacts = "company.fit-score, company.opening-angle, company.contact-research-decision";
+                step.ViabilityImpact = "Gate: only a fit score of at least 60 proceeds. Turnover under 2m defers; turnover under 10m or unknown must have strong supplier-complexity evidence.";
+                step.TaskInstructionsTemplate = "Score suitability for Corporate Linx supply-chain-finance products using verified turnover, supporting headcount, activity, and supplier-complexity evidence. Turnover is the primary size gate. Turnover under 2m must score below 40. Turnover from 2m to under 10m, or unknown turnover, must score below 60 unless evidence specifically shows high supplier complexity. Turnover of 10m or more may proceed when the activity is credible for supply-chain finance. A score of 60 or more justifies named-contact research; lower scores defer before contact research.";
+            }
             else
             {
-                step.RequiredFacts = "company.identity-verification, company.status, company.fit-score, lead.contact-point, lead.contact-source";
+                step.RequiredFacts = "company.identity-verification, company.current-status, company.scale, company.fit-score, lead.contact-name, lead.contact-email, lead.contact-source";
                 step.ProducedFacts = "company.qualification-decision, lead.contact-gate-result";
             }
             step.LastUpdatedBy = CurrentUserId;
             step.LastUpdated = now;
+
+            List<PlatformEntities.ProcessTask> pendingTasks = await storage.ProcessTasks
+                .Where(task => task.ProcessStepId == step.Id && task.State == ProcessTaskState.Pending)
+                .ToListAsync(cancellationToken);
+            foreach (PlatformEntities.ProcessTask task in pendingTasks)
+            {
+                TaskRenderContext renderContext = await BuildTaskRenderContextAsync(
+                    storage,
+                    task.LeadId,
+                    task.TenantCompanyRelationshipId,
+                    task.OpportunityId,
+                    task.ClientAccountId,
+                    cancellationToken);
+                TaskRenderValues rendered = RenderTaskValues(step, renderContext, now);
+                task.RenderedTitle = string.IsNullOrWhiteSpace(rendered.Title) ? step.Name : rendered.Title;
+                task.RenderedInstructions = rendered.Instructions;
+                task.RenderedQuestionSet = rendered.QuestionSet;
+                task.LastUpdatedBy = CurrentUserId;
+                task.LastUpdated = now;
+            }
         }
     }
+
+    async ValueTask EnsureMinimalLeadQualificationShapeAsync(
+        IWorkflowBroker storage,
+        string tenantId,
+        CancellationToken cancellationToken)
+    {
+        List<PlatformEntities.ProcessDefinition> definitions = await storage.ProcessDefinitions
+            .Where(definition => definition.TenantId == tenantId
+                && definition.IsActive
+                && definition.ScopeType == ProcessScopeType.Lead)
+            .Include(definition => definition.Steps)
+            .ToListAsync(cancellationToken);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        foreach (PlatformEntities.ProcessDefinition definition in definitions)
+        {
+            PlatformEntities.ProcessStep identity = definition.Steps.FirstOrDefault(step => step.Key == "lead-research");
+            PlatformEntities.ProcessStep status = definition.Steps.FirstOrDefault(step => step.Key == "current-status-research");
+            PlatformEntities.ProcessStep contact = definition.Steps.FirstOrDefault(step => step.Key == "contact-research");
+            PlatformEntities.ProcessStep qualify = definition.Steps.FirstOrDefault(step => step.Key == "qualify-lead");
+            if (identity is null || status is null || contact is null || qualify is null)
+                continue;
+
+            PlatformEntities.ProcessStep resources = definition.Steps.FirstOrDefault(step => step.Key == "gather-company-resources");
+            bool introducedStructuredResearch = resources is null;
+            if (resources is null)
+            {
+                resources = NewStep(
+                    definition,
+                    "gather-company-resources",
+                    "Gather First-Party Resources",
+                    30,
+                    false,
+                    ProcessActionType.Research,
+                    null, null, null, 0, 0,
+                    "Gather first-party resources for {{Lead.RawCompanyName}}",
+                    "Resolve the exact company's official website and deterministically open one bounded set of relevant HTML pages and linked public documents. Extract normalized, source-addressable text, emails and phone numbers. Preserve the URL for every passage. Do not infer fit, choose a contact, or identify related companies in this step.",
+                    null, null, null,
+                    "Identity matched: yes or no.\nOfficial website: verified URL or none.\nResources opened: integer.\nEmails extracted: integer.\nPhones extracted: integer.\nPages inspected: opened official-site URLs or none.");
+                storage.Add(resources);
+            }
+
+            PlatformEntities.ProcessStep fit = definition.Steps.FirstOrDefault(step => step.Key == "assess-scf-fit");
+            if (fit is null)
+            {
+                fit = NewStep(
+                    definition,
+                    "assess-scf-fit",
+                    "Assess Supply-Chain Finance Fit",
+                    40,
+                    false,
+                    ProcessActionType.Review,
+                    null, null, null, 0, 0,
+                    "Assess supply-chain-finance fit for {{Lead.RawCompanyName}}",
+                    "Using only the gathered first-party evidence, describe the company's activity and decide whether there is a credible supply-chain-finance conversation. Record one practical opening angle. Turnover and employee count are useful observations when explicitly published, but missing scale figures do not force endless research. Do not search for or select a contact in this step.",
+                    null, null, null,
+                    "Activity: one sentence.\nPitchable: yes or no.\nPitch reason: one sentence.\nOpening angle: one sentence or none.\nTurnover observed: value and source URL, or not found.\nEmployee count observed: value and source URL, or not found.\nPages used: official-site URLs.");
+                storage.Add(fit);
+            }
+
+            PlatformEntities.ProcessStep pitch = definition.Steps.FirstOrDefault(step => step.Key == "evaluate-scf-fit");
+            if (pitch is null)
+            {
+                pitch = NewStep(
+                    definition,
+                    "evaluate-scf-fit",
+                    "Evaluate Supply-Chain Finance Fit",
+                    50,
+                    false,
+                    ProcessActionType.Review,
+                    null, null, null, 0, 0,
+                    "Evaluate supply-chain-finance fit for {{Lead.RawCompanyName}}",
+                    "Use only persisted company evidence to decide whether a credible supply-chain-finance conversation exists and record one opening angle. Do not browse, extract contacts, or add new facts.",
+                    null, null, null,
+                    "Activity: one sentence.\nPitchable: yes or no.\nPitch reason: one sentence.\nOpening angle: one sentence or none.\nEvidence keys used: keys only.");
+                storage.Add(pitch);
+            }
+
+            PlatformEntities.ProcessStep related = definition.Steps.FirstOrDefault(step => step.Key == "extract-related-companies");
+            if (related is null)
+            {
+                related = NewStep(
+                    definition,
+                    "extract-related-companies",
+                    "Extract Related Companies",
+                    60,
+                    false,
+                    ProcessActionType.Research,
+                    null, null, null, 0, 0,
+                    "Extract related companies named by {{Lead.RawCompanyName}}",
+                    "Using only the gathered first-party evidence, extract explicitly named customers, suppliers and commercial partners. Keep the source URL and stated relationship for each name. Do not infer an unnamed relationship and do not decide whether a related company is qualified.",
+                    null, null, null,
+                    "Related companies: company names separated by semicolons, or none.\nRelationship evidence: name | relationship | source URL, separated by semicolons, or none.\nPages used: official-site URLs.");
+                storage.Add(related);
+            }
+
+            PlatformEntities.ProcessStep tipRelated = definition.Steps.FirstOrDefault(step => step.Key == "tip-related-companies");
+            if (tipRelated is null)
+            {
+                tipRelated = NewStep(
+                    definition,
+                    "tip-related-companies",
+                    "Tip In Related Companies",
+                    40,
+                    false,
+                    ProcessActionType.Review,
+                    null, null, null, 0, 0,
+                    "Tip in related companies named by {{Lead.RawCompanyName}}",
+                    "Read the explicitly named customers, suppliers and commercial partners already captured from first-party research. Deterministically match those names to existing Companies House records. Create lead work only for exact, unsuppressed matches that do not already have a lead, opportunity, relationship or client record. Record promoted, already-known and unmatched names; do not browse or infer new relationships in this step.",
+                    null, null, null,
+                    "Candidates: integer.\nMatched: integer.\nPromoted: integer.\nPromoted companies: names or none.\nAlready known: names or none.\nUnmatched: names or none.");
+                storage.Add(tipRelated);
+            }
+
+            NormalizeSeedDefinitionMetadata(
+                definition,
+                "Lead Generation",
+                "Start from an authoritative company record, gather one reusable first-party evidence pack, then make separate bounded decisions about fit, contactability and related-company discovery.");
+
+            identity.IsActive = false;
+            identity.IsEntryPoint = false;
+            identity.Sequence = 10;
+            identity.Name = "Retired: Match Companies House Record";
+            identity.Objective = "Retired from Lead Generation: authoritative-source matching belongs to data cleaning before a company is tipped into the lead lane.";
+            identity.StepType = ProcessStepType.RegistryLookup;
+            identity.ConfigurationJson = JsonSerializer.Serialize(new { authority = "CompaniesHouse", matchBy = new[] { "companyNumber", "legalName" } });
+            identity.RequiredFacts = "company.authoritative-source";
+            identity.ProducedFacts = "company.identity-verification";
+            identity.ViabilityImpact = "Retired: lead generation only accepts authoritative company records.";
+            status.IsActive = false;
+            status.IsEntryPoint = false;
+            status.Sequence = 20;
+            status.Name = "Retired: Read Companies House Status";
+            status.Objective = "Retired from Lead Generation: authoritative-source status cleaning belongs before the lead lane.";
+            status.StepType = ProcessStepType.RegistryLookup;
+            status.ConfigurationJson = JsonSerializer.Serialize(new { authority = "CompaniesHouse", read = new[] { "companyStatus", "dissolvedOn" } });
+            ApplyCurrentStatusExecutionContract(status);
+
+            resources.IsActive = true;
+            resources.IsEntryPoint = true;
+            resources.Sequence = 10;
+            resources.Name = "Search Official Website";
+            resources.StepType = ProcessStepType.WebSearch;
+            resources.ConfigurationJson = JsonSerializer.Serialize(new { handler = "CRM.SearchOfficialWebsite", domain = "{company.website}", maxResources = 24, include = new[] { "html", "pdf" }, preserveSourceUrl = true });
+            resources.ActionType = ProcessActionType.Research;
+            resources.Objective = "Build one bounded, reusable evidence pack from the authoritative company's own website.";
+            resources.RequiredFacts = "company.authoritative-source";
+            resources.ProducedFacts = "company.first-party-resource-pack";
+            resources.ViabilityImpact = "Evidence only: collection does not decide commercial fit, contact relevance, or qualification.";
+            resources.TaskTitleTemplate = "Gather first-party resources for {{Lead.RawCompanyName}}";
+            resources.TaskInstructionsTemplate = "Use the authoritative company record as the identity source of truth. Resolve the exact company's official website and deterministically open one bounded set of relevant HTML pages and linked public documents. Extract normalized, source-addressable text, emails and phone numbers. Preserve the URL for every passage. Do not infer fit, choose a contact, or identify related companies in this step.";
+            resources.QuestionSetTemplate = "Authoritative company source: source system and company number.\nOfficial website: verified URL or none.\nResources opened: integer.\nEmails extracted: integer.\nPhones extracted: integer.\nPages inspected: opened official-site URLs or none.";
+
+            fit.IsActive = true;
+            fit.IsEntryPoint = false;
+            fit.Sequence = 20;
+            fit.Name = "Extract Company Scale Evidence";
+            fit.StepType = ProcessStepType.ExtractEvidence;
+            fit.ConfigurationJson = JsonSerializer.Serialize(new { handler = "CRM.ExtractCompanyScaleEvidence", input = "company.first-party-resource-pack", patterns = new[] { "employee-count", "annual-turnover", "annual-revenue" }, requireSourceUrl = true });
+            fit.ActionType = ProcessActionType.Review;
+            fit.Objective = "Extract explicitly published employee-count and turnover or revenue values from opened first-party resources.";
+            fit.RequiredFacts = "company.first-party-resource-pack";
+            fit.ProducedFacts = "company.annual-revenue, company.employee-count";
+            fit.ViabilityImpact = "Evidence only: absence lowers confidence but does not fail execution or trigger more research.";
+            fit.TaskTitleTemplate = "Extract scale evidence for {{Lead.RawCompanyName}}";
+            fit.TaskInstructionsTemplate = "Run deterministic patterns over the opened first-party resources for explicit employee-count, annual-turnover and annual-revenue statements. Persist each value with the exact source URL and matching text. Do not infer missing values.";
+            fit.QuestionSetTemplate = "Turnover observed: value and source URL, or not found.\nEmployee count observed: value and source URL, or not found.\nPatterns checked: employee-count; annual-turnover; annual-revenue.";
+
+            pitch.IsActive = true;
+            pitch.IsEntryPoint = false;
+            pitch.Sequence = 30;
+            pitch.StepType = ProcessStepType.AskAgent;
+            pitch.ConfigurationJson = JsonSerializer.Serialize(new { handler = "CRM.EvaluateSupplyChainFinanceFit", inputs = new[] { "company.primary-activity", "company.annual-revenue", "company.employee-count", "company.supplier-evidence" }, outputs = new[] { "company.pitchable", "company.opening-angle" }, allowWebAccess = false });
+            pitch.Objective = "Decide whether persisted evidence supports a credible supply-chain-finance conversation and record one opening angle.";
+            pitch.RequiredFacts = "company.first-party-resource-pack, company.annual-revenue, company.employee-count";
+            pitch.ProducedFacts = "company.activity, company.pitchable, company.opening-angle";
+            pitch.ViabilityImpact = "This is the one bounded inference used to interpret the collected company evidence.";
+
+            contact.IsActive = true;
+            contact.IsEntryPoint = false;
+            contact.Sequence = 20;
+            contact.Name = "Extract Published Contact Routes";
+            contact.StepType = ProcessStepType.ExtractEvidence;
+            contact.ConfigurationJson = JsonSerializer.Serialize(new { handler = "CRM.ExtractPublishedContactRoutes", input = "company.first-party-resource-pack", patterns = new[] { "email", "phone", "person-name", "job-title" }, persistAll = true, selectPrimary = "ranked-rule" });
+            contact.ActionType = ProcessActionType.Research;
+            contact.Objective = "Extract all explicitly published contact routes and select the best usable route for an opportunity conversation.";
+            contact.RequiredFacts = "company.first-party-resource-pack";
+            contact.ProducedFacts = "company.published-contacts, lead.primary-contact, lead.reachability";
+            contact.ViabilityImpact = "A named financial decision-maker is preferred; a published company-owned role mailbox is an acceptable indirect route. No email may be guessed.";
+            contact.TaskTitleTemplate = "Extract published contact routes for {{Lead.RawCompanyName}}";
+            contact.TaskInstructionsTemplate = "Use only the gathered first-party resource pack. Extract every published company-owned email, phone number, associated name and stated job title with its source URL. Prefer a named finance, treasury, procurement or senior leadership contact. If no suitable named person has a published email, select an official finance, procurement, investor-relations, enquiries or general mailbox as an indirect route. Reject third-party advisers, directories and inferred email patterns.";
+            contact.QuestionSetTemplate = "Reachability: direct, indirect, or none.\nPrimary contact: name, role, email, phone, and source URL, or none.\nPublished contacts: all emails, phones, names and roles with source URLs, or none.\nPages inspected: official-site URLs used.";
+
+            related.IsActive = true;
+            related.IsEntryPoint = false;
+            related.Sequence = 20;
+            related.Name = "Extract Related Companies";
+            related.StepType = ProcessStepType.ExtractEvidence;
+            related.ConfigurationJson = JsonSerializer.Serialize(new { handler = "CRM.ExtractNamedCompanyRelationships", input = "company.first-party-resource-pack", method = "deterministic-keyword-proximity", relationshipTypes = new[] { "customer", "supplier", "partner" }, requireSourceUrl = true });
+            related.ActionType = ProcessActionType.Research;
+            related.Objective = "Extract explicitly named customers, suppliers and commercial partners from the evidence pack with source provenance.";
+            related.RequiredFacts = "company.first-party-resource-pack";
+            related.ProducedFacts = "company.related-companies";
+            related.ViabilityImpact = "Discovery only: relationships expand the target frontier but never qualify either company by themselves.";
+            related.TaskTitleTemplate = "Extract related companies named by {{Lead.RawCompanyName}}";
+            related.TaskInstructionsTemplate = "Using only the gathered first-party evidence, run deterministic relationship-keyword proximity extraction for explicitly named customers, suppliers and commercial partners. Keep the source URL and matching passage for each name. Do not infer unnamed relationships, do not browse, and do not decide whether a related company is qualified.";
+            related.QuestionSetTemplate = "Related companies: company names separated by semicolons, or none.\nRelationship evidence: name | relationship | source URL, separated by semicolons, or none.\nExtraction method: deterministic relationship-keyword proximity scan; no inference.\nPages used: official-site URLs.";
+
+            tipRelated.IsActive = true;
+            tipRelated.IsEntryPoint = false;
+            tipRelated.Sequence = 30;
+            tipRelated.StepType = ProcessStepType.EvaluateRule;
+            tipRelated.ConfigurationJson = JsonSerializer.Serialize(new { handler = "CRM.QueueRelatedCompanies", excludeKnownCompanies = true });
+            tipRelated.ActionType = ProcessActionType.Review;
+            tipRelated.Objective = "Turn first-party relationship evidence into the next bounded set of lead targets before general pool intake resumes.";
+            tipRelated.RequiredFacts = "company.related-companies";
+            tipRelated.ProducedFacts = "lead.related-company-tip-in";
+            tipRelated.ViabilityImpact = "Discovery only: related-company evidence prioritises new work but never qualifies the source or target company by itself.";
+            tipRelated.LastUpdatedBy = CurrentUserId;
+            tipRelated.LastUpdated = now;
+
+            qualify.IsActive = true;
+            qualify.IsEntryPoint = false;
+            qualify.Sequence = 40;
+            qualify.Name = "Apply Pitch and Reachability Rule";
+            qualify.StepType = ProcessStepType.EvaluateRule;
+            qualify.ConfigurationJson = JsonSerializer.Serialize(new { handler = "CRM.ApplyPitchReachabilityRule", inference = false });
+            qualify.Objective = "Create an opportunity when the authoritative company record is current, pitchable, and reachable through a published email route.";
+            qualify.RequiredFacts = "company.authoritative-source, company.pitchable, lead.reachability, lead.primary-contact";
+            qualify.ProducedFacts = "company.qualification-decision";
+            qualify.ViabilityImpact = "Only pitchability and usable email reachability are sales gates; everything else is supporting information.";
+            qualify.TaskTitleTemplate = "Decide whether {{Lead.RawCompanyName}} becomes an opportunity";
+            qualify.TaskInstructionsTemplate = "Apply this rule without more research: qualify when the identity is coherent, the company is current, Pitchable is yes, Reachability is direct or indirect, and a published email is persisted. Reject only a known inactive entity. Otherwise defer so it can be reconsidered without discarding the company.";
+            qualify.QuestionSetTemplate = "Identity coherent: yes or no.\nKnown active: yes, no, or uncertain.\nPitchable: yes or no.\nReachability: direct, indirect, or none.\nUsable published email: yes or no.\nDecision: qualified, deferred, or rejected.\nDecision reason: one sentence.";
+
+            string[] retiredKeys = ["company-activity", "company-scale", "verify-company", "commercial-fit"];
+            List<PlatformEntities.ProcessStep> retired = definition.Steps
+                .Where(step => retiredKeys.Contains(step.Key))
+                .ToList();
+            foreach (PlatformEntities.ProcessStep step in retired)
+            {
+                step.IsActive = false;
+                step.IsEntryPoint = false;
+                step.LastUpdatedBy = CurrentUserId;
+                step.LastUpdated = now;
+            }
+
+            foreach (PlatformEntities.ProcessStep step in new[] { identity, status, resources, fit, pitch, contact, related, tipRelated, qualify })
+            {
+                step.LastUpdatedBy = CurrentUserId;
+                step.LastUpdated = now;
+            }
+
+            List<PlatformEntities.ProcessTransition> obsoleteRoutes = await storage.ProcessTransitions
+                .Where(transition => transition.ProcessStepId == identity.Id
+                    || transition.ProcessStepId == status.Id
+                    || transition.ProcessStepId == resources.Id
+                    || transition.ProcessStepId == fit.Id
+                    || transition.ProcessStepId == pitch.Id
+                    || transition.ProcessStepId == contact.Id
+                    || transition.ProcessStepId == related.Id
+                    || transition.ProcessStepId == tipRelated.Id)
+                .ToListAsync(cancellationToken);
+            storage.RemoveRange(obsoleteRoutes);
+            storage.AddRange(
+                NewTransition(resources, fit, "resources-gathered", "Official website resources opened - extract scale evidence", true, ProcessTransitionEffect.None),
+                NewTransition(resources, contact, "resources-gathered", "Official website resources opened - extract contacts", true, ProcessTransitionEffect.None),
+                NewTransition(resources, related, "resources-gathered", "Official website resources opened - extract related companies", true, ProcessTransitionEffect.None),
+                NewTransition(fit, pitch, "scale-extracted", "Company scale evidence extracted", true, ProcessTransitionEffect.None),
+                NewTransition(pitch, qualify, "fit-assessed", "Supply-chain-finance fit evaluated", true, ProcessTransitionEffect.None),
+                NewTransition(contact, qualify, "contacts-extracted", "Published contact routes extracted", true, ProcessTransitionEffect.None),
+                NewTransition(related, tipRelated, "relationships-extracted", "Related companies extracted", true, ProcessTransitionEffect.None),
+                NewTransition(tipRelated, qualify, "related-companies-tipped", "Related company targets queued", true, ProcessTransitionEffect.None));
+
+            // Child tasks made the diagram look simpler while hiding a second workflow
+            // whose runs were completed as a group. Typed process steps are now the
+            // independently executable unit; retain old definitions only as history.
+            Guid[] activeStepIds = [resources.Id, fit.Id, pitch.Id, contact.Id, related.Id, tipRelated.Id, qualify.Id];
+            List<PlatformEntities.ProcessStepTask> legacyChildTasks = await storage.ProcessStepTasks
+                .Where(item => activeStepIds.Contains(item.ProcessStepId) && item.IsActive)
+                .ToListAsync(cancellationToken);
+            foreach (PlatformEntities.ProcessStepTask childTask in legacyChildTasks)
+            {
+                childTask.IsActive = false;
+                childTask.LastUpdatedBy = CurrentUserId;
+                childTask.LastUpdated = now;
+            }
+
+            Guid[] retiredIds = [.. retired.Select(step => step.Id).Concat([identity.Id, status.Id])];
+            List<PlatformEntities.ProcessTask> pendingRetiredTasks = await storage.ProcessTasks
+                .Where(task => retiredIds.Contains(task.ProcessStepId)
+                    && task.State == ProcessTaskState.Pending)
+                .ToListAsync(cancellationToken);
+            foreach (PlatformEntities.ProcessTask task in pendingRetiredTasks)
+            {
+                PlatformEntities.ProcessStep target = resources;
+                TaskRenderContext renderContext = await BuildTaskRenderContextAsync(
+                    storage,
+                    task.LeadId,
+                    task.TenantCompanyRelationshipId,
+                    task.OpportunityId,
+                    task.ClientAccountId,
+                    cancellationToken);
+                TaskRenderValues rendered = RenderTaskValues(target, renderContext, now);
+                task.ProcessStepId = target.Id;
+                task.ActionType = target.ActionType;
+                task.RenderedTitle = string.IsNullOrWhiteSpace(rendered.Title) ? target.Name : rendered.Title;
+                task.RenderedInstructions = rendered.Instructions;
+                task.RenderedQuestionSet = rendered.QuestionSet;
+                task.AgentClaimId = null;
+                task.AgentClaimedBy = null;
+                task.AgentClaimedOn = null;
+                task.AgentClaimExpiresOn = null;
+                task.LastUpdatedBy = CurrentUserId;
+                task.LastUpdated = now;
+            }
+
+            if (introducedStructuredResearch)
+            {
+                List<PlatformEntities.ProcessTask> legacyCombinedResearchTasks = await storage.ProcessTasks
+                    .Where(task => task.ProcessStepId == contact.Id
+                        && task.State == ProcessTaskState.Pending)
+                    .ToListAsync(cancellationToken);
+                foreach (PlatformEntities.ProcessTask task in legacyCombinedResearchTasks)
+                {
+                    TaskRenderContext renderContext = await BuildTaskRenderContextAsync(
+                        storage,
+                        task.LeadId,
+                        task.TenantCompanyRelationshipId,
+                        task.OpportunityId,
+                        task.ClientAccountId,
+                        cancellationToken);
+                    TaskRenderValues rendered = RenderTaskValues(resources, renderContext, now);
+                    task.ProcessStepId = resources.Id;
+                    task.ActionType = resources.ActionType;
+                    task.RenderedTitle = string.IsNullOrWhiteSpace(rendered.Title) ? resources.Name : rendered.Title;
+                    task.RenderedInstructions = rendered.Instructions;
+                    task.RenderedQuestionSet = rendered.QuestionSet;
+                    task.AgentClaimId = null;
+                    task.AgentClaimedBy = null;
+                    task.AgentClaimedOn = null;
+                    task.AgentClaimExpiresOn = null;
+                    task.LastUpdatedBy = CurrentUserId;
+                    task.LastUpdated = now;
+                }
+                pendingRetiredTasks.AddRange(legacyCombinedResearchTasks);
+            }
+
+            Guid[] migratedTaskIds = [.. pendingRetiredTasks.Select(task => task.Id)];
+            if (migratedTaskIds.Length > 0)
+            {
+                List<PlatformEntities.ProcessStepTaskRun> staleRuns = await storage.ProcessStepTaskRuns
+                    .Where(run => migratedTaskIds.Contains(run.ProcessTaskId))
+                    .ToListAsync(cancellationToken);
+                storage.RemoveRange(staleRuns);
+
+                List<PlatformEntities.ProcessInstance> instances = await storage.ProcessInstances
+                    .Where(instance => instance.State == ProcessInstanceState.Active
+                        && instance.CurrentProcessTaskId.HasValue
+                        && migratedTaskIds.Contains(instance.CurrentProcessTaskId.Value))
+                    .ToListAsync(cancellationToken);
+                Dictionary<Guid, PlatformEntities.ProcessTask> taskById = pendingRetiredTasks.ToDictionary(task => task.Id);
+                foreach (PlatformEntities.ProcessInstance instance in instances)
+                {
+                    instance.CurrentProcessStepId = taskById[instance.CurrentProcessTaskId!.Value].ProcessStepId;
+                    instance.LastUpdatedBy = CurrentUserId;
+                    instance.LastUpdated = now;
+                }
+            }
+
+            List<PlatformEntities.ProcessTask> pendingActiveTasks = await storage.ProcessTasks
+                .Where(task => (task.ProcessStepId == resources.Id
+                        || task.ProcessStepId == fit.Id
+                        || task.ProcessStepId == pitch.Id
+                        || task.ProcessStepId == contact.Id
+                        || task.ProcessStepId == related.Id
+                        || task.ProcessStepId == tipRelated.Id
+                        || task.ProcessStepId == qualify.Id)
+                    && task.State == ProcessTaskState.Pending)
+                .ToListAsync(cancellationToken);
+            Dictionary<Guid, PlatformEntities.ProcessStep> activeStepById = new[]
+                { resources, fit, pitch, contact, related, tipRelated, qualify }
+                .ToDictionary(step => step.Id);
+            foreach (PlatformEntities.ProcessTask task in pendingActiveTasks)
+            {
+                PlatformEntities.ProcessStep step = activeStepById[task.ProcessStepId];
+                TaskRenderContext renderContext = await BuildTaskRenderContextAsync(
+                    storage,
+                    task.LeadId,
+                    task.TenantCompanyRelationshipId,
+                    task.OpportunityId,
+                    task.ClientAccountId,
+                    cancellationToken);
+                TaskRenderValues rendered = RenderTaskValues(step, renderContext, now);
+                task.RenderedTitle = string.IsNullOrWhiteSpace(rendered.Title) ? step.Name : rendered.Title;
+                task.RenderedInstructions = rendered.Instructions;
+                task.RenderedQuestionSet = rendered.QuestionSet;
+                task.LastUpdatedBy = CurrentUserId;
+                task.LastUpdated = now;
+            }
+
+            Guid[] activePendingTaskIds = [.. pendingActiveTasks.Select(task => task.Id)];
+            if (activePendingTaskIds.Length > 0)
+            {
+                Dictionary<Guid, PlatformEntities.ProcessTask> activeTaskById = pendingActiveTasks
+                    .ToDictionary(task => task.Id);
+                List<PlatformEntities.ProcessInstance> activeInstances = await storage.ProcessInstances
+                    .Where(instance => instance.State == ProcessInstanceState.Active
+                        && instance.CurrentProcessTaskId.HasValue
+                        && activePendingTaskIds.Contains(instance.CurrentProcessTaskId.Value))
+                    .ToListAsync(cancellationToken);
+                foreach (PlatformEntities.ProcessInstance instance in activeInstances)
+                {
+                    Guid taskId = instance.CurrentProcessTaskId!.Value;
+                    if (instance.CurrentProcessStepId == activeTaskById[taskId].ProcessStepId)
+                        continue;
+                    instance.CurrentProcessStepId = activeTaskById[taskId].ProcessStepId;
+                    instance.LastUpdatedBy = CurrentUserId;
+                    instance.LastUpdated = now;
+                }
+            }
+        }
+    }
+
+    async ValueTask ConfigureStepTasksAsync(
+        IWorkflowBroker storage,
+        PlatformEntities.ProcessStep step,
+        IReadOnlyList<StepTaskContract> contracts,
+        CancellationToken cancellationToken)
+    {
+        List<PlatformEntities.ProcessStepTask> tasks = await storage.ProcessStepTasks
+            .Where(item => item.ProcessStepId == step.Id)
+            .OrderBy(item => item.Sequence)
+            .ThenBy(item => item.CreatedOn)
+            .ToListAsync(cancellationToken);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        while (tasks.Count < contracts.Count)
+        {
+            StepTaskContract contract = contracts[tasks.Count];
+            PlatformEntities.ProcessStepTask task = NewStepTask(
+                step,
+                contract.Key,
+                contract.Name,
+                (tasks.Count + 1) * 10,
+                contract.Type,
+                contract.HandlerKey,
+                contract.Instructions,
+                contract.RequiredContext,
+                contract.ProducedContext,
+                contract.Type == ProcessStepTaskType.Inference ? 2 : 1,
+                now);
+            storage.Add(task);
+            tasks.Add(task);
+        }
+
+        for (int index = 0; index < contracts.Count; index++)
+        {
+            StepTaskContract contract = contracts[index];
+            ConfigureResearchSubtask(
+                tasks[index],
+                contract.Key,
+                contract.Name,
+                (index + 1) * 10,
+                contract.Type,
+                contract.HandlerKey,
+                contract.Instructions,
+                contract.RequiredContext,
+                contract.ProducedContext,
+                index + 1 < contracts.Count ? contracts[index + 1].Key : null,
+                contract.FailureTaskKey);
+        }
+
+        foreach (PlatformEntities.ProcessStepTask extra in tasks.Skip(contracts.Count))
+        {
+            extra.IsActive = false;
+            extra.NextTaskKey = null;
+            extra.FailureTaskKey = null;
+            extra.LastUpdatedBy = CurrentUserId;
+            extra.LastUpdated = now;
+        }
+    }
+
+    void ConfigureResearchSubtask(
+        PlatformEntities.ProcessStepTask task,
+        string key,
+        string name,
+        int sequence,
+        ProcessStepTaskType type,
+        string handlerKey,
+        string instructions,
+        string requiredContext,
+        string producedContext,
+        string nextTaskKey,
+        string failureTaskKey)
+    {
+        task.Key = key;
+        task.Name = name;
+        task.Sequence = sequence;
+        task.Type = type;
+        task.HandlerKey = handlerKey;
+        task.InstructionsTemplate = instructions;
+        task.RequiredContextKeys = requiredContext;
+        task.ProducedContextKeys = producedContext;
+        task.MaxAttempts = type == ProcessStepTaskType.Inference ? 2 : 1;
+        task.IsActive = true;
+        task.NextTaskKey = nextTaskKey;
+        task.FailureTaskKey = failureTaskKey;
+        task.LastUpdatedBy = CurrentUserId;
+        task.LastUpdated = DateTimeOffset.UtcNow;
+    }
+
+    sealed record StepTaskContract(
+        string Key,
+        string Name,
+        ProcessStepTaskType Type,
+        string HandlerKey,
+        string Instructions,
+        string RequiredContext,
+        string ProducedContext,
+        string FailureTaskKey = null);
 
     async ValueTask InitializeStepTaskRunsAsync(
         IWorkflowBroker storage,
@@ -2139,8 +3578,8 @@ public sealed class WorkflowAutomationService(
         }
 
         if (instance.State != ProcessInstanceState.Active
-            || instance.CurrentProcessTaskId != task.Id
-            || instance.CurrentProcessStepId != step.Id)
+            || task.State != ProcessTaskState.Pending
+            || task.ProcessInstanceId != instance.Id)
         {
             throw new WorkflowRuleViolationException(
                 "The task is not the active step for this process instance and cannot advance the workflow.");
@@ -2165,13 +3604,19 @@ public sealed class WorkflowAutomationService(
             .ThenBy(item => item.OutcomeLabel)
             .ToListAsync(cancellationToken);
 
-        PlatformEntities.ProcessTransition transition = ResolveTransition(transitions, outcomeKey);
+        List<PlatformEntities.ProcessTransition> selectedTransitions = ResolveTransitions(transitions, outcomeKey);
+        if (selectedTransitions.Count == 0)
+            throw new WorkflowRuleViolationException("The workflow step has no valid outgoing route.");
+
+        if (selectedTransitions.Count > 1 && selectedTransitions.Any(transition => transition.IsTerminal))
+            throw new WorkflowRuleViolationException("A workflow fork cannot include terminal routes.");
+
         await CompleteStepTaskRunsAsync(storage, task.Id, completionNote, cancellationToken);
-        PlatformEntities.ProcessStep nextStep = null;
-        if (!transition.IsTerminal && transition.NextProcessStepId.HasValue)
+        Dictionary<Guid, PlatformEntities.ProcessStep> nextStepsById = [];
+        foreach (PlatformEntities.ProcessTransition selectedTransition in selectedTransitions.Where(transition => !transition.IsTerminal && transition.NextProcessStepId.HasValue))
         {
-            nextStep = await storage.ProcessSteps.FirstOrDefaultAsync(
-                item => item.Id == transition.NextProcessStepId.Value
+            PlatformEntities.ProcessStep nextStep = await storage.ProcessSteps.FirstOrDefaultAsync(
+                item => item.Id == selectedTransition.NextProcessStepId.Value
                     && item.ProcessDefinitionId == step.ProcessDefinitionId
                     && item.IsActive,
                 cancellationToken);
@@ -2179,14 +3624,20 @@ public sealed class WorkflowAutomationService(
             if (nextStep is null)
             {
                 throw new WorkflowRuleViolationException(
-                    $"Outcome '{transition.OutcomeKey}' does not target an active step in the current process definition.");
+                    $"Outcome '{selectedTransition.OutcomeKey}' does not target an active step in the current process definition.");
             }
+
+            nextStepsById[nextStep.Id] = nextStep;
         }
 
         DateTimeOffset now = DateTimeOffset.UtcNow;
         task.State = ProcessTaskState.Completed;
-        task.CompletionOutcomeKey = transition.OutcomeKey;
-        task.CompletionNotes = Normalize(completionNote);
+        task.CompletionOutcomeKey = selectedTransitions
+            .Select(transition => transition.OutcomeKey)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .SingleOrDefault() ?? "fan-out";
+        task.CompletionNotes = Normalize(completionNote)
+            ?? (selectedTransitions.Count == 1 && selectedTransitions[0].IsTerminal ? $"Outcome: {selectedTransitions[0].OutcomeLabel}." : null);
         task.CompletedBy = CurrentUserId;
         task.CompletedOn = now;
         task.LastUpdatedBy = CurrentUserId;
@@ -2194,8 +3645,21 @@ public sealed class WorkflowAutomationService(
 
         await ApplyCompletionNoteUpdatesAsync(storage, task, step, task.CompletionNotes, relationship, opportunity, now, cancellationToken);
         await RecordCompletionActivityAsync(storage, task, relationship, opportunity, clientAccount, now, cancellationToken);
-        await ApplyTransitionEffectAsync(storage, transition, lead, relationship, opportunity, clientAccount, now, cancellationToken);
-        await RecordCompanyHistoryAsync(storage, task, step, instance, transition, lead, relationship, clientAccount, now, cancellationToken);
+        PlatformEntities.ProcessTransition terminalTransition = selectedTransitions.FirstOrDefault(transition => transition.IsTerminal);
+        string terminalReason = terminalTransition is not null
+            ? ExtractTerminalOutcomeReason(task.CompletionNotes, terminalTransition.OutcomeLabel)
+            : null;
+        if (lead is not null && terminalTransition is not null)
+        {
+            lead.QualificationNotes = AppendNote(
+                lead.QualificationNotes,
+                $"## Terminal outcome\nOutcome: {terminalTransition.OutcomeLabel}\nRoute: {terminalTransition.OutcomeKey}\nReason: {terminalReason}\nRecorded: {now:O}");
+        }
+        foreach (PlatformEntities.ProcessTransition selectedTransition in selectedTransitions)
+        {
+            await ApplyTransitionEffectAsync(storage, selectedTransition, lead, relationship, opportunity, clientAccount, terminalReason, now, cancellationToken);
+            await RecordCompanyHistoryAsync(storage, task, step, instance, selectedTransition, lead, relationship, clientAccount, now, cancellationToken);
+        }
 
         loggingBroker.LogInformation(
             "Completed scheduled task for {RecordName} to {TaskTitle} with outcome {OutcomeKey}.",
@@ -2206,12 +3670,12 @@ public sealed class WorkflowAutomationService(
                 opportunity,
                 clientAccount),
             task.RenderedTitle,
-            transition.OutcomeKey);
+            task.CompletionOutcomeKey);
 
-        if (transition.IsTerminal || !transition.NextProcessStepId.HasValue)
+        if (terminalTransition is not null || selectedTransitions.All(transition => !transition.NextProcessStepId.HasValue))
         {
             instance.State = ProcessInstanceState.Completed;
-            instance.CompletionOutcomeKey = transition.OutcomeKey;
+            instance.CompletionOutcomeKey = terminalTransition?.OutcomeKey ?? task.CompletionOutcomeKey;
             instance.CompletedOn = now;
             instance.CurrentProcessTaskId = null;
             instance.CurrentProcessStepId = null;
@@ -2220,10 +3684,10 @@ public sealed class WorkflowAutomationService(
 
             await storage.SaveAsync(cancellationToken);
 
-            if (transition.Effect == ProcessTransitionEffect.QualifyLeadAndCreateOpportunity && lead?.OpportunityId is Guid opportunityId)
+            if (terminalTransition?.Effect == ProcessTransitionEffect.QualifyLeadAndCreateOpportunity && lead?.OpportunityId is Guid opportunityId)
                 await EnsureCoverageAsync(opportunityId: opportunityId, forceCreate: true, cancellationToken: cancellationToken);
 
-            if (transition.Effect == ProcessTransitionEffect.CreateClientAccount && opportunity?.TenantCompanyRelationshipId is Guid relationshipId)
+            if (terminalTransition?.Effect == ProcessTransitionEffect.CreateClientAccount && opportunity?.TenantCompanyRelationshipId is Guid relationshipId)
             {
                 PlatformEntities.ClientAccount newClientAccount = await storage.ClientAccounts
                     .OrderByDescending(account => account.CreatedOn)
@@ -2239,17 +3703,25 @@ public sealed class WorkflowAutomationService(
             return;
         }
 
-        instance.CurrentProcessTaskId = null;
-        instance.CurrentProcessStepId = nextStep.Id;
+        foreach (PlatformEntities.ProcessTransition selectedTransition in selectedTransitions.Where(transition => transition.NextProcessStepId.HasValue))
+        {
+            PlatformEntities.ProcessStep nextStep = nextStepsById[selectedTransition.NextProcessStepId.Value];
+            if (!await CanScheduleJoinedStepAsync(storage, instance.Id, step.ProcessDefinitionId, nextStep.Id, step.Id, cancellationToken))
+                continue;
+
+            await CreateTaskForStepAsync(storage, instance, nextStep, cancellationToken);
+        }
+
+        PlatformEntities.ProcessTask currentPendingTask = await storage.ProcessTasks
+            .Where(item => item.ProcessInstanceId == instance.Id && item.State == ProcessTaskState.Pending)
+            .OrderBy(item => item.DueOn)
+            .ThenBy(item => item.CreatedOn)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        instance.CurrentProcessTaskId = currentPendingTask?.Id;
+        instance.CurrentProcessStepId = currentPendingTask?.ProcessStepId;
         instance.LastUpdatedBy = CurrentUserId;
         instance.LastUpdated = now;
-
-        PlatformEntities.ProcessTask nextTask = await CreateTaskForStepAsync(
-            storage,
-            instance,
-            nextStep,
-            cancellationToken);
-        instance.CurrentProcessTaskId = nextTask.Id;
     }
 
     async ValueTask RecordCompletionActivityAsync(
@@ -2465,6 +3937,7 @@ public sealed class WorkflowAutomationService(
         PlatformEntities.TenantCompanyRelationship relationship,
         PlatformEntities.Opportunity opportunity,
         PlatformEntities.ClientAccount clientAccount,
+        string outcomeReason,
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
@@ -2490,7 +3963,7 @@ public sealed class WorkflowAutomationService(
                 if (lead is not null)
                 {
                     lead.Status = LeadStatus.Rejected;
-                    await SuppressCompanyAsync(storage, lead.CompanyId, $"Lead rejected: {transition.OutcomeLabel}", now, cancellationToken);
+                    await SuppressCompanyAsync(storage, lead.CompanyId, $"Lead rejected: {FirstNonEmpty(outcomeReason, transition.OutcomeLabel)}", now, cancellationToken);
                 }
                 break;
 
@@ -2714,6 +4187,28 @@ public sealed class WorkflowAutomationService(
         string.IsNullOrWhiteSpace(existing)
             ? note
             : $"{existing.Trim()}\n\n{note}";
+
+    static string ExtractTerminalOutcomeReason(string completionNote, string fallback)
+    {
+        foreach (string pattern in new[]
+        {
+            @"(?im)^Decision reason:\s*(?<reason>.+)$",
+            @"(?im)^Reason:\s*(?<reason>.+)$",
+            @"(?im)^Current status:\s*(?<reason>.+)$"
+        })
+        {
+            Match match = Regex.Match(completionNote ?? string.Empty, pattern, RegexOptions.CultureInvariant);
+            if (match.Success && !string.IsNullOrWhiteSpace(match.Groups["reason"].Value))
+                return match.Groups["reason"].Value.Trim();
+        }
+
+        string firstUsefulLine = (completionNote ?? string.Empty)
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(line => !line.StartsWith("Confidence:", StringComparison.OrdinalIgnoreCase)
+                && !line.StartsWith("Evidence:", StringComparison.OrdinalIgnoreCase)
+                && !line.StartsWith("Outcome:", StringComparison.OrdinalIgnoreCase));
+        return FirstNonEmpty(firstUsefulLine, fallback, "No reason was supplied.");
+    }
 
     async ValueTask CreateClientAccountAsync(
         IWorkflowBroker storage,
@@ -3246,6 +4741,82 @@ public sealed class WorkflowAutomationService(
         return transitions.FirstOrDefault(transition => transition.IsDefaultOutcome) ?? transitions[0];
     }
 
+    static List<PlatformEntities.ProcessTransition> ResolveTransitions(
+        IReadOnlyList<PlatformEntities.ProcessTransition> transitions,
+        string outcomeKey)
+    {
+        if (transitions.Count == 0)
+            return [];
+
+        string normalizedOutcome = Normalize(outcomeKey);
+        if (!string.IsNullOrWhiteSpace(normalizedOutcome))
+        {
+            List<PlatformEntities.ProcessTransition> explicitTransitions =
+            [
+                .. transitions.Where(transition =>
+                    transition.OutcomeKey.Equals(normalizedOutcome, StringComparison.OrdinalIgnoreCase))
+            ];
+
+            if (explicitTransitions.Count > 0)
+                return explicitTransitions;
+
+            throw new WorkflowRuleViolationException(
+                $"Outcome '{normalizedOutcome}' is not valid for the current workflow step.");
+        }
+
+        List<PlatformEntities.ProcessTransition> defaultTransitions =
+        [
+            .. transitions.Where(transition => transition.IsDefaultOutcome)
+        ];
+
+        return defaultTransitions.Count > 0 ? defaultTransitions : [transitions[0]];
+    }
+
+    async ValueTask<bool> CanScheduleJoinedStepAsync(
+        IWorkflowBroker storage,
+        Guid processInstanceId,
+        Guid processDefinitionId,
+        Guid targetStepId,
+        Guid completedSourceStepId,
+        CancellationToken cancellationToken)
+    {
+        bool targetAlreadyPendingOrCompleted = await storage.ProcessTasks.AnyAsync(
+            task => task.ProcessInstanceId == processInstanceId
+                && task.ProcessStepId == targetStepId
+                && (task.State == ProcessTaskState.Pending || task.State == ProcessTaskState.Completed),
+            cancellationToken);
+
+        if (targetAlreadyPendingOrCompleted)
+            return false;
+
+        List<Guid> prerequisiteStepIds = await storage.ProcessTransitions
+            .Where(transition => transition.NextProcessStepId == targetStepId
+                && transition.ProcessStep.ProcessDefinitionId == processDefinitionId
+                && transition.ProcessStep.IsActive
+                && transition.IsDefaultOutcome
+                && !transition.IsTerminal)
+            .Select(transition => transition.ProcessStepId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        if (prerequisiteStepIds.Count <= 1)
+            return true;
+
+        HashSet<Guid> completedStepIds =
+        [
+            .. await storage.ProcessTasks
+                .Where(task => task.ProcessInstanceId == processInstanceId
+                    && task.State == ProcessTaskState.Completed
+                    && prerequisiteStepIds.Contains(task.ProcessStepId))
+                .Select(task => task.ProcessStepId)
+                .Distinct()
+                .ToListAsync(cancellationToken)
+        ];
+        completedStepIds.Add(completedSourceStepId);
+
+        return prerequisiteStepIds.All(completedStepIds.Contains);
+    }
+
     static async ValueTask CloseActiveInstanceAsync(
         IWorkflowBroker storage,
         PlatformEntities.ProcessInstance activeInstance,
@@ -3295,15 +4866,15 @@ public sealed class WorkflowAutomationService(
             NormalizeSeedDefinitionMetadata(
                 existingDefinition,
                 "Lead Generation",
-                "Move a raw lead through bounded identity, activity, data-quality, and commercial-fit checks before creating an opportunity or rejecting it cleanly.");
+                "Confirm a current legal entity, gather one reusable first-party evidence pack, then make separate bounded decisions about fit, contactability and related-company discovery.");
 
-            bool hasBoundedStages = await storage.ProcessSteps.AnyAsync(
+            bool hasSupportedLeadShape = await storage.ProcessSteps.AnyAsync(
                 item => item.ProcessDefinitionId == existingDefinition.Id
-                    && item.Key == "company-activity"
+                    && (item.Key == "company-activity" || item.Key == "gather-company-resources")
                     && item.IsActive,
                 cancellationToken);
 
-            if (!hasBoundedStages)
+            if (!hasSupportedLeadShape)
                 await UpgradeLeadProcessToBoundedStagesAsync(storage, existingDefinition, cancellationToken);
 
             return;
@@ -3573,6 +5144,7 @@ public sealed class WorkflowAutomationService(
             null,
             "Questions:\n1. Are you the right person?\n2. Is this issue live?\n3. Is a short discovery call worthwhile?",
             "Was the contact reached?\nWas there interest?");
+        followUpCall.ExecutionMode = ProcessStepExecutionMode.HumanManaged;
 
         PlatformEntities.ProcessStep handoffToAccountOwner = NewStep(definition, "handoff-account-owner", "Hand Off to Account Owner", 50, false, ProcessActionType.Email, RelationshipStatus.ActiveOpportunity, SalesPipelineStage.DiscoveryBooked, null, 0, 0,
             "Hand off {{Company.OfficialName}} to {{Relationship.AccountOwnerDisplayName}}",

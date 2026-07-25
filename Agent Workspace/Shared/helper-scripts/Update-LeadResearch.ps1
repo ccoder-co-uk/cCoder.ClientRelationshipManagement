@@ -10,7 +10,13 @@ param(
     [string]$RawContactPhoneNumber,
     [string]$RawAddressText,
     [string]$QualificationNotes,
-    [string]$QualificationNotesPath
+    [string]$QualificationNotesPath,
+    [string]$CompanyStatus,
+    [Nullable[DateTimeOffset]]$DissolvedOn,
+    [string]$CompanyStatusSourceUrl,
+    [Nullable[int]]$EmployeeCount,
+    [Nullable[decimal]]$AnnualRevenue,
+    [string]$RevenueCurrency
 )
 
 if ($PayloadPath) {
@@ -30,6 +36,14 @@ else {
     if ($null -ne $RawContactPhoneNumber -and $RawContactPhoneNumber -ne '') { $payload.rawContactPhoneNumber = $RawContactPhoneNumber }
     if ($null -ne $RawAddressText -and $RawAddressText -ne '') { $payload.rawAddressText = $RawAddressText }
     if ($null -ne $QualificationNotes -and $QualificationNotes -ne '') { $payload.qualificationNotes = $QualificationNotes }
+    if ($null -ne $CompanyStatus -and $CompanyStatus -ne '') { $payload.companyStatus = $CompanyStatus }
+    if ($null -ne $DissolvedOn) { $payload.dissolvedOn = $DissolvedOn.ToString('o') }
+    if ($null -ne $CompanyStatusSourceUrl -and $CompanyStatusSourceUrl -ne '') { $payload.companyStatusSourceUrl = $CompanyStatusSourceUrl }
+    # PowerShell unwraps Nullable[T] parameters when a value is supplied, so
+    # accessing .Value serialises null. Use the bound scalar directly.
+    if ($null -ne $EmployeeCount) { $payload.employeeCount = $EmployeeCount }
+    if ($null -ne $AnnualRevenue) { $payload.annualRevenue = $AnnualRevenue }
+    if ($null -ne $RevenueCurrency -and $RevenueCurrency -ne '') { $payload.revenueCurrency = $RevenueCurrency }
 
     if ($payload.Count -eq 0) {
         throw "Provide either -PayloadPath or at least one explicit lead research value."

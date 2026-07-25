@@ -3,62 +3,138 @@
 @model WorkflowModelPageViewModel
 @{
     ViewData["Title"] = "Full Company Process Model";
-    const int nodeStartLeft = 36;
-    const int nodeColumnWidth = 240;
+    const int nodeStartLeft = 86;
+    const int nodeColumnWidth = 250;
     const int portalColumnInset = 0;
-    const int topRowOffset = 70;
-    const int nodeRowSpacing = 210;
+    const int topRowOffset = 84;
+    const int nodeRowSpacing = 240;
     const int nodeHeight = 144;
-    const int terminalNodeHeight = 42;
-    const int terminalNodeGap = 6;
     Dictionary<Guid, int> portalColumns = [];
     Dictionary<Guid, Dictionary<Guid, (int Row, int Column)>> processStepLayouts = [];
+    Dictionary<Guid, Dictionary<string, (int Row, int Column)>> processTerminalLayouts = [];
     Dictionary<Guid, int> processLaneTops = [];
     Dictionary<Guid, int> processLaneHeights = [];
     int nextLaneTop = 24;
     int maximumUsedColumn = 0;
 
     if (Model.Processes.Count > 0)
-        // Keep the left-most grid column free for terminal outcomes. This lets a
-        // terminal card sit beside its decision without blocking a lane hand-off.
-        portalColumns[Model.Processes[0].Id] = 1;
+        portalColumns[Model.Processes[0].Id] = 0;
 
     foreach (WorkflowProcessViewModel process in Model.Processes)
     {
         int portalColumn = portalColumns.GetValueOrDefault(process.Id, 0);
-        // Use the available width before adding another row. A five-node run
-        // keeps the common seven-step lane to two clean strokes of the snake and
-        // leaves the second row's outside cells available for exits.
-        int columnSpan = Math.Clamp(process.Steps.Count, 1, 5);
-        Dictionary<Guid, (int Row, int Column)> layout = [];
-        int stepIndex = 0;
-        int row = 0;
-        while (stepIndex < process.Steps.Count)
-        {
-            IEnumerable<int> columns = row switch
-            {
-                0 => Enumerable.Range(portalColumn + 1, columnSpan),
-                _ when row % 2 == 1 => Enumerable.Range(portalColumn, columnSpan + 1).Reverse(),
-                _ => Enumerable.Range(portalColumn, columnSpan + 1)
-            };
+        Dictionary<Guid, WorkflowStepViewModel> stepsById = process.Steps.ToDictionary(step => step.Id);
+        Dictionary<Guid, int> depths = process.Steps.ToDictionary(step => step.Id, _ => -1);
+        Queue<WorkflowStepViewModel> pendingSteps = new(process.Steps
+            .Where(step => step.IsEntryPoint)
+            .OrderBy(step => step.Sequence));
 
-            foreach (int column in columns)
+        if (pendingSteps.Count == 0 && process.Steps.Count > 0)
+            pendingSteps.Enqueue(process.Steps.OrderBy(step => step.Sequence).First());
+
+        foreach (WorkflowStepViewModel entryStep in pendingSteps)
+            depths[entryStep.Id] = 0;
+
+        // A column represents a genuine next-step generation. Sequential work
+        // therefore stays on one horizontal stroke; only parallel next steps
+        // claim additional rows in the same generation.
+        while (pendingSteps.Count > 0)
+        {
+            WorkflowStepViewModel step = pendingSteps.Dequeue();
+            int nextDepth = depths[step.Id] + 1;
+            foreach (Guid nextStepId in step.Transitions
+                .Where(transition => transition.NextProcessStepId.HasValue)
+                .Select(transition => transition.NextProcessStepId!.Value)
+                .Where(stepsById.ContainsKey)
+                // A backwards route is an iteration, not a new layout level.
+                .Where(nextStepId => stepsById[nextStepId].Sequence > step.Sequence))
             {
-                if (stepIndex >= process.Steps.Count)
-                    break;
-                layout[process.Steps[stepIndex].Id] = (row, column);
-                stepIndex++;
+                if (depths[nextStepId] >= nextDepth)
+                    continue;
+
+                depths[nextStepId] = nextDepth;
+                pendingSteps.Enqueue(stepsById[nextStepId]);
             }
-            row++;
         }
 
-        int maximumRow = layout.Values.Select(position => position.Row).DefaultIfEmpty(0).Max();
+        int nextUnplacedDepth = depths.Values.Where(depth => depth >= 0).DefaultIfEmpty(-1).Max() + 1;
+        foreach (WorkflowStepViewModel step in process.Steps.Where(step => depths[step.Id] < 0).OrderBy(step => step.Sequence))
+            depths[step.Id] = nextUnplacedDepth++;
+
+        int maximumDepth = depths.Values.DefaultIfEmpty(0).Max();
+        // The turn point is a physical canvas boundary, not an arbitrary number
+        // of steps. A generation advances to the available edge, drops one row,
+        // then reverses. Parallel next steps stack inside the same generation.
+        const int layoutColumnBudget = 6;
+        int direction = portalColumn >= layoutColumnBudget / 2 ? -1 : 1;
+        int firstBoundary = direction > 0 ? layoutColumnBudget : 0;
+        int firstRowCapacity = Math.Abs(firstBoundary - portalColumn);
+        if (firstRowCapacity == 0)
+        {
+            direction *= -1;
+            firstBoundary = direction > 0 ? layoutColumnBudget : 0;
+            firstRowCapacity = Math.Abs(firstBoundary - portalColumn);
+        }
+        int fullRowCapacity = layoutColumnBudget + 1;
+        Func<int, (int Row, int Column)> snakePosition = depth =>
+        {
+            if (depth < firstRowCapacity)
+                return (0, portalColumn + (direction * (depth + 1)));
+
+            int remainingDepth = depth - firstRowCapacity;
+            int row = 1 + (remainingDepth / fullRowCapacity);
+            int offset = remainingDepth % fullRowCapacity;
+            bool travelsBack = row % 2 == 1;
+            int column = direction > 0
+                ? travelsBack ? layoutColumnBudget - offset : offset
+                : travelsBack ? offset : layoutColumnBudget - offset;
+            return (row, column);
+        };
+        int branchBandHeight = Math.Max(1, process.Steps
+            .GroupBy(step => depths[step.Id])
+            .Select(group => group.Count())
+            .DefaultIfEmpty(1)
+            .Max());
+        Dictionary<Guid, (int Row, int Column)> layout = [];
+        foreach (IGrouping<int, WorkflowStepViewModel> generation in process.Steps
+            .GroupBy(step => depths[step.Id])
+            .OrderBy(group => group.Key))
+        {
+            (int snakeRow, int column) = snakePosition(generation.Key);
+            int row = snakeRow * branchBandHeight;
+            foreach (WorkflowStepViewModel step in generation.OrderBy(step => step.Sequence))
+                layout[step.Id] = (row++, column);
+        }
+
+        Dictionary<string, (int Row, int Column)> terminalLayout = [];
+        (int terminalSnakeRow, int terminalColumn) = snakePosition(maximumDepth + 1);
+        int terminalRow = terminalSnakeRow * branchBandHeight;
+        foreach (WorkflowTerminalNodeViewModel terminal in process.TerminalNodes
+            .OrderBy(node => node.SourceStepIds
+                .Where(layout.ContainsKey)
+                .Select(id => layout[id].Row)
+                .DefaultIfEmpty(0)
+                .Average())
+            .ThenBy(node => node.Name))
+        {
+            terminalLayout[terminal.GraphTargetId] = (terminalRow++, terminalColumn);
+        }
+
+        int maximumRow = Math.Max(
+            layout.Values.Select(position => position.Row).DefaultIfEmpty(0).Max(),
+            terminalLayout.Values.Select(position => position.Row).DefaultIfEmpty(0).Max());
         int laneHeight = topRowOffset + (maximumRow * nodeRowSpacing) + nodeHeight + 86;
         processStepLayouts[process.Id] = layout;
+        processTerminalLayouts[process.Id] = terminalLayout;
         processLaneTops[process.Id] = nextLaneTop;
         processLaneHeights[process.Id] = laneHeight;
         nextLaneTop += laneHeight + 20;
-        maximumUsedColumn = Math.Max(maximumUsedColumn, Math.Max(portalColumn, layout.Values.Select(position => position.Column).DefaultIfEmpty(portalColumn).Max()) + 1);
+        maximumUsedColumn = Math.Max(maximumUsedColumn, new[]
+        {
+            portalColumn,
+            layout.Values.Select(position => position.Column).DefaultIfEmpty(portalColumn).Max(),
+            terminalLayout.Values.Select(position => position.Column).DefaultIfEmpty(portalColumn).Max()
+        }.Max());
 
         foreach (WorkflowStepViewModel step in process.Steps)
         {
@@ -72,11 +148,15 @@
         }
     }
 
-    int stageWidth = Math.Max(1540, nodeStartLeft + (maximumUsedColumn * nodeColumnWidth) + 270);
+    int stageWidth = Math.Max(1540, nodeStartLeft + (maximumUsedColumn * nodeColumnWidth) + 240);
     int stageHeight = Math.Max(620, nextLaneTop + 6);
 }
 
 <main class="page-shell workflow-model-page">
+    @if (!string.IsNullOrWhiteSpace(Model.Notice))
+    {
+        <div class="notice-banner">@Model.Notice</div>
+    }
     <section class="page-hero workflow-model-hero">
         <h1>Full Company Process Model</h1>
         <div class="page-hero__actions">
@@ -169,13 +249,13 @@
         <div class="workflow-workspace__body">
             <div class="workflow-surface-viewport" id="workflowViewport" tabindex="0" aria-label="Workflow canvas. Drag the background to pan and use the toolbar to zoom.">
                 <div class="workflow-surface-space" id="workflowSpace">
-                    <div class="workflow-surface-stage" id="workflowStage" style="width:@(stageWidth)px;height:@(stageHeight)px" data-width="@stageWidth" data-height="@stageHeight" data-nodes-per-stroke="5" data-terminal-column-reserved="true">
+                    <div class="workflow-surface-stage" id="workflowStage" style="width:@(stageWidth)px;height:@(stageHeight)px" data-width="@stageWidth" data-height="@stageHeight" data-layout="topology-aware" data-terminal-column-reserved="true">
                         <svg class="workflow-connectors" id="workflowConnectors" width="@stageWidth" height="@stageHeight" aria-hidden="true">
                             <defs>
-                                <marker id="workflowArrowDefault" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="7" markerHeight="7" orient="auto"><path d="M 1 1 L 11 6 L 1 11 z"></path></marker>
-                                <marker id="workflowArrowBranch" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="7" markerHeight="7" orient="auto"><path d="M 1 1 L 11 6 L 1 11 z"></path></marker>
-                                <marker id="workflowArrowHandoff" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="7" markerHeight="7" orient="auto"><path d="M 1 1 L 11 6 L 1 11 z"></path></marker>
-                                <marker id="workflowArrowTerminal" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="7" markerHeight="7" orient="auto"><path d="M 1 1 L 11 6 L 1 11 z"></path></marker>
+                                <marker id="workflowArrowDefault" viewBox="0 0 16 12" refX="1" refY="6" markerWidth="16" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto"><line x1="1" y1="6" x2="5" y2="6"></line><path d="M 5 1 L 15 6 L 5 11 z"></path></marker>
+                                <marker id="workflowArrowBranch" viewBox="0 0 16 12" refX="1" refY="6" markerWidth="16" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto"><line x1="1" y1="6" x2="5" y2="6"></line><path d="M 5 1 L 15 6 L 5 11 z"></path></marker>
+                                <marker id="workflowArrowHandoff" viewBox="0 0 16 12" refX="1" refY="6" markerWidth="16" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto"><line x1="1" y1="6" x2="5" y2="6"></line><path d="M 5 1 L 15 6 L 5 11 z"></path></marker>
+                                <marker id="workflowArrowTerminal" viewBox="0 0 16 12" refX="1" refY="6" markerWidth="16" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto"><line x1="1" y1="6" x2="5" y2="6"></line><path d="M 5 1 L 15 6 L 5 11 z"></path></marker>
                             </defs>
                         </svg>
 
@@ -186,9 +266,7 @@
                             int laneHeight = processLaneHeights[process.Id];
                             int portalColumn = portalColumns.GetValueOrDefault(process.Id, 0);
                             Dictionary<Guid, (int Row, int Column)> stepLayout = processStepLayouts[process.Id];
-                            int maximumNodeRow = stepLayout.Values.Select(position => position.Row).DefaultIfEmpty(0).Max();
-                            HashSet<(int Row, int Column)> occupiedCells = stepLayout.Values.ToHashSet();
-                            occupiedCells.Add((0, portalColumn));
+                            Dictionary<string, (int Row, int Column)> terminalLayout = processTerminalLayouts[process.Id];
                             WorkflowStepViewModel entryStep = process.Steps
                                 .OrderByDescending(step => step.IsEntryPoint)
                                 .ThenBy(step => step.Sequence)
@@ -272,10 +350,19 @@
                                     {
                                         <span class="workflow-node__iteration" title="This step can repeat" aria-label="Repeating step">↻</span>
                                     }
-                                    <span class="workflow-node__meta"><b>@step.Sequence</b> @step.ActionType</span>
-                                    @if (step.Tasks.Count > 0)
+                                    <span class="workflow-node__meta"><b>@step.Sequence</b> @step.StepType</span>
+                                    @if (step.Tasks.Count > 0 || step.ExecutionMode == "Human Managed")
                                     {
-                                        <span class="workflow-node__tasks" title="@string.Join(" → ", step.Tasks.Select(task => task.Name))">@step.Tasks.Count child task@(step.Tasks.Count == 1 ? "" : "s")</span>
+                                        <span class="workflow-node__badges">
+                                            @if (step.Tasks.Count > 0)
+                                            {
+                                                <span class="workflow-node__tasks" title="@string.Join(" → ", step.Tasks.Select(task => task.Name))">@step.Tasks.Count child task@(step.Tasks.Count == 1 ? "" : "s")</span>
+                                            }
+                                        @if (step.ExecutionMode == "Human Managed")
+                                        {
+                                            <em class="workflow-node__owner" title="This step must be completed by a human">Human</em>
+                                        }
+                                        </span>
                                     }
                                     <strong>@step.Name</strong>
                                     <small>@step.Objective</small>
@@ -298,7 +385,7 @@
 
                                 @foreach (WorkflowTransitionViewModel transition in step.Transitions.Where(transition => transition.NextProcessStepId != step.Id))
                                 {
-                                    string edgeKind = transition.GraphTargetId.StartsWith("exit-", StringComparison.Ordinal)
+                                    string edgeKind = transition.GraphTargetId.StartsWith("terminal-", StringComparison.Ordinal)
                                         ? "terminal"
                                         : transition.GraphTargetId.StartsWith("portal-", StringComparison.Ordinal)
                                             ? "handoff"
@@ -313,53 +400,27 @@
                                 }
                             }
 
-                            List<(WorkflowTransitionViewModel Transition, WorkflowStepViewModel Step)> exits = process.Steps
-                                .SelectMany(step => step.Transitions
-                                    .Where(transition => transition.GraphTargetId.StartsWith("exit-", StringComparison.Ordinal))
-                                    .Select(transition => (transition, step)))
-                                .ToList();
-                            HashSet<(int Row, int Column)> reservedExitCells = [];
-                            foreach (IGrouping<Guid, (WorkflowTransitionViewModel Transition, WorkflowStepViewModel Step)> exitGroup in exits.GroupBy(exit => exit.Step.Id))
+                            @foreach (WorkflowTerminalNodeViewModel terminal in process.TerminalNodes)
                             {
-                                (int sourceRow, int sourceColumn) = stepLayout[exitGroup.Key];
-                                int rightColumn = sourceColumn + 1;
-                                int leftColumn = sourceColumn - 1;
-                                bool hasFreeCellOnRight = !occupiedCells.Contains((sourceRow, rightColumn)) && !reservedExitCells.Contains((sourceRow, rightColumn));
-                                bool hasFreeCellOnLeft = leftColumn >= 0 && !occupiedCells.Contains((sourceRow, leftColumn)) && !reservedExitCells.Contains((sourceRow, leftColumn));
-                                // Prefer the outside/left side. The centre and right-hand
-                                // corridors are reserved for the direct process hand-off.
-                                bool placeOnLeft = hasFreeCellOnLeft;
-                                bool placeOnRight = !placeOnLeft && hasFreeCellOnRight;
-                                bool useTerminalShelf = !placeOnLeft && !placeOnRight;
-                                int exitColumn = placeOnLeft ? leftColumn : placeOnRight ? rightColumn : sourceColumn;
-                                int exitRow = sourceRow;
-                                if (!useTerminalShelf)
-                                    reservedExitCells.Add((exitRow, exitColumn));
-                                int exitCount = exitGroup.Count();
-                                int terminalGroupHeight = (exitCount * terminalNodeHeight) + ((exitCount - 1) * terminalNodeGap);
-                                int terminalGroupInset = Math.Max(0, (nodeHeight - terminalGroupHeight) / 2);
-                                int exitOrdinal = 0;
-                                foreach ((WorkflowTransitionViewModel Transition, WorkflowStepViewModel Step) exit in exitGroup)
-                                {
-                                    int exitLeft = nodeStartLeft + (exitColumn * nodeColumnWidth)
-                                        + (useTerminalShelf ? exitOrdinal * 204 : 0);
-                                    int exitTop = useTerminalShelf
-                                        ? laneTop + topRowOffset + (maximumNodeRow * nodeRowSpacing) + nodeHeight + 36
-                                        : laneTop + topRowOffset + (exitRow * nodeRowSpacing) + terminalGroupInset + (exitOrdinal * (terminalNodeHeight + terminalNodeGap));
-                                    <button type="button"
-                                            id="@exit.Transition.GraphTargetId"
-                                            class="workflow-end-node workflow-end-node--@process.LaneKey workflow-graph-node"
-                                            style="left:@(exitLeft)px;top:@(exitTop)px"
-                                            data-node-row="@(useTerminalShelf ? maximumNodeRow + 1 : exitRow)"
-                                            data-node-column="@exitColumn"
-                                            data-lane-id="@process.Id"
-                                            data-inspector-template="transition-template-@exit.Transition.Id.ToString("N")">
-                                        <span>@exit.Transition.OutcomeLabel</span>
-                                        <strong>@exit.Transition.DestinationLabel</strong>
-                                        <small data-live-key="exit-@exit.Transition.Id.ToString("N")">@exit.Transition.CurrentStateCount.ToString("N0") here</small>
-                                    </button>
-                                    exitOrdinal++;
-                                }
+                                (int terminalRow, int terminalColumn) = terminalLayout[terminal.GraphTargetId];
+                                int terminalLeft = nodeStartLeft + (terminalColumn * nodeColumnWidth);
+                                int terminalTop = laneTop + topRowOffset + (terminalRow * nodeRowSpacing);
+                                <button type="button"
+                                        id="@terminal.GraphTargetId"
+                                        class="workflow-node workflow-end-node workflow-end-node--@process.LaneKey workflow-graph-node"
+                                        style="left:@(terminalLeft)px;top:@(terminalTop)px"
+                                        data-node-row="@terminalRow"
+                                        data-node-column="@terminalColumn"
+                                        data-lane-id="@process.Id"
+                                        data-inspector-template="terminal-template-@terminal.GraphTargetId">
+                                    <span class="workflow-node__meta">End state</span>
+                                    <strong>@terminal.Name</strong>
+                                    <small>@terminal.OutcomeLabel</small>
+                                    <span class="workflow-node__footer" data-live-key="@terminal.GraphTargetId">
+                                        <em class="is-current">@terminal.CurrentStateCount.ToString("N0") here</em>
+                                        <em>@terminal.InboundRouteCount.ToString("N0") @(terminal.InboundRouteCount == 1 ? "route" : "routes")</em>
+                                    </span>
+                                </button>
                             }
                         }
                     </div>
@@ -418,7 +479,7 @@
             {
                 <template id="step-template-@step.Id.ToString("N")"
                           data-heading="@step.Name"
-                          data-context="@process.Name · @step.ActionType"
+                          data-context="@process.Name · @step.ActionType · @step.ExecutionMode"
                           data-lane="@process.LaneKey"
                           data-live-template>
                     <section class="workflow-inspector__step workflow-inspector__step--@process.LaneKey">
@@ -434,6 +495,7 @@
 
                         <dl class="workflow-inspector__contract">
                             <div><dt>Agent receives</dt><dd class="preserve-lines">@step.TaskInstructionsTemplate</dd></div>
+                            <div><dt>Execution</dt><dd>@step.ExecutionMode</dd></div>
                             <div><dt>Information required</dt><dd class="preserve-lines">@(string.IsNullOrWhiteSpace(step.RequiredFacts) ? "No formal prerequisite facts declared." : step.RequiredFacts)</dd></div>
                             <div><dt>Information added</dt><dd class="preserve-lines">@(string.IsNullOrWhiteSpace(step.ProducedFacts) ? "The result is recorded in the company history; no named fact is declared." : step.ProducedFacts)</dd></div>
                             <div><dt>Viability impact</dt><dd class="preserve-lines">@(string.IsNullOrWhiteSpace(step.ViabilityImpact) ? "No explicit viability impact declared." : step.ViabilityImpact)</dd></div>
@@ -498,57 +560,79 @@
                     </section>
                 </template>
 
-                @foreach (WorkflowTransitionViewModel transition in step.Transitions.Where(transition => transition.IsTerminal))
-                {
-                    long outcomePopulation = step.Transitions
-                        .Where(candidate => candidate.IsTerminal || candidate.GraphTargetId.StartsWith("portal-", StringComparison.Ordinal))
-                        .Sum(candidate => candidate.CurrentStateCount);
-                    decimal share = outcomePopulation == 0 ? 0 : (decimal)transition.CurrentStateCount / outcomePopulation;
-                    <template id="transition-template-@transition.Id.ToString("N")"
-                              data-heading="@transition.DestinationLabel"
-                              data-context="@process.Name · @step.Name · @transition.OutcomeLabel"
-                              data-lane="@process.LaneKey"
-                              data-live-template>
-                        <section class="workflow-inspector__step workflow-inspector__step--@process.LaneKey">
-                            <p class="workflow-inspector__objective">Companies currently held in this end state, and the evidence explaining why they are here.</p>
-                            <dl class="workflow-inspector__contract">
-                                <div><dt>Current companies</dt><dd>@transition.CurrentStateCount.ToString("N0")</dd></div>
-                                <div><dt>Share of this step's current outcomes</dt><dd>@share.ToString("P1")</dd></div>
-                                <div><dt>Historical route uses</dt><dd>@transition.HistoricalCompletedCount.ToString("N0") task completions</dd></div>
-                                <div><dt>Resulting state</dt><dd>@transition.ResultingState</dd></div>
-                            </dl>
+            }
 
-                            <h3>Why companies are here</h3>
-                            @if (transition.CurrentStateReasons.Count == 0)
-                            {
-                                <p>No more specific reason is recorded for this outcome yet.</p>
-                            }
-                            else
-                            {
-                                <table class="data-table">
-                                    <thead><tr><th>Reason</th><th>Companies</th><th>Share</th></tr></thead>
-                                    <tbody>
-                                    @foreach (WorkflowOutcomeReasonViewModel reason in transition.CurrentStateReasons)
-                                    {
-                                        decimal reasonShare = transition.CurrentStateCount == 0 ? 0 : (decimal)reason.Count / transition.CurrentStateCount;
-                                        <tr>
-                                            <td><strong>@reason.Label</strong><br /><small>@reason.Detail</small></td>
-                                            <td>@reason.Count.ToString("N0")</td>
-                                            <td>@reasonShare.ToString("P1")</td>
-                                        </tr>
-                                    }
-                                    </tbody>
-                                </table>
-                            }
+            @foreach (WorkflowTerminalNodeViewModel terminal in process.TerminalNodes)
+            {
+                <template id="terminal-template-@terminal.GraphTargetId"
+                          data-heading="@terminal.Name"
+                          data-context="@process.Name · shared end state"
+                          data-lane="@process.LaneKey"
+                          data-live-template>
+                    <section class="workflow-inspector__step workflow-inspector__step--@process.LaneKey">
+                        <p class="workflow-inspector__objective">One shared lifecycle state for every route that produces this outcome. Companies can be inspected individually or moved together after their evidence has been corrected.</p>
+                        <dl class="workflow-inspector__contract">
+                            <div><dt>Current companies</dt><dd>@terminal.CurrentStateCount.ToString("N0")</dd></div>
+                            <div><dt>Historical route uses</dt><dd>@terminal.HistoricalCompletedCount.ToString("N0") task completions</dd></div>
+                            <div><dt>Engine effect</dt><dd>@terminal.EffectLabel</dd></div>
+                            <div><dt>Resulting state</dt><dd>@terminal.ResultingState</dd></div>
+                        </dl>
 
-                            @if (!string.IsNullOrWhiteSpace(transition.CurrentStateHref))
-                            {
-                                <a class="primary-action" href="@transition.CurrentStateHref">View these companies</a>
-                            }
-                            <button type="button" class="secondary-action" data-inspector-template="step-template-@step.Id.ToString("N")">View the decision step</button>
-                        </section>
-                    </template>
-                }
+                        <h3>Why companies are here</h3>
+                        @if (terminal.CurrentStateReasons.Count == 0)
+                        {
+                            <p>No more specific reason is recorded for this outcome yet.</p>
+                        }
+                        else
+                        {
+                            <table class="data-table">
+                                <thead><tr><th>Reason</th><th>Companies</th><th>Share</th></tr></thead>
+                                <tbody>
+                                @foreach (WorkflowOutcomeReasonViewModel reason in terminal.CurrentStateReasons)
+                                {
+                                    decimal reasonShare = terminal.CurrentStateCount == 0 ? 0 : (decimal)reason.Count / terminal.CurrentStateCount;
+                                    <tr>
+                                        <td><strong>@reason.Label</strong><br /><small>@reason.Detail</small></td>
+                                        <td>@reason.Count.ToString("N0")</td>
+                                        <td>@reasonShare.ToString("P1")</td>
+                                    </tr>
+                                }
+                                </tbody>
+                            </table>
+                        }
+
+                        @if (!string.IsNullOrWhiteSpace(terminal.CurrentStateHref))
+                        {
+                            <a class="primary-action" href="@terminal.CurrentStateHref">View and manage individual companies</a>
+                        }
+
+                        @if (process.ScopeType == ProcessScopeType.Lead
+                            && terminal.Effect is ProcessTransitionEffect.DeferLead or ProcessTransitionEffect.RejectLead
+                            && process.Steps.Count > 0)
+                        {
+                            <h3>Move all companies</h3>
+                            <form class="process-state-control" method="post" action="/Admin/Process/MoveTerminalLeads">
+                                @Html.AntiForgeryToken()
+                                <input type="hidden" name="effect" value="@terminal.Effect" />
+                                <label>
+                                    Process state
+                                    <select name="processStepId" required>
+                                        <option value="">Choose a process state</option>
+                                        @foreach (WorkflowStepViewModel targetStep in process.Steps.OrderBy(step => step.Sequence))
+                                        {
+                                            <option value="@targetStep.Id">@targetStep.Name</option>
+                                        }
+                                    </select>
+                                </label>
+                                <label>
+                                    Audit reason
+                                    <input name="reason" maxlength="1000" placeholder="What was corrected or why should these be reprocessed?" />
+                                </label>
+                                <button type="submit" class="secondary-action">Move all @terminal.CurrentStateCount.ToString("N0") companies</button>
+                            </form>
+                        }
+                    </section>
+                </template>
             }
         }
     </div>
@@ -570,6 +654,7 @@
     const stageWidth = Number(stage.dataset.width);
     const stageHeight = Number(stage.dataset.height);
     const svgNamespace = 'http://www.w3.org/2000/svg';
+    const arrowTipReach = 14;
     let scale = 1;
     let dragging = false;
     let dragStart = null;
@@ -612,6 +697,36 @@
         };
     }
 
+    function hasTerminalObstacleBelow(from, to) {
+        const laneId = from.dataset.laneId;
+        const left = Math.min(from.offsetLeft, to.offsetLeft);
+        const right = Math.max(from.offsetLeft + from.offsetWidth, to.offsetLeft + to.offsetWidth);
+        const rowBottom = Math.max(from.offsetTop + from.offsetHeight, to.offsetTop + to.offsetHeight);
+
+        return [...document.querySelectorAll('.workflow-end-node')].some(terminal => terminal.dataset.laneId === laneId
+            && terminal.offsetTop >= rowBottom
+            && terminal.offsetLeft < right
+            && terminal.offsetLeft + terminal.offsetWidth > left);
+    }
+
+    function hasNodeBetweenColumns(from, to) {
+        if (from.dataset.laneId !== to.dataset.laneId
+            || from.dataset.nodeRow !== to.dataset.nodeRow)
+            return false;
+
+        const fromColumn = Number(from.dataset.nodeColumn);
+        const toColumn = Number(to.dataset.nodeColumn);
+        const firstColumn = Math.min(fromColumn, toColumn);
+        const lastColumn = Math.max(fromColumn, toColumn);
+
+        return [...document.querySelectorAll('.workflow-graph-node')].some(node => node !== from
+            && node !== to
+            && node.dataset.laneId === from.dataset.laneId
+            && node.dataset.nodeRow === from.dataset.nodeRow
+            && Number(node.dataset.nodeColumn) > firstColumn
+            && Number(node.dataset.nodeColumn) < lastColumn);
+    }
+
     function chooseConnectorSides(edge, from, to) {
         if (from === to) return { fromSide: 'left', toSide: 'top', route: 'loop' };
         const fromCentre = nodeCentre(from);
@@ -620,30 +735,54 @@
         const deltaY = toCentre.y - fromCentre.y;
         const sameRow = from.dataset.nodeRow === to.dataset.nodeRow;
         const sameColumn = from.dataset.nodeColumn === to.dataset.nodeColumn;
+        const sourceAboveTarget = from.offsetTop + from.offsetHeight <= to.offsetTop;
+        const sourceBelowTarget = to.offsetTop + to.offsetHeight <= from.offsetTop;
 
         if (edge.kind === 'handoff') return Math.abs(deltaX) < 1
             ? { fromSide: 'bottom', toSide: 'top', route: 'direct' }
             : { fromSide: 'bottom', toSide: deltaX >= 0 ? 'left' : 'right', route: 'handoff' };
 
+        if (edge.kind === 'terminal') {
+            if (sameRow && hasNodeBetweenColumns(from, to))
+                return { fromSide: 'top', toSide: 'top', route: 'row-channel' };
+
+            if (sourceAboveTarget)
+                return { fromSide: 'bottom', toSide: 'top', route: 'terminal-channel' };
+
+            if (sourceBelowTarget)
+                return { fromSide: 'top', toSide: 'bottom', route: 'terminal-channel' };
+        }
+
         if (edge.kind === 'branch' && sameColumn && !sameRow)
             return deltaY < 0
                 ? { fromSide: 'top', toSide: 'bottom', route: 'parallel-return' }
-                : { fromSide: 'left', toSide: 'left', route: 'side-channel' };
+                : { fromSide: 'bottom', toSide: 'top', route: 'vertical' };
 
         if (edge.kind === 'branch' && sameRow && deltaX < 0) {
-            const side = from.dataset.nodeRow === '0' ? 'bottom' : 'top';
+            // Keep a forward branch out of the lower corridor when a terminal
+            // route already occupies it. The upper lane gutter is clearer and
+            // keeps the branch label associated with its decision.
+            const side = hasTerminalObstacleBelow(from, to) || from.dataset.nodeRow !== '0'
+                ? 'top'
+                : 'bottom';
             return { fromSide: side, toSide: side, route: 'row-channel' };
         }
 
-        if (sameRow || Math.abs(deltaX) > Math.abs(deltaY) * 1.25) {
+        if (sameRow) {
             return deltaX >= 0
                 ? { fromSide: 'right', toSide: 'left', route: 'horizontal' }
                 : { fromSide: 'left', toSide: 'right', route: 'horizontal' };
         }
 
-        return deltaY >= 0
-            ? { fromSide: 'bottom', toSide: 'top', route: 'vertical' }
-            : { fromSide: 'top', toSide: 'bottom', route: 'vertical' };
+        if (sourceAboveTarget)
+            return { fromSide: 'bottom', toSide: 'top', route: 'vertical' };
+
+        if (sourceBelowTarget)
+            return { fromSide: 'top', toSide: 'bottom', route: 'vertical' };
+
+        return deltaX >= 0
+            ? { fromSide: 'right', toSide: 'left', route: 'horizontal' }
+            : { fromSide: 'left', toSide: 'right', route: 'horizontal' };
     }
 
     function pointOnPort(node, side, rate) {
@@ -662,6 +801,19 @@
         if (side === 'bottom') return { x: point.x, y: point.y + distance };
         if (side === 'left') return { x: point.x - distance, y: point.y };
         return { x: point.x + distance, y: point.y };
+    }
+
+    function clamp(value, minimum, maximum) {
+        return Math.max(minimum, Math.min(maximum, value));
+    }
+
+    function isStraightThroughRoute(plan) {
+        const fromCentre = nodeCentre(plan.from);
+        const toCentre = nodeCentre(plan.to);
+        return plan.sides.route === 'direct'
+            || (plan.kind === 'default' && (
+                (plan.sides.route === 'horizontal' && Math.abs(fromCentre.y - toCentre.y) < 1)
+                || (plan.sides.route === 'vertical' && Math.abs(fromCentre.x - toCentre.x) < 1)));
     }
 
     function compactPoints(points) {
@@ -688,6 +840,107 @@
         return points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
     }
 
+    function moveConnectorEndToArrowStem(points, targetSide) {
+        const adjusted = [...points];
+        adjusted[adjusted.length - 1] = moveOut(adjusted[adjusted.length - 1], targetSide, arrowTipReach);
+        return adjusted;
+    }
+
+    function rowCorridorY(from, to, fallbackY) {
+        return rowCorridorYCandidates(from, to, fallbackY)[0] ?? fallbackY;
+    }
+
+    function rowCorridorYCandidates(from, to, fallbackY) {
+        const sameLaneNodes = [...document.querySelectorAll('.workflow-graph-node')]
+            .filter(node => node.dataset.laneId === from.dataset.laneId);
+        const fromTop = from.offsetTop;
+        const fromBottom = from.offsetTop + from.offsetHeight;
+        const toTop = to.offsetTop;
+        const toBottom = to.offsetTop + to.offsetHeight;
+        const candidates = [];
+
+        if (fromBottom <= toTop) {
+            const rowTops = [...new Set(sameLaneNodes
+                .filter(node => node.offsetTop > fromBottom && node.offsetTop <= toTop)
+                .map(node => node.offsetTop))]
+                .sort((left, right) => left - right);
+            rowTops.forEach(rowTop => candidates.push((fromBottom + rowTop) / 2));
+            candidates.push((fromBottom + toTop) / 2);
+        }
+
+        if (toBottom <= fromTop) {
+            const rowBottoms = [...new Set(sameLaneNodes
+                .filter(node => node.offsetTop + node.offsetHeight < fromTop && node.offsetTop + node.offsetHeight >= toBottom)
+                .map(node => node.offsetTop + node.offsetHeight))]
+                .sort((left, right) => right - left);
+            rowBottoms.forEach(rowBottom => candidates.push((rowBottom + fromTop) / 2));
+            candidates.push((toBottom + fromTop) / 2);
+        }
+
+        candidates.push(fallbackY);
+        return [...new Set(candidates.map(candidate => Math.round(candidate)))]
+            .filter(candidate => Number.isFinite(candidate));
+    }
+
+    function oppositeGutterSides(plan) {
+        const fromCentre = nodeCentre(plan.from);
+        const toCentre = nodeCentre(plan.to);
+        const deltaX = toCentre.x - fromCentre.x;
+        const deltaY = toCentre.y - fromCentre.y;
+
+        if (Math.abs(deltaY) >= Math.abs(deltaX))
+            return deltaY >= 0
+                ? { fromSide: 'top', toSide: 'top', route: 'reroute' }
+                : { fromSide: 'bottom', toSide: 'bottom', route: 'reroute' };
+
+        return deltaX >= 0
+            ? { fromSide: 'left', toSide: 'left', route: 'reroute' }
+            : { fromSide: 'right', toSide: 'right', route: 'reroute' };
+    }
+
+    function oppositeGutterToNearestSide(plan) {
+        const fromCentre = nodeCentre(plan.from);
+        const toCentre = nodeCentre(plan.to);
+        const deltaX = toCentre.x - fromCentre.x;
+        const deltaY = toCentre.y - fromCentre.y;
+
+        if (Math.abs(deltaY) >= Math.abs(deltaX))
+            return deltaY >= 0
+                ? { fromSide: 'top', toSide: deltaX >= 0 ? 'left' : 'right', route: 'reroute' }
+                : { fromSide: 'bottom', toSide: deltaX >= 0 ? 'left' : 'right', route: 'reroute' };
+
+        return deltaX >= 0
+            ? { fromSide: deltaY >= 0 ? 'top' : 'bottom', toSide: 'left', route: 'reroute' }
+            : { fromSide: deltaY >= 0 ? 'top' : 'bottom', toSide: 'right', route: 'reroute' };
+    }
+
+    function longWayAroundVariants(plan) {
+        const fromCentre = nodeCentre(plan.from);
+        const toCentre = nodeCentre(plan.to);
+        const deltaX = toCentre.x - fromCentre.x;
+        const deltaY = toCentre.y - fromCentre.y;
+        const verticalPreference = deltaY >= 0 ? ['top', 'bottom'] : ['bottom', 'top'];
+        const horizontalPreference = deltaX >= 0 ? ['left', 'right'] : ['right', 'left'];
+
+        if (Math.abs(deltaX) >= Math.abs(deltaY)) {
+            return verticalPreference.flatMap(fromSide =>
+                horizontalPreference.map(toSide => ({
+                    sides: { fromSide, toSide, route: 'reroute' },
+                    offset: 1,
+                    fromRate: .5,
+                    toRate: .5
+                })));
+        }
+
+        return horizontalPreference.flatMap(fromSide =>
+            verticalPreference.map(toSide => ({
+                sides: { fromSide, toSide, route: 'reroute' },
+                offset: 1,
+                fromRate: .5,
+                toRate: .5
+            })));
+    }
+
     function labelOnLongestSegment(points) {
         let chosen = null;
         for (let index = 1; index < points.length - 2; index++) {
@@ -705,62 +958,446 @@
         };
     }
 
-    function connectorGeometry(plan) {
-        const start = pointOnPort(plan.from, plan.sides.fromSide, plan.fromRate);
-        const end = pointOnPort(plan.to, plan.sides.toSide, plan.toRate);
-        const startOut = moveOut(start, plan.sides.fromSide, 18);
-        const endOut = moveOut(end, plan.sides.toSide, 18);
+    function outsideNodeCorridorX(from, to, side, gutter) {
+        return side === 'left'
+            ? Math.min(from.offsetLeft, to.offsetLeft) - gutter
+            : Math.max(from.offsetLeft + from.offsetWidth, to.offsetLeft + to.offsetWidth) + gutter;
+    }
+
+    function outsideNodeCorridorY(from, to, side, gutter) {
+        return side === 'top'
+            ? Math.min(from.offsetTop, to.offsetTop) - gutter
+            : Math.max(from.offsetTop + from.offsetHeight, to.offsetTop + to.offsetHeight) + gutter;
+    }
+
+    function connectorGeometry(plan, variant = {}) {
+        const sides = variant.sides || plan.sides;
+        const offset = variant.offset || 0;
+        const track = plan.track + offset;
+        const fromRate = variant.fromRate ?? plan.fromRate;
+        const toRate = variant.toRate ?? plan.toRate;
+        const start = pointOnPort(plan.from, sides.fromSide, fromRate);
+        const end = pointOnPort(plan.to, sides.toSide, toRate);
+        const startOut = moveOut(start, sides.fromSide, 18 + (offset * 8));
+        const endOut = moveOut(end, sides.toSide, 18 + (offset * 8));
         let points;
 
-        if (plan.sides.route === 'direct' || plan.sides.route === 'parallel-return') {
+        if (offset === 0 && (sides.route === 'direct' || sides.route === 'parallel-return')) {
             points = [start, end];
-        } else if (plan.sides.route === 'handoff') {
+        } else if (sides.route === 'handoff') {
             const sourceLane = document.querySelector(`.workflow-lane[data-lane-id="${CSS.escape(plan.from.dataset.laneId)}"]`);
             const laneCorridorY = sourceLane ? sourceLane.offsetTop + sourceLane.offsetHeight + 9 : startOut.y + 46;
-            const leftCorridorX = 18 + ((plan.track % 2) * 8);
+            const leftCorridorX = 18 + ((track % 2) * 8);
             points = [start, startOut, { x: startOut.x, y: laneCorridorY }, { x: leftCorridorX, y: laneCorridorY }, { x: leftCorridorX, y: endOut.y }, endOut, end];
-        } else if (plan.sides.fromSide === plan.sides.toSide) {
-            if (plan.sides.fromSide === 'left' || plan.sides.fromSide === 'right') {
-                const direction = plan.sides.fromSide === 'left' ? -1 : 1;
-                const corridorX = (direction < 0 ? Math.min(startOut.x, endOut.x) : Math.max(startOut.x, endOut.x))
-                    + direction * (6 + ((plan.track % 2) * 3));
+        } else if (sides.route === 'row-side'
+            && (sides.fromSide === 'top' || sides.fromSide === 'bottom')
+            && (sides.toSide === 'left' || sides.toSide === 'right')) {
+            const corridorY = variant.corridorY ?? rowCorridorY(plan.from, plan.to, (startOut.y + endOut.y) / 2);
+            points = [start, startOut, { x: startOut.x, y: corridorY }, { x: endOut.x, y: corridorY }, endOut, end];
+        } else if (sides.route === 'reroute') {
+            if (sides.fromSide === 'left' || sides.fromSide === 'right') {
+                const direction = sides.fromSide === 'left' ? -1 : 1;
+                const corridorX = outsideNodeCorridorX(plan.from, plan.to, sides.fromSide, 12 + (offset * 10));
                 points = [start, startOut, { x: corridorX, y: startOut.y }, { x: corridorX, y: endOut.y }, endOut, end];
             } else {
-                const direction = plan.sides.fromSide === 'top' ? -1 : 1;
-                const corridorY = (direction < 0 ? Math.min(startOut.y, endOut.y) : Math.max(startOut.y, endOut.y))
-                    + direction * (9 + ((plan.track % 3) * 9));
+                const direction = sides.fromSide === 'top' ? -1 : 1;
+                const corridorY = outsideNodeCorridorY(plan.from, plan.to, sides.fromSide, 12 + (offset * 10));
+                if (sides.toSide === 'left' || sides.toSide === 'right') {
+                    const targetCorridorX = outsideNodeCorridorX(plan.from, plan.to, sides.toSide, 12 + (offset * 10));
+                    points = [start, startOut, { x: startOut.x, y: corridorY }, { x: targetCorridorX, y: corridorY }, { x: targetCorridorX, y: endOut.y }, endOut, end];
+                } else {
+                    points = [start, startOut, { x: startOut.x, y: corridorY }, { x: endOut.x, y: corridorY }, endOut, end];
+                }
+            }
+        } else if (sides.fromSide === sides.toSide) {
+            if (sides.fromSide === 'left' || sides.fromSide === 'right') {
+                const corridorX = outsideNodeCorridorX(plan.from, plan.to, sides.fromSide, 6 + ((track % 3) * 8));
+                points = [start, startOut, { x: corridorX, y: startOut.y }, { x: corridorX, y: endOut.y }, endOut, end];
+            } else {
+                const corridorY = outsideNodeCorridorY(plan.from, plan.to, sides.fromSide, 9 + ((track % 4) * 9));
                 points = [start, startOut, { x: startOut.x, y: corridorY }, { x: endOut.x, y: corridorY }, endOut, end];
             }
-        } else if ((plan.sides.fromSide === 'left' || plan.sides.fromSide === 'right')
-            && (plan.sides.toSide === 'left' || plan.sides.toSide === 'right')) {
-            const middleX = (startOut.x + endOut.x) / 2;
+        } else if ((sides.fromSide === 'left' || sides.fromSide === 'right')
+            && (sides.toSide === 'left' || sides.toSide === 'right')) {
+            const middleX = (startOut.x + endOut.x) / 2 + (((track % 5) - 2) * 8);
             points = [start, startOut, { x: middleX, y: startOut.y }, { x: middleX, y: endOut.y }, endOut, end];
-        } else if ((plan.sides.fromSide === 'top' || plan.sides.fromSide === 'bottom')
-            && (plan.sides.toSide === 'top' || plan.sides.toSide === 'bottom')) {
-            const verticalDistance = endOut.y - startOut.y;
-            const middleY = plan.kind === 'branch' && verticalDistance > 0
-                ? startOut.y + (verticalDistance * .32)
-                : (startOut.y + endOut.y) / 2 + (plan.kind === 'branch' ? ((plan.track % 3) - 1) * 7 : 0);
+        } else if ((sides.fromSide === 'top' || sides.fromSide === 'bottom')
+            && (sides.toSide === 'top' || sides.toSide === 'bottom')) {
+            const middleY = (variant.corridorY ?? rowCorridorY(plan.from, plan.to, (startOut.y + endOut.y) / 2))
+                + (((track % 5) - 2) * 8);
             points = [start, startOut, { x: startOut.x, y: middleY }, { x: endOut.x, y: middleY }, endOut, end];
         } else {
-            const elbow = plan.sides.fromSide === 'left' || plan.sides.fromSide === 'right'
+            const elbow = sides.fromSide === 'left' || sides.fromSide === 'right'
                 ? { x: endOut.x, y: startOut.y }
                 : { x: startOut.x, y: endOut.y };
             points = [start, startOut, elbow, endOut, end];
         }
 
-        points = compactPoints(points);
+        points = compactPoints(moveConnectorEndToArrowStem(points, sides.toSide));
         const label = labelOnLongestSegment(points);
-        if (plan.kind === 'branch' && plan.sides.route === 'vertical' && plan.to.offsetTop > plan.from.offsetTop)
+        if (plan.kind === 'branch' && sides.route === 'vertical' && plan.to.offsetTop > plan.from.offsetTop)
             label.y = plan.from.offsetTop + plan.from.offsetHeight + 22;
-        if (plan.sides.route === 'side-channel')
-            label.y = Math.max(plan.from.offsetTop, plan.to.offsetTop) - 16;
-        if (plan.sides.route === 'parallel-return') {
+        if (sides.route === 'parallel-return') {
             label.x = start.x + 8;
             label.y = (start.y + end.y) / 2 + 3;
             label.anchor = 'start';
         }
-        return { d: pathFromPoints(points), label };
+        return {
+            d: pathFromPoints(points),
+            label,
+            points,
+            fromRate,
+            toRate,
+            reservedTerminalFanIn: variant.reservedTerminalFanIn || false
+        };
+    }
+
+    function connectorSegments(points) {
+        return points.slice(1).map((point, index) => ({ start: points[index], end: point }));
+    }
+
+    function rangesTouch(firstStart, firstEnd, secondStart, secondEnd) {
+        return Math.max(Math.min(firstStart, firstEnd), Math.min(secondStart, secondEnd))
+            <= Math.min(Math.max(firstStart, firstEnd), Math.max(secondStart, secondEnd));
+    }
+
+    function connectorSegmentsCross(first, second) {
+        const firstHorizontal = first.start.y === first.end.y;
+        const secondHorizontal = second.start.y === second.end.y;
+        if (firstHorizontal === secondHorizontal) {
+            if (firstHorizontal && first.start.y !== second.start.y) return false;
+            if (!firstHorizontal && first.start.x !== second.start.x) return false;
+            return firstHorizontal
+                ? rangesTouch(first.start.x, first.end.x, second.start.x, second.end.x)
+                : rangesTouch(first.start.y, first.end.y, second.start.y, second.end.y);
+        }
+
+        const horizontal = firstHorizontal ? first : second;
+        const vertical = firstHorizontal ? second : first;
+        return rangesTouch(horizontal.start.x, horizontal.end.x, vertical.start.x, vertical.start.x)
+            && rangesTouch(vertical.start.y, vertical.end.y, horizontal.start.y, horizontal.start.y);
+    }
+
+    function geometriesCross(first, second) {
+        return connectorSegments(first.points).some(firstSegment =>
+            connectorSegments(second.points).some(secondSegment => connectorSegmentsCross(firstSegment, secondSegment)));
+    }
+
+    function segmentPassesThroughNode(segment, node) {
+        const left = node.offsetLeft;
+        const right = left + node.offsetWidth;
+        const top = node.offsetTop;
+        const bottom = top + node.offsetHeight;
+        if (segment.start.y === segment.end.y) {
+            return segment.start.y > top && segment.start.y < bottom
+                && Math.max(Math.min(segment.start.x, segment.end.x), left)
+                    < Math.min(Math.max(segment.start.x, segment.end.x), right);
+        }
+
+        return segment.start.x > left && segment.start.x < right
+            && Math.max(Math.min(segment.start.y, segment.end.y), top)
+                < Math.min(Math.max(segment.start.y, segment.end.y), bottom);
+    }
+
+    function geometryCollides(plan, geometry, occupiedSegments) {
+        const score = geometryCollisionScore(plan, geometry, occupiedSegments);
+        return score.nodeHits > 0 || score.lineHits > 0 || score.endpointHits > 0;
+    }
+
+    function geometryCollisionScore(plan, geometry, occupiedSegments) {
+        const segments = connectorSegments(geometry.points);
+        const nodes = [...document.querySelectorAll('.workflow-graph-node')]
+            .filter(node => node !== plan.from && node !== plan.to);
+        return {
+            nodeHits: segments.reduce((total, segment) =>
+                total + nodes.filter(node => segmentPassesThroughNode(segment, node)).length, 0),
+            lineHits: segments.reduce((total, segment) =>
+                total + occupiedSegments.filter(occupied =>
+                    occupied.kind !== 'handoff' && connectorSegmentsCross(segment, occupied)).length, 0),
+            endpointHits: segments.reduce((total, segment, index) =>
+                total
+                + (index > 0 && segmentPassesThroughNode(segment, plan.from) ? 1 : 0)
+                + (index < segments.length - 1 && segmentPassesThroughNode(segment, plan.to) ? 1 : 0), 0)
+        };
+    }
+
+    function geometryScore(plan, geometry, occupiedSegments) {
+        const collisionScore = geometryCollisionScore(plan, geometry, occupiedSegments);
+        const length = geometryLength(geometry);
+        const bendCount = geometryBendCount(geometry);
+        return (collisionScore.nodeHits * 100000)
+            + (collisionScore.endpointHits * 100000)
+            + (collisionScore.lineHits * 1000)
+            + (bendCount * 40)
+            + length
+            + ((Math.abs((geometry.fromRate ?? .5) - .5) + Math.abs((geometry.toRate ?? .5) - .5)) * 2000)
+            + (geometry.reservedTerminalFanIn ? 1000 : 0);
+    }
+
+    function geometryLength(geometry) {
+        return connectorSegments(geometry.points).reduce((total, segment) =>
+            total + Math.abs(segment.end.x - segment.start.x) + Math.abs(segment.end.y - segment.start.y), 0);
+    }
+
+    function geometryBendCount(geometry) {
+        return Math.max(0, geometry.points.length - 2);
+    }
+
+    function rankedGeometryCandidates(plan, occupiedSegments, variants) {
+        return variants
+            .map(variant => connectorGeometry(plan, variant))
+            .map(geometry => ({ geometry, score: geometryScore(plan, geometry, occupiedSegments) }))
+            .sort((left, right) => left.score - right.score);
+    }
+
+    function bestNonCollidingGeometry(plan, occupiedSegments, variants) {
+        return rankedGeometryCandidates(plan, occupiedSegments, variants)
+            .find(candidate => !geometryCollides(plan, candidate.geometry, occupiedSegments))
+            ?.geometry;
+    }
+
+    function routeForSides(fromSide, toSide, from, to) {
+        const fromVertical = fromSide === 'top' || fromSide === 'bottom';
+        const toVertical = toSide === 'top' || toSide === 'bottom';
+        if (fromVertical && toVertical) return 'vertical';
+        if (!fromVertical && !toVertical) return 'horizontal';
+
+        const sourceAboveTarget = from.offsetTop + from.offsetHeight <= to.offsetTop;
+        const sourceBelowTarget = to.offsetTop + to.offsetHeight <= from.offsetTop;
+        if (fromVertical && !toVertical && (sourceAboveTarget || sourceBelowTarget))
+            return 'row-side';
+
+        return 'elbow';
+    }
+
+    function terminalSideReservedBySameRowFanIn(plan, toSide) {
+        if (plan.kind !== 'terminal'
+            || (toSide !== 'left' && toSide !== 'right')
+            || plan.from.dataset.nodeRow === plan.to.dataset.nodeRow)
+            return false;
+
+        return [...document.querySelectorAll('.workflow-edge-data')]
+            .filter(edge => edge.dataset.edgeKind === 'terminal'
+                && edge.dataset.edgeTo === plan.to.id
+                && edge.dataset.edgeFrom !== plan.from.id)
+            .some(edge => {
+                const otherFrom = document.getElementById(edge.dataset.edgeFrom);
+                if (!otherFrom || otherFrom.dataset.nodeRow !== plan.to.dataset.nodeRow)
+                    return false;
+
+                const otherCentre = nodeCentre(otherFrom);
+                const targetCentre = nodeCentre(plan.to);
+                const reservedSide = otherCentre.x <= targetCentre.x ? 'left' : 'right';
+                return reservedSide === toSide;
+            });
+    }
+
+    function sideOptimisationVariants(plan) {
+        const sides = ['top', 'right', 'bottom', 'left'];
+        const fromRates = [...new Set([.5, .45, .55, plan.fromRate ?? .5])]
+            .filter(rate => Number.isFinite(rate));
+        const toRates = [.5];
+        const variants = [];
+        sides.forEach(fromSide => {
+            sides.forEach(toSide => {
+                if (fromSide === plan.sides.fromSide && toSide === plan.sides.toSide)
+                    return;
+
+                const route = routeForSides(fromSide, toSide, plan.from, plan.to);
+                const fromVertical = fromSide === 'top' || fromSide === 'bottom';
+                const toVertical = toSide === 'top' || toSide === 'bottom';
+                const routes = fromVertical !== toVertical
+                    ? [...new Set([route, 'elbow'])]
+                    : [route];
+
+                routes.forEach(candidateRoute => {
+                    fromRates.forEach(fromRate => {
+                        toRates.forEach(toRate => variants.push({
+                            sides: { fromSide, toSide, route: candidateRoute },
+                            fromRate,
+                            toRate,
+                            reservedTerminalFanIn: terminalSideReservedBySameRowFanIn(plan, toSide)
+                        }));
+                    });
+                });
+            });
+        });
+        return variants;
+    }
+
+    function optimiseConnectionSides(plan, occupiedSegments, chosenGeometry) {
+        const chosenLength = geometryLength(chosenGeometry);
+        const chosenBends = geometryBendCount(chosenGeometry);
+        const chosenScore = geometryScore(plan, chosenGeometry, occupiedSegments);
+        const candidates = rankedGeometryCandidates(plan, occupiedSegments, sideOptimisationVariants(plan))
+            .filter(candidate => !geometryCollides(plan, candidate.geometry, occupiedSegments));
+
+        for (const candidate of candidates) {
+            const candidateLength = geometryLength(candidate.geometry);
+            const candidateBends = geometryBendCount(candidate.geometry);
+            const candidateScore = geometryScore(plan, candidate.geometry, occupiedSegments);
+            const shorterWithoutMoreBends = candidateLength < chosenLength - 1 && candidateBends <= chosenBends;
+            const fewerBendsWithoutMoreLength = candidateBends < chosenBends && candidateLength <= chosenLength + 1;
+            const materiallyCleaner = candidateScore < chosenScore - 1
+                && candidateLength <= chosenLength + 1
+                && candidateBends <= chosenBends;
+            if (shorterWithoutMoreBends || fewerBendsWithoutMoreLength || materiallyCleaner)
+                return candidate.geometry;
+        }
+
+        return chosenGeometry;
+    }
+
+    function rowCorridorVariants(plan) {
+        const sides = plan.sides;
+        if (!((sides.fromSide === 'top' || sides.fromSide === 'bottom')
+            && (sides.toSide === 'top' || sides.toSide === 'bottom')))
+            return [];
+
+        const start = pointOnPort(plan.from, sides.fromSide, plan.fromRate);
+        const end = pointOnPort(plan.to, sides.toSide, plan.toRate);
+        const startOut = moveOut(start, sides.fromSide, 18);
+        const endOut = moveOut(end, sides.toSide, 18);
+        const corridors = rowCorridorYCandidates(plan.from, plan.to, (startOut.y + endOut.y) / 2);
+        const offsets = [0, -8, 8, -16, 16, -24, 24];
+        return corridors.flatMap(corridorY => offsets.map(offset => ({ corridorY: corridorY + offset })));
+    }
+
+    function rowCorridorToSideVariants(plan) {
+        const fromCentre = nodeCentre(plan.from);
+        const toCentre = nodeCentre(plan.to);
+        const deltaX = toCentre.x - fromCentre.x;
+        const sourceAboveTarget = plan.from.offsetTop + plan.from.offsetHeight <= plan.to.offsetTop;
+        const sourceBelowTarget = plan.to.offsetTop + plan.to.offsetHeight <= plan.from.offsetTop;
+        if (!sourceAboveTarget && !sourceBelowTarget) return [];
+
+        const fromSide = sourceAboveTarget ? 'bottom' : 'top';
+        const toSides = deltaX >= 0 ? ['left', 'right'] : ['right', 'left'];
+        const start = pointOnPort(plan.from, fromSide, plan.fromRate);
+        const end = pointOnPort(plan.to, toSides[0], plan.toRate);
+        const startOut = moveOut(start, fromSide, 18);
+        const endOut = moveOut(end, toSides[0], 18);
+        const corridors = rowCorridorYCandidates(plan.from, plan.to, (startOut.y + endOut.y) / 2);
+        const offsets = [0, -8, 8, -16, 16, -24, 24];
+
+        return toSides.flatMap(toSide =>
+            corridors.flatMap(corridorY =>
+                offsets.map(offset => ({
+                    sides: { fromSide, toSide, route: 'row-side' },
+                    corridorY: corridorY + offset
+                }))));
+    }
+
+    function swapCrossingSharedPorts(plans) {
+        for (let pass = 0; pass < 3; pass++) {
+            let changed = false;
+            for (let leftIndex = 0; leftIndex < plans.length; leftIndex++) {
+                for (let rightIndex = leftIndex + 1; rightIndex < plans.length; rightIndex++) {
+                    const left = plans[leftIndex];
+                    const right = plans[rightIndex];
+                    const beforeLeft = connectorGeometry(left);
+                    const beforeRight = connectorGeometry(right);
+                    if (!geometriesCross(beforeLeft, beforeRight)) continue;
+
+                    const sharedDeparture = left.from === right.from
+                        && left.sides.fromSide === right.sides.fromSide;
+                    const sharedArrival = left.to === right.to
+                        && left.sides.toSide === right.sides.toSide;
+                    if (!sharedDeparture && !sharedArrival) continue;
+
+                    if (sharedDeparture) {
+                        [left.fromRate, right.fromRate] = [right.fromRate, left.fromRate];
+                    } else {
+                        [left.toRate, right.toRate] = [right.toRate, left.toRate];
+                    }
+
+                    if (geometriesCross(connectorGeometry(left), connectorGeometry(right))) {
+                        if (sharedDeparture)
+                            [left.fromRate, right.fromRate] = [right.fromRate, left.fromRate];
+                        else
+                            [left.toRate, right.toRate] = [right.toRate, left.toRate];
+                    } else {
+                        changed = true;
+                    }
+                }
+            }
+            if (!changed) break;
+        }
+    }
+
+    function collisionFreeGeometry(plan, occupiedSegments) {
+        const original = connectorGeometry(plan);
+        if (!geometryCollides(plan, original, occupiedSegments)) return original;
+
+        for (const candidate of rankedGeometryCandidates(plan, occupiedSegments, rowCorridorVariants(plan))) {
+            if (!geometryCollides(plan, candidate.geometry, occupiedSegments)) return candidate.geometry;
+        }
+
+        for (const candidate of rankedGeometryCandidates(plan, occupiedSegments, rowCorridorToSideVariants(plan))) {
+            if (!geometryCollides(plan, candidate.geometry, occupiedSegments)) return candidate.geometry;
+        }
+
+        for (let offset = 1; offset <= 8; offset++) {
+            const shifted = connectorGeometry(plan, { offset });
+            if (!geometryCollides(plan, shifted, occupiedSegments)) return shifted;
+        }
+
+        const oppositeGutter = connectorGeometry(plan, { sides: oppositeGutterSides(plan), offset: 1, fromRate: .5, toRate: .5 });
+        if (!geometryCollides(plan, oppositeGutter, occupiedSegments)) return oppositeGutter;
+
+        for (const candidate of rankedGeometryCandidates(plan, occupiedSegments, longWayAroundVariants(plan))) {
+            if (!geometryCollides(plan, candidate.geometry, occupiedSegments)) return candidate.geometry;
+        }
+
+        const oppositeSide = side => ({ top: 'bottom', right: 'left', bottom: 'top', left: 'right' })[side];
+        const orderedSides = preferred => [...new Set([
+            preferred,
+            oppositeSide(preferred),
+            'bottom',
+            'top',
+            'right',
+            'left'
+        ])];
+        const fromSides = orderedSides(plan.sides.fromSide);
+        const toSides = orderedSides(plan.sides.toSide);
+        const portRates = [.5, .28, .72];
+        for (const fromSide of fromSides) {
+            for (const toSide of toSides) {
+                if (fromSide === plan.sides.fromSide && toSide === plan.sides.toSide) continue;
+                const sides = { fromSide, toSide, route: 'reroute' };
+                for (let offset = 0; offset <= 16; offset++) {
+                    for (const rate of portRates) {
+                        const candidate = connectorGeometry(plan, {
+                            sides,
+                            offset,
+                            fromRate: fromSide === plan.sides.fromSide ? plan.fromRate : rate,
+                            toRate: toSide === plan.sides.toSide ? plan.toRate : rate
+                        });
+                        if (!geometryCollides(plan, candidate, occupiedSegments)) return candidate;
+                    }
+                }
+            }
+        }
+
+        return original;
+    }
+
+    function terminalCollisionFreeGeometry(plan, occupiedSegments) {
+        const offsetVariants = Array.from({ length: 8 }, (_, index) => ({ offset: index + 1 }));
+        const variants = [
+            {},
+            ...sideOptimisationVariants(plan),
+            ...rowCorridorVariants(plan),
+            ...rowCorridorToSideVariants(plan),
+            ...offsetVariants,
+            { sides: oppositeGutterSides(plan), offset: 1, fromRate: .5, toRate: .5 },
+            { sides: oppositeGutterToNearestSide(plan), offset: 1, fromRate: .5, toRate: .5 },
+            ...longWayAroundVariants(plan)
+        ];
+
+        return bestNonCollidingGeometry(plan, occupiedSegments, variants)
+            ?? rankedGeometryCandidates(plan, occupiedSegments, variants)[0]?.geometry
+            ?? connectorGeometry(plan);
     }
 
     function drawEdges() {
@@ -786,45 +1423,86 @@
             [['from', plan.from, plan.sides.fromSide, nodeCentre(plan.to)], ['to', plan.to, plan.sides.toSide, nodeCentre(plan.from)]].forEach(([endName, node, side, other]) => {
                 const key = `${node.id}|${side}`;
                 const group = portGroups.get(key) || [];
-                group.push({ plan, endName, order: side === 'top' || side === 'bottom' ? other.x : other.y });
+                group.push({ plan, endName, node, side, order: side === 'top' || side === 'bottom' ? other.x : other.y });
                 portGroups.set(key, group);
             });
         });
         portGroups.forEach(group => {
-            group.sort((left, right) => left.order - right.order || left.plan.index - right.plan.index);
-            const straightDefaults = group.filter(port => {
-                const plan = port.plan;
-                const fromCentre = nodeCentre(plan.from);
-                const toCentre = nodeCentre(plan.to);
-                return plan.kind === 'default' && (
-                    plan.sides.route === 'direct'
-                    || (plan.sides.route === 'horizontal' && Math.abs(fromCentre.y - toCentre.y) < 1)
-                    || (plan.sides.route === 'vertical' && Math.abs(fromCentre.x - toCentre.x) < 1));
-            });
+            const first = group[0];
+            const horizontalSide = first.side === 'top' || first.side === 'bottom';
+            const axisLength = horizontalSide ? first.node.offsetWidth : first.node.offsetHeight;
+            const axisStart = horizontalSide ? first.node.offsetLeft : first.node.offsetTop;
+            const margin = Math.min(18, axisLength / 3);
+            const spacing = 10;
+            const centre = axisLength / 2;
+            const used = [];
+            const preferredCoordinate = port => {
+                if (isStraightThroughRoute(port.plan)) return centre;
+                return clamp(port.order - axisStart, margin, axisLength - margin);
+            };
+            const reserveCoordinate = coordinate => {
+                const reserved = clamp(coordinate, margin, axisLength - margin);
+                used.push(reserved);
+                return reserved;
+            };
+            const coordinateIsFree = coordinate =>
+                !used.some(existing => Math.abs(existing - coordinate) < spacing);
+            const nearestCentreSlot = desired => {
+                const direction = desired < centre ? -1 : 1;
+                const slotCount = Math.ceil(axisLength / spacing);
+                const preferredOffsets = [0];
+                for (let step = 1; step <= slotCount; step++)
+                    preferredOffsets.push(direction * step * spacing, direction * -step * spacing);
 
-            if (straightDefaults.length === 1 && group.length > 1) {
-                const preferred = straightDefaults[0];
-                preferred.plan[`${preferred.endName}Rate`] = .5;
-                const remaining = group.filter(port => port !== preferred);
-                remaining.forEach((port, index) => {
-                    const lowerSide = port.order < preferred.order;
-                    const rangeStart = lowerSide ? .16 : .68;
-                    const rangeEnd = lowerSide ? .32 : .84;
-                    const peers = remaining.filter(candidate => (candidate.order < preferred.order) === lowerSide);
-                    const peerIndex = peers.indexOf(port);
-                    const rate = peers.length === 1 ? (rangeStart + rangeEnd) / 2 : rangeStart + ((rangeEnd - rangeStart) * peerIndex / (peers.length - 1));
-                    port.plan[`${port.endName}Rate`] = rate;
-                });
-                return;
-            }
+                for (const offset of preferredOffsets) {
+                    const coordinate = clamp(centre + offset, margin, axisLength - margin);
+                    if (coordinateIsFree(coordinate))
+                        return reserveCoordinate(coordinate);
+                }
 
-            group.forEach((port, index) => {
-                port.plan[`${port.endName}Rate`] = group.length === 1 ? .5 : .18 + (.64 * index / (group.length - 1));
+                for (let step = 1; step <= slotCount; step++) {
+                    for (const offset of [-step * spacing, step * spacing]) {
+                        const coordinate = clamp(centre + offset, margin, axisLength - margin);
+                        if (coordinateIsFree(coordinate))
+                            return reserveCoordinate(coordinate);
+                    }
+                }
+
+                return reserveCoordinate(centre);
+            };
+
+            const orderedPorts = group
+                .map(port => ({ port, desired: preferredCoordinate(port) }))
+                .sort((left, right) =>
+                    Number(isStraightThroughRoute(right.port.plan)) - Number(isStraightThroughRoute(left.port.plan))
+                    || Math.abs(left.desired - centre) - Math.abs(right.desired - centre)
+                    || left.port.plan.index - right.port.plan.index);
+
+            orderedPorts.forEach(({ port, desired }) => {
+                port.plan[`${port.endName}Rate`] = nearestCentreSlot(desired) / axisLength;
             });
         });
 
+        swapCrossingSharedPorts(plans);
+        const routePriority = { default: 0, handoff: 1, terminal: 2, branch: 3 };
+        plans.sort((left, right) =>
+            (routePriority[left.kind] ?? 4) - (routePriority[right.kind] ?? 4)
+            || (left.kind === 'terminal' && right.kind === 'terminal'
+                ? left.to.offsetTop - right.to.offsetTop
+                    || left.from.offsetTop - right.from.offsetTop
+                    || left.to.offsetLeft - right.to.offsetLeft
+                : 0)
+            || left.index - right.index);
+        const occupiedSegments = [];
         plans.forEach(plan => {
-            const geometry = connectorGeometry(plan);
+            const chosenGeometry = plan.kind === 'handoff'
+                ? connectorGeometry(plan)
+                : plan.kind === 'terminal'
+                    ? terminalCollisionFreeGeometry(plan, occupiedSegments)
+                : collisionFreeGeometry(plan, occupiedSegments);
+            const geometry = plan.kind === 'handoff'
+                ? chosenGeometry
+                : optimiseConnectionSides(plan, occupiedSegments, chosenGeometry);
             const path = document.createElementNS(svgNamespace, 'path');
             path.setAttribute('d', geometry.d);
             path.setAttribute('class', `workflow-connector workflow-connector--${plan.kind}`);
@@ -833,6 +1511,10 @@
             path.dataset.edgeTo = plan.edge.dataset.edgeTo;
             path.setAttribute('marker-end', `url(#workflowArrow${plan.kind[0].toUpperCase()}${plan.kind.slice(1)})`);
             svg.appendChild(path);
+            occupiedSegments.push(...connectorSegments(geometry.points).map(segment => ({
+                ...segment,
+                kind: plan.kind
+            })));
 
             // Terminal cards already carry their outcome and destination. Repeating the
             // same text on the short incoming edge obscures the branch at fit-to-screen.

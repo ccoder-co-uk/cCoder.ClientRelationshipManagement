@@ -11,9 +11,16 @@ public sealed class LeadDetailsViewModel
     public string RankingRationale { get; init; } = string.Empty;
     public string QualificationNotes { get; init; } = string.Empty;
     public string SuppressionReason { get; init; } = string.Empty;
+    public IReadOnlyList<LeadProcessStepOptionViewModel> ProcessStepOptions { get; init; } = [];
     public IReadOnlyList<LeadDetailContactViewModel> Contacts { get; init; } = [];
     public IReadOnlyList<LeadDetailTaskViewModel> Tasks { get; init; } = [];
     public IReadOnlyList<LeadDetailArtifactViewModel> Artifacts { get; init; } = [];
+}
+
+public sealed class LeadProcessStepOptionViewModel
+{
+    public Guid Id { get; init; }
+    public string Name { get; init; } = string.Empty;
 }
 
 public sealed class LeadDetailContactViewModel
