@@ -1,4 +1,5 @@
 using cCoder.Security.Exposures;
+using cCoder.Security.Objects.Entities;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -71,8 +72,8 @@ public sealed class CRMAcceptanceFixture : IAsyncLifetime
     internal async Task<string> IssueAgentTokenAsync(string userId = null)
     {
         using IServiceScope scope = Factory.Services.CreateScope();
-        IAccountManager accountManager = scope.ServiceProvider.GetRequiredService<IAccountManager>();
-        return (await accountManager.IssueTokenAsync(userId ?? Settings.UserId)).Id;
+        ITokenManager tokenManager = scope.ServiceProvider.GetRequiredService<ITokenManager>();
+        return (await tokenManager.IssueTokenAsync(userId ?? Settings.UserId, TokenUse.WorkflowExecution)).Id;
     }
 }
 

@@ -1,14 +1,14 @@
 using System.Security;
-using cCoder.Security.Exposures;
 using cCoder.Security.Objects;
 using cCoder.Security.Objects.DTOs;
+using cCoder.Security.Services.Orchestrations.Interfaces;
 using ClientRelationshipManagement.Web.Models.Account;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ClientRelationshipManagement.Web.Controllers;
 
 public sealed class AccountController(
-    IAccountManager accountManager,
+    IAuthenticationOrchestrationService accountManager,
     ISSOAuthInfo authInfo)
     : Controller
 {
@@ -54,19 +54,6 @@ public sealed class AccountController(
     {
         await accountManager.LogoutAsync();
         return RedirectToAction(nameof(Login), new { returnUrl = NormalizeReturnUrl(returnUrl) });
-    }
-
-    [HttpPost("/Api/Account/Login")]
-    public async ValueTask<IActionResult> ApiLogin([FromBody] Auth auth) =>
-        ModelState.IsValid
-            ? Ok(await accountManager.LoginAsync(auth.User, auth.Pass))
-            : BadRequest(ModelState);
-
-    [HttpPost("/Api/Account/Logout")]
-    public async ValueTask<IActionResult> ApiLogout()
-    {
-        await accountManager.LogoutAsync();
-        return Ok();
     }
 
     bool IsAuthenticated() =>
