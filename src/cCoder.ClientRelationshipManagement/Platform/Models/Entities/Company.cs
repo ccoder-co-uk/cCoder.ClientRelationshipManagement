@@ -43,6 +43,7 @@ public class Company : ICrmEntity
 
     public virtual Address RegisteredAddress { get; set; }
     public virtual ICollection<CompanyContact> Contacts { get; set; } = new List<CompanyContact>();
+    public virtual ICollection<CompanyEvidence> Evidence { get; set; } = new List<CompanyEvidence>();
     public virtual ICollection<TenantCompanyRelationship> Relationships { get; set; } = new List<TenantCompanyRelationship>();
     public virtual ICollection<CompanyHistoryItem> History { get; set; } = new List<CompanyHistoryItem>();
 }

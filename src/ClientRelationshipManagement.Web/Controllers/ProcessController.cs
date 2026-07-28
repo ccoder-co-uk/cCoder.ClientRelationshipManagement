@@ -28,8 +28,6 @@ public sealed class ProcessController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        await workflowAutomationService.EnsureSeedProcessesAsync();
-
         return View(await CreateIndexModelAsync());
     }
 
@@ -39,7 +37,6 @@ public sealed class ProcessController(
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
-        await workflowAutomationService.EnsureSeedProcessesAsync(cancellationToken);
         IReadOnlyCollection<string> tenantIds = GetReadableTenantIds();
         List<PlatformEntities.ProcessDefinition> definitions = await processWorkspace.RetrieveDefinitions()
             .AsNoTracking()
@@ -141,7 +138,6 @@ public sealed class ProcessController(
 
         Response.Headers.CacheControl = "no-store, no-cache, max-age=0";
         Response.Headers.Pragma = "no-cache";
-        await workflowAutomationService.EnsureSeedProcessesAsync(cancellationToken);
         IReadOnlyCollection<string> tenantIds = GetReadableTenantIds();
         List<PlatformEntities.ProcessDefinition> definitions = await processWorkspace.RetrieveDefinitions()
             .AsNoTracking()
@@ -152,6 +148,7 @@ public sealed class ProcessController(
                 .ThenInclude(step => step.OutgoingTransitions)
             .Include(item => item.Steps.Where(step => step.IsActive))
                 .ThenInclude(step => step.StepTasks)
+            .AsSplitQuery()
             .OrderBy(item => item.ScopeType)
             .ThenByDescending(item => item.IsDefault)
             .ThenBy(item => item.Name)
@@ -160,19 +157,16 @@ public sealed class ProcessController(
         List<Guid> definitionIds = [.. definitions.Select(item => item.Id)];
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
-        List<WorkflowStepIdentityProjection> stepIdentities = await processWorkspace.RetrieveSteps()
-            .AsNoTracking()
-            .Where(step => tenantIds.Contains(step.ProcessDefinition.TenantId)
-                && step.ProcessDefinition.LifecycleState != ProcessDefinitionLifecycleState.Draft)
-            .Select(step => new WorkflowStepIdentityProjection
+        List<WorkflowStepIdentityProjection> stepIdentities = definitions
+            .SelectMany(definition => definition.Steps.Select(step => new WorkflowStepIdentityProjection
             {
                 StepId = step.Id,
                 ProcessDefinitionId = step.ProcessDefinitionId,
-                TenantId = step.ProcessDefinition.TenantId,
-                ScopeType = step.ProcessDefinition.ScopeType,
+                TenantId = definition.TenantId,
+                ScopeType = definition.ScopeType,
                 StepKey = step.Key
-            })
-            .ToListAsync(cancellationToken);
+            }))
+            .ToList();
         List<Guid> historicalStepIds = [.. stepIdentities.Select(item => item.StepId)];
         Dictionary<Guid, WorkflowStepIdentityProjection> stepIdentityById = stepIdentities
             .ToDictionary(item => item.StepId);
@@ -292,13 +286,12 @@ public sealed class ProcessController(
                 LastUpdated = lead.LastUpdated,
                 CompanyStatus = lead.Company.CompanyStatus,
                 CompanyIsDissolved = lead.Company.DissolvedOn.HasValue,
-                HasUsableContact = !string.IsNullOrWhiteSpace(lead.RawContactEmailAddress)
-                    || !string.IsNullOrWhiteSpace(lead.RawContactPhoneNumber)
-                    || !string.IsNullOrWhiteSpace(lead.Company.ContactEmailAddress)
-                    || !string.IsNullOrWhiteSpace(lead.Company.ContactPhoneNumber)
-                    || lead.Contacts.Any(contact => !string.IsNullOrWhiteSpace(contact.EmailAddress)
-                        || !string.IsNullOrWhiteSpace(contact.PhoneNumber)),
-                QualificationNotes = lead.QualificationNotes
+                HasUsableContact = lead.Contacts.Any(contact =>
+                    !string.IsNullOrWhiteSpace(contact.Name)
+                    && contact.Name != "Researched contact"
+                    && !string.IsNullOrWhiteSpace(contact.EmailAddress)),
+                QualificationNotes = lead.QualificationNotes,
+                SuppressionReason = lead.Company.ProspectingSuppressedReason
             })
             .ToListAsync(cancellationToken);
         Dictionary<Guid, WorkflowLeadCompanyProjection> latestLeads = leadRows
@@ -400,57 +393,28 @@ public sealed class ProcessController(
             ProcessScopeType scopeType,
             ProcessTransitionEffect effect)
         {
-            if (scopeType != ProcessScopeType.Lead || effect != ProcessTransitionEffect.DeferLead)
+            LeadStatus? status = (scopeType, effect) switch
+            {
+                (ProcessScopeType.Lead, ProcessTransitionEffect.DeferLead) => LeadStatus.Deferred,
+                (ProcessScopeType.Lead, ProcessTransitionEffect.RejectLead) => LeadStatus.Rejected,
+                _ => null
+            };
+            if (!status.HasValue)
                 return [];
 
-            List<WorkflowLeadCompanyProjection> deferred = latestLeads.Values
-                .Where(item => item.Status == LeadStatus.Deferred)
+            return latestLeads.Values
+                .Where(item => item.Status == status.Value)
+                .Select(item => ExtractLeadOutcomeReason(item, effect))
+                .GroupBy(item => item, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(group => group.LongCount())
+                .ThenBy(group => group.Key)
+                .Select(group => new WorkflowOutcomeReasonViewModel
+                {
+                    Label = group.Key,
+                    Detail = "The latest explicit workflow decision or recorded suppression reason for these companies.",
+                    Count = group.LongCount()
+                })
                 .ToList();
-            long noContact = deferred.LongCount(item => !item.HasUsableContact);
-            long inactive = deferred.LongCount(item => item.HasUsableContact
-                && (item.CompanyIsDissolved || Regex.IsMatch(item.CompanyStatus ?? string.Empty,
-                    "dissolved|liquidation|removed|closed|inactive|converted-closed",
-                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)));
-            long incompleteEvidence = deferred.LongCount(item => item.HasUsableContact
-                && !item.CompanyIsDissolved
-                && !Regex.IsMatch(item.CompanyStatus ?? string.Empty,
-                    "dissolved|liquidation|removed|closed|inactive|converted-closed",
-                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
-                && (!Regex.IsMatch(item.QualificationNotes ?? string.Empty,
-                        @"(?im)^Identity result:\s*(matched|partially matched)\b",
-                        RegexOptions.CultureInvariant)
-                    || !Regex.IsMatch(item.QualificationNotes ?? string.Empty,
-                        @"(?im)^Fit score:\s*\d{1,3}\b",
-                        RegexOptions.CultureInvariant)));
-            long other = deferred.Count - noContact - inactive - incompleteEvidence;
-
-            return new[]
-            {
-                new WorkflowOutcomeReasonViewModel
-                {
-                    Label = "No usable contact point",
-                    Detail = "No email address or phone number is recorded on the lead, company, or lead contacts. Contact discovery did not produce the information the qualification gate requires.",
-                    Count = noContact
-                },
-                new WorkflowOutcomeReasonViewModel
-                {
-                    Label = "Qualification evidence incomplete",
-                    Detail = "A contact exists, but identity coherence or the fit score is missing from the recorded research.",
-                    Count = incompleteEvidence
-                },
-                new WorkflowOutcomeReasonViewModel
-                {
-                    Label = "Company inactive or dissolved",
-                    Detail = "The registry state indicates that conversion should not proceed.",
-                    Count = inactive
-                },
-                new WorkflowOutcomeReasonViewModel
-                {
-                    Label = "Other recorded qualification result",
-                    Detail = "The available evidence was processed under an older or unclassified decision rule.",
-                    Count = other
-                }
-            }.Where(reason => reason.Count > 0).ToList();
         }
 
         string CurrentStateHref(ProcessScopeType scopeType, ProcessTransitionEffect effect) =>
@@ -478,6 +442,7 @@ public sealed class ProcessController(
         ProcessValidationResult validation = await processValidationService.ValidateAsync(tenantIds, cancellationToken);
         WorkflowModelPageViewModel model = new()
         {
+            Notice = TempData["WorkflowNotice"]?.ToString() ?? string.Empty,
             GeneratedOn = now,
             IsValid = validation.IsValid,
             Issues = validation.Issues,
@@ -535,6 +500,8 @@ public sealed class ProcessController(
                                 Sequence = step.Sequence,
                                 IsEntryPoint = step.IsEntryPoint,
                                 ActionType = DisplayText.Humanize(step.ActionType),
+                                StepType = DisplayText.Humanize(step.StepType),
+                                ExecutionMode = DisplayText.Humanize(step.ExecutionMode),
                                 Objective = step.Objective ?? string.Empty,
                                 RequiredFacts = step.RequiredFacts ?? string.Empty,
                                 ProducedFacts = step.ProducedFacts ?? string.Empty,
@@ -579,7 +546,8 @@ public sealed class ProcessController(
                                             transition,
                                             nextStep,
                                             entrySteps,
-                                            definition.TenantId);
+                                            definition.TenantId,
+                                            definition.Id);
                                         historicalOutcomeCounts.TryGetValue(
                                             LogicalOutcomeKey(definition.TenantId, definition.ScopeType, step.Key, transition.OutcomeKey),
                                             out int historicalOutcomeCount);
@@ -609,12 +577,100 @@ public sealed class ProcessController(
                                     .ToList()
                             };
                         })
+                        .ToList(),
+                    TerminalNodes = definition.Steps
+                        .SelectMany(step => step.OutgoingTransitions.Select(transition => new { Step = step, Transition = transition }))
+                        .Where(item => item.Transition.IsTerminal
+                            && !DescribeDestination(item.Transition, null, entrySteps, definition.TenantId, definition.Id)
+                                .GraphTargetId.StartsWith("portal-", StringComparison.Ordinal))
+                        .GroupBy(item => TerminalGraphTargetId(definition.Id, item.Transition), StringComparer.Ordinal)
+                        .Select(group =>
+                        {
+                            PlatformEntities.ProcessTransition representative = group.First().Transition;
+                            long currentStateCount = CurrentStateCount(definition.ScopeType, representative.Effect);
+                            return new WorkflowTerminalNodeViewModel
+                            {
+                                GraphTargetId = group.Key,
+                                Name = TerminalNodeName(representative.Effect, representative.OutcomeLabel),
+                                OutcomeLabel = string.Join(" · ", group.Select(item => item.Transition.OutcomeLabel).Distinct()),
+                                Effect = representative.Effect,
+                                EffectLabel = DisplayText.Humanize(representative.Effect),
+                                ResultingState = DescribeState(
+                                    representative.ResultingRelationshipStatus,
+                                    representative.ResultingSalesStage,
+                                    representative.ResultingClientAccountStatus),
+                                CurrentStateCount = currentStateCount,
+                                InboundRouteCount = group.Count(),
+                                HistoricalCompletedCount = group.Sum(item =>
+                                {
+                                    historicalOutcomeCounts.TryGetValue(
+                                        LogicalOutcomeKey(definition.TenantId, definition.ScopeType, item.Step.Key, item.Transition.OutcomeKey),
+                                        out int count);
+                                    return count;
+                                }),
+                                CurrentStateHref = CurrentStateHref(definition.ScopeType, representative.Effect),
+                                CurrentStateReasons = CurrentStateReasons(definition.ScopeType, representative.Effect),
+                                SourceStepIds = [.. group.Select(item => item.Step.Id).Distinct()]
+                            };
+                        })
+                        .OrderBy(node => node.Name)
                         .ToList()
                 };
             }).ToList()
         };
 
         return View(model);
+    }
+
+    [HttpPost("MoveTerminalLeads")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> MoveTerminalLeads(
+        ProcessTransitionEffect effect,
+        Guid processStepId,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        if (RedirectIfUnauthenticated() is IActionResult redirect)
+            return redirect;
+
+        LeadStatus? sourceStatus = effect switch
+        {
+            ProcessTransitionEffect.DeferLead => LeadStatus.Deferred,
+            ProcessTransitionEffect.RejectLead => LeadStatus.Rejected,
+            _ => null
+        };
+        if (!sourceStatus.HasValue)
+            return BadRequest("Only recoverable lead end states can be moved back into the process.");
+
+        string[] tenantIds = GetWriteableTenantIds();
+        PlatformEntities.ProcessStep targetStep = await processWorkspace.RetrieveSteps()
+            .AsNoTracking()
+            .FirstOrDefaultAsync(step => step.Id == processStepId
+                && step.IsActive
+                && step.ProcessDefinition.IsActive
+                && step.ProcessDefinition.LifecycleState == ProcessDefinitionLifecycleState.Active
+                && step.ProcessDefinition.ScopeType == ProcessScopeType.Lead
+                && tenantIds.Contains(step.ProcessDefinition.TenantId),
+                cancellationToken);
+        if (targetStep is null)
+            return NotFound();
+
+        Guid[] leadIds = await salesWorkspace.RetrieveLeads()
+            .AsNoTracking()
+            .Where(lead => lead.TenantId == targetStep.ProcessDefinition.TenantId
+                && lead.Status == sourceStatus.Value
+                && lead.OpportunityId == null)
+            .Select(lead => lead.Id)
+            .ToArrayAsync(cancellationToken);
+        int moved = await workflowAutomationService.MoveLeadsToStepAsync(
+            leadIds,
+            targetStep.Id,
+            string.IsNullOrWhiteSpace(reason)
+                ? $"Bulk recovery from {DisplayText.Humanize(sourceStatus.Value)}."
+                : reason,
+            cancellationToken);
+        TempData["WorkflowNotice"] = $"Moved {moved:N0} compan{(moved == 1 ? "y" : "ies")} to {targetStep.Name}.";
+        return RedirectToAction(nameof(WorkflowModel));
     }
 
     static string LogicalLaneKey(string tenantId, ProcessScopeType scopeType) =>
@@ -640,7 +696,8 @@ public sealed class ProcessController(
         PlatformEntities.ProcessTransition transition,
         PlatformEntities.ProcessStep nextStep,
         IReadOnlyDictionary<string, PlatformEntities.ProcessStep> entrySteps,
-        string tenantId)
+        string tenantId,
+        Guid processDefinitionId)
     {
         if (nextStep is not null)
             return ($"step-{nextStep.Id:N}", nextStep.Name);
@@ -667,7 +724,49 @@ public sealed class ProcessController(
         string destination = transition.Effect == ProcessTransitionEffect.None
             ? "Process ends"
             : DisplayText.Humanize(transition.Effect);
-        return ($"exit-{transition.Id:N}", destination);
+        return (TerminalGraphTargetId(processDefinitionId, transition), destination);
+    }
+
+    static string TerminalGraphTargetId(Guid processDefinitionId, PlatformEntities.ProcessTransition transition) =>
+        transition.Effect == ProcessTransitionEffect.None
+            ? $"terminal-{processDefinitionId:N}-{transition.OutcomeKey.ToLowerInvariant().Replace(' ', '-')}"
+            : $"terminal-{processDefinitionId:N}-{(int)transition.Effect}";
+
+    static string TerminalNodeName(ProcessTransitionEffect effect, string fallback) => effect switch
+    {
+        ProcessTransitionEffect.DeferLead => "Deferred leads",
+        ProcessTransitionEffect.RejectLead => "Rejected leads",
+        ProcessTransitionEffect.CloseOpportunityAsLost => "Closed opportunities",
+        ProcessTransitionEffect.CloseClientAccount => "Closed clients",
+        _ => string.IsNullOrWhiteSpace(fallback) ? "Process complete" : fallback
+    };
+
+    static string ExtractLeadOutcomeReason(
+        WorkflowLeadCompanyProjection lead,
+        ProcessTransitionEffect effect)
+    {
+        MatchCollection reasons = Regex.Matches(
+            lead.QualificationNotes ?? string.Empty,
+            @"(?im)^(?:Decision reason|Reason):\s*(?<reason>.+)$",
+            RegexOptions.CultureInvariant);
+        if (reasons.Count > 0)
+            return reasons[^1].Groups["reason"].Value.Trim();
+
+        if (!string.IsNullOrWhiteSpace(lead.SuppressionReason))
+            return Regex.Replace(lead.SuppressionReason, @"^(?:Lead rejected|Opportunity closed):\s*", string.Empty, RegexOptions.IgnoreCase).Trim();
+
+        if (lead.CompanyIsDissolved || Regex.IsMatch(
+            lead.CompanyStatus ?? string.Empty,
+            "dissolved|liquidation|removed|closed|inactive|converted-closed",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            return $"Company registry status is {(!string.IsNullOrWhiteSpace(lead.CompanyStatus) ? lead.CompanyStatus : "inactive")}.";
+        }
+
+        if (!lead.HasUsableContact && effect == ProcessTransitionEffect.DeferLead)
+            return "No named contact with an email address is recorded.";
+
+        return "Legacy outcome: no explicit reason was recorded.";
     }
 
     static string DescribeState(
@@ -772,8 +871,6 @@ public sealed class ProcessController(
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
-
-        await workflowAutomationService.EnsureSeedProcessesAsync();
 
         ProcessEditPageViewModel model = await CreateEditModelAsync(id);
         return model is null ? NotFound() : View(model);
@@ -966,7 +1063,10 @@ public sealed class ProcessController(
         step.Sequence = request.Sequence;
         step.IsEntryPoint = request.IsEntryPoint;
         step.IsActive = request.IsActive;
+        step.StepType = request.StepType;
+        step.ConfigurationJson = request.ConfigurationJson?.Trim();
         step.ActionType = request.ActionType;
+        step.ExecutionMode = request.ExecutionMode;
         step.RelationshipStatusOnActivate = request.RelationshipStatusOnActivate;
         step.SalesStageOnActivate = request.SalesStageOnActivate;
         step.ClientAccountStatusOnActivate = request.ClientAccountStatusOnActivate;
@@ -1007,7 +1107,7 @@ public sealed class ProcessController(
 
         if (definition.ScopeType == ProcessScopeType.Lead
             && request.Id.HasValue
-            && (step.Key == "qualify-lead" || step.Key == "commercial-fit" || step.Key == "company-scale"))
+            && (step.Key == "qualify-lead" || step.Key == "commercial-fit" || step.Key == "company-scale" || step.Key == "contact-research"))
         {
             await workflowAutomationService.ReevaluateDeferredLeadsAsync(definition.TenantId);
         }
@@ -1266,7 +1366,10 @@ public sealed class ProcessController(
                     Sequence = step.Sequence,
                     IsEntryPoint = step.IsEntryPoint,
                     IsActive = step.IsActive,
+                    StepType = step.StepType,
+                    ConfigurationJson = step.ConfigurationJson ?? string.Empty,
                     ActionType = step.ActionType,
+                    ExecutionMode = step.ExecutionMode,
                     RelationshipStatusOnActivate = step.RelationshipStatusOnActivate,
                     SalesStageOnActivate = step.SalesStageOnActivate,
                     ClientAccountStatusOnActivate = step.ClientAccountStatusOnActivate,
@@ -1279,7 +1382,9 @@ public sealed class ProcessController(
                     EmailBodyTemplate = step.EmailBodyTemplate ?? string.Empty,
                     CallScriptTemplate = step.CallScriptTemplate ?? string.Empty,
                     QuestionSetTemplate = step.QuestionSetTemplate ?? string.Empty,
+                    StepTypeOptions = BuildStepTypeOptions(step.StepType),
                     ActionTypeOptions = BuildActionTypeOptions(step.ActionType),
+                    ExecutionModeOptions = BuildExecutionModeOptions(step.ExecutionMode),
                     EmailRecipientTargetOptions = BuildEmailRecipientTargetOptions(step.EmailRecipientTarget),
                     RelationshipStatusOptions = BuildRelationshipStatusOptions(step.RelationshipStatusOnActivate),
                     SalesStageOptions = BuildSalesStageOptions(step.SalesStageOnActivate),
@@ -1337,8 +1442,12 @@ public sealed class ProcessController(
             ProcessDefinitionId = definitionId,
             Sequence = 999,
             IsActive = true,
+            StepType = ProcessStepType.HumanAction,
+            StepTypeOptions = BuildStepTypeOptions(ProcessStepType.HumanAction),
             ActionType = ProcessActionType.ManualTask,
             ActionTypeOptions = BuildActionTypeOptions(ProcessActionType.ManualTask),
+            ExecutionMode = ProcessStepExecutionMode.AgentManaged,
+            ExecutionModeOptions = BuildExecutionModeOptions(ProcessStepExecutionMode.AgentManaged),
             EmailRecipientTarget = ProcessEmailRecipientTarget.PrimaryContact,
             EmailRecipientTargetOptions = BuildEmailRecipientTargetOptions(ProcessEmailRecipientTarget.PrimaryContact),
             RelationshipStatusOptions = BuildRelationshipStatusOptions(null),
@@ -1373,6 +1482,22 @@ public sealed class ProcessController(
 
     static IReadOnlyList<SelectListItem> BuildActionTypeOptions(ProcessActionType selectedValue) =>
         Enum.GetValues<ProcessActionType>()
+            .Select(value => new SelectListItem(
+                DisplayText.Humanize(value),
+                value.ToString(),
+                value == selectedValue))
+            .ToList();
+
+    static IReadOnlyList<SelectListItem> BuildStepTypeOptions(ProcessStepType selectedValue) =>
+        Enum.GetValues<ProcessStepType>()
+            .Select(value => new SelectListItem(
+                DisplayText.Humanize(value),
+                value.ToString(),
+                value == selectedValue))
+            .ToList();
+
+    static IReadOnlyList<SelectListItem> BuildExecutionModeOptions(ProcessStepExecutionMode selectedValue) =>
+        Enum.GetValues<ProcessStepExecutionMode>()
             .Select(value => new SelectListItem(
                 DisplayText.Humanize(value),
                 value.ToString(),

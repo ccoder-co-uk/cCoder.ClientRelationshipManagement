@@ -10,13 +10,8 @@ namespace ClientRelationshipManagement.AcceptanceTests.Tests;
 
 public sealed partial class HomeControllerTests
 {
-    [CRMAcceptanceFact]
-    public async Task Workflow_LowFitLeadIsDeferredWithoutSuppression_AndCanBeReevaluated()
+    private async Task CompletePendingLeadOutcomesAsync(Guid leadId, params string[] outcomes)
     {
-        (Guid leadId, _) = await SeedLeadAsync();
-        await ExecuteWorkflowAsync(service => service.EnsureCoverageAsync(leadId: leadId, forceCreate: true).AsTask());
-
-        string[] outcomes = ["identity-checked", "activity-described", "contact-researched", "scale-assessed", "quality-assessed", "fit-assessed", "deferred"];
         foreach (string outcome in outcomes)
         {
             Guid taskId = await QueryInAdminContextAsync(db => db.ProcessTasks
@@ -27,13 +22,302 @@ public sealed partial class HomeControllerTests
             {
                 ProcessTaskId = taskId,
                 OutcomeKey = outcome,
-                CompletionNote = outcome == "fit-assessed" ? "Fit score: 40." : $"Completed {outcome}."
+                CompletionNote = LeadCompletionNote(outcome)
             }).AsTask());
         }
+    }
+
+    private static string LeadCompletionNote(string outcome) => outcome switch
+    {
+        "status-current" => "Current status: active. Official source URL: https://find-and-update.company-information.service.gov.uk/company/01234567. Evidence: exact entity is active.",
+        "resources-gathered" => "Resource pack gathered. Pages inspected: https://example.com/.",
+        "fit-assessed" => "Activity: test company.\nPitchable: no\nPitch reason: no test need.\nOpening angle: none.\nPages used: https://example.com/.",
+        "contacts-extracted" => "Reachability: none\nPages inspected: none",
+        "relationships-extracted" => "Related companies: none found in first-party evidence.",
+        "related-companies-tipped" => "Related company candidates reconciled with the pool.",
+        _ => $"Completed {outcome}."
+    };
+
+    [CRMAcceptanceFact]
+    public async Task Workflow_CompletionRefreshesAProcessAdvancedByAnotherAgentContext()
+    {
+        (Guid leadId, _) = await SeedLeadAsync();
+
+        await ExecuteWorkflowAsync(async staleService =>
+        {
+            await staleService.EnsureCoverageAsync(leadId: leadId, forceCreate: true);
+            Guid identityTaskId = await QueryInAdminContextAsync(db => db.ProcessTasks
+                .Where(item => item.LeadId == leadId && item.State == ProcessTaskState.Pending)
+                .Select(item => item.Id)
+                .SingleAsync());
+            await staleService.CompleteTaskAsync(new ProcessTaskCompletionCommand
+            {
+                ProcessTaskId = identityTaskId,
+                OutcomeKey = "identity-checked",
+                CompletionNote = "Identity matched."
+            });
+
+            Guid statusTaskId = await QueryInAdminContextAsync(db => db.ProcessTasks
+                .Where(item => item.LeadId == leadId && item.State == ProcessTaskState.Pending)
+                .Select(item => item.Id)
+                .SingleAsync());
+            await ExecuteWorkflowAsync(service => service.CompleteTaskAsync(new ProcessTaskCompletionCommand
+            {
+                ProcessTaskId = statusTaskId,
+                OutcomeKey = "status-current",
+                CompletionNote = "Current status: active. Official source URL: https://find-and-update.company-information.service.gov.uk/company/01234567. Evidence: exact entity is active."
+            }).AsTask());
+
+            await CompletePendingLeadOutcomesAsync(leadId, "resources-gathered", "fit-assessed");
+
+            Guid researchTaskId = await QueryInAdminContextAsync(db => db.ProcessTasks
+                .Where(item => item.LeadId == leadId
+                    && item.State == ProcessTaskState.Pending
+                    && item.ProcessStep.Key == "contact-research")
+                .Select(item => item.Id)
+                .SingleAsync());
+            await staleService.CompleteTaskAsync(new ProcessTaskCompletionCommand
+            {
+                ProcessTaskId = researchTaskId,
+                OutcomeKey = "contacts-extracted",
+                CompletionNote = "Reachability: direct\nPages inspected: https://example.com/contact"
+            });
+        });
+
+        string pendingStep = await QueryInAdminContextAsync(db => db.ProcessTasks
+            .Where(item => item.LeadId == leadId && item.State == ProcessTaskState.Pending)
+            .Select(item => item.ProcessStep.Key)
+            .SingleAsync());
+        pendingStep.Should().Be("extract-related-companies");
+    }
+
+    [CRMAcceptanceFact]
+    public async Task Workflow_SeedRepairAlignsMigratedStatusTaskWithActiveProcessStep()
+    {
+        (Guid leadId, _) = await SeedLeadAsync();
+        await ExecuteWorkflowAsync(service => service.EnsureCoverageAsync(leadId: leadId, forceCreate: true).AsTask());
+
+        Guid identityTaskId = await QueryInAdminContextAsync(db => db.ProcessTasks
+            .Where(item => item.LeadId == leadId && item.State == ProcessTaskState.Pending)
+            .Select(item => item.Id)
+            .SingleAsync());
+        await ExecuteWorkflowAsync(service => service.CompleteTaskAsync(new ProcessTaskCompletionCommand
+        {
+            ProcessTaskId = identityTaskId,
+            OutcomeKey = "identity-checked",
+            CompletionNote = "Identity matched."
+        }).AsTask());
+
+        Guid statusTaskId = await QueryInAdminContextAsync(db => db.ProcessTasks
+            .Where(item => item.LeadId == leadId
+                && item.State == ProcessTaskState.Pending
+                && item.ProcessStep.Key == "current-status-research")
+            .Select(item => item.Id)
+            .SingleAsync());
+
+        await ExecuteInAdminContextAsync(async db =>
+        {
+            ProcessTask statusTask = await db.ProcessTasks
+                .Include(item => item.ProcessInstance)
+                .Include(item => item.ProcessStep)
+                .SingleAsync(item => item.Id == statusTaskId);
+            Guid contactStepId = await db.ProcessSteps
+                .Where(item => item.ProcessDefinitionId == statusTask.ProcessStep.ProcessDefinitionId
+                    && item.Key == "contact-research")
+                .Select(item => item.Id)
+                .SingleAsync();
+            statusTask.ProcessInstance.CurrentProcessStepId = contactStepId;
+            await db.SaveChangesAsync();
+        });
+
+        await ExecuteWorkflowAsync(service => service.EnsureSeedProcessesAsync().AsTask());
+
+        (Guid CurrentStepId, Guid TaskStepId) repaired = await QueryInAdminContextAsync(async db =>
+        {
+            ProcessTask task = await db.ProcessTasks
+                .AsNoTracking()
+                .Include(item => item.ProcessInstance)
+                .SingleAsync(item => item.Id == statusTaskId);
+            return (task.ProcessInstance.CurrentProcessStepId!.Value, task.ProcessStepId);
+        });
+        repaired.CurrentStepId.Should().Be(repaired.TaskStepId);
+
+        (string IdentityTarget, string StatusTarget, string ResourcesTarget, string FitTarget,
+            string ContactTarget, string RelatedTarget, string TipTarget, int ActiveStepCount,
+            bool RetiredStepsInactive) routes =
+            await QueryInAdminContextAsync(async db =>
+            {
+                Guid definitionId = await db.ProcessTasks
+                    .Where(item => item.Id == statusTaskId)
+                    .Select(item => item.ProcessStep.ProcessDefinitionId)
+                    .SingleAsync();
+                var routeRows = await db.ProcessTransitions
+                    .Where(item => item.ProcessStep.ProcessDefinitionId == definitionId
+                        && (item.ProcessStep.Key == "lead-research"
+                            || item.ProcessStep.Key == "current-status-research"
+                            || item.ProcessStep.Key == "gather-company-resources"
+                            || item.ProcessStep.Key == "assess-scf-fit"
+                            || item.ProcessStep.Key == "contact-research"
+                            || item.ProcessStep.Key == "extract-related-companies"
+                            || item.ProcessStep.Key == "tip-related-companies"))
+                    .Select(item => new
+                    {
+                        From = item.ProcessStep.Key,
+                        To = item.NextProcessStep == null ? null : item.NextProcessStep.Key,
+                        item.OutcomeKey,
+                        item.IsTerminal,
+                        item.Effect
+                    })
+                    .ToListAsync();
+                return (
+                    routeRows.Single(item => item.From == "lead-research").To!,
+                    routeRows.Single(item => item.From == "current-status-research" && item.OutcomeKey == "status-current").To!,
+                    routeRows.Single(item => item.From == "gather-company-resources").To!,
+                    routeRows.Single(item => item.From == "assess-scf-fit").To!,
+                    routeRows.Single(item => item.From == "contact-research").To!,
+                    routeRows.Single(item => item.From == "extract-related-companies").To!,
+                    routeRows.Single(item => item.From == "tip-related-companies").To!,
+                    await db.ProcessSteps.CountAsync(item => item.ProcessDefinitionId == definitionId && item.IsActive),
+                    await db.ProcessSteps
+                        .Where(item => item.ProcessDefinitionId == definitionId
+                            && (item.Key == "company-activity" || item.Key == "company-scale"
+                                || item.Key == "verify-company" || item.Key == "commercial-fit"))
+                        .AllAsync(item => !item.IsActive));
+            });
+        routes.IdentityTarget.Should().Be("current-status-research");
+        routes.StatusTarget.Should().Be("gather-company-resources");
+        routes.ResourcesTarget.Should().Be("assess-scf-fit");
+        routes.FitTarget.Should().Be("contact-research");
+        routes.ContactTarget.Should().Be("extract-related-companies");
+        routes.RelatedTarget.Should().Be("tip-related-companies");
+        routes.TipTarget.Should().Be("qualify-lead");
+        routes.ActiveStepCount.Should().Be(8);
+        routes.RetiredStepsInactive.Should().BeTrue();
+    }
+
+    [CRMAcceptanceFact]
+    public async Task Workflow_ContactResearchRejectsReachabilityWithoutPersistedEmail()
+    {
+        (Guid leadId, Guid contactId) = await SeedLeadAsync();
+        await ExecuteInAdminContextAsync(async db =>
+        {
+            LeadContact contact = await db.LeadContacts.SingleAsync(item => item.Id == contactId);
+            db.LeadContacts.Remove(contact);
+            Lead lead = await db.Leads.SingleAsync(item => item.Id == leadId);
+            lead.RawContactPhoneNumber = "020 7946 0018";
+            await db.SaveChangesAsync();
+        });
+        await ExecuteWorkflowAsync(service => service.EnsureCoverageAsync(leadId: leadId, forceCreate: true).AsTask());
+
+        await CompletePendingLeadOutcomesAsync(
+            leadId,
+            "identity-checked",
+            "status-current",
+            "resources-gathered",
+            "fit-assessed");
+
+        ProcessTask contactTask = await QueryInAdminContextAsync(db => db.ProcessTasks
+            .Include(item => item.ProcessStep)
+            .SingleAsync(item => item.LeadId == leadId
+                && item.State == ProcessTaskState.Pending
+                && item.ProcessStep.Key == "contact-research"));
+        contactTask.RenderedInstructions.Should().Contain("published email");
+        contactTask.RenderedInstructions.Should().Contain("indirect route");
+
+        Func<Task> completePhoneOnly = () => ExecuteWorkflowAsync(service => service.CompleteTaskAsync(
+            new ProcessTaskCompletionCommand
+            {
+                ProcessTaskId = contactTask.Id,
+                OutcomeKey = "contacts-extracted",
+                CompletionNote = "Reachability: indirect\nPages inspected: https://example.com/contact"
+            }).AsTask());
+
+        await completePhoneOnly.Should().ThrowAsync<WorkflowRuleViolationException>()
+            .WithMessage("*published email*persisted*");
+        ProcessTask unchanged = await QueryInAdminContextAsync(db => db.ProcessTasks
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == contactTask.Id));
+        unchanged.State.Should().Be(ProcessTaskState.Pending);
+    }
+
+    [CRMAcceptanceFact]
+    public async Task Workflow_PositiveReachabilityRequiresAnOpenedPageOnThePagesInspectedLine()
+    {
+        (Guid leadId, _) = await SeedLeadAsync();
+        await ExecuteWorkflowAsync(service => service.EnsureCoverageAsync(leadId: leadId, forceCreate: true).AsTask());
+
+        await CompletePendingLeadOutcomesAsync(
+            leadId,
+            "identity-checked",
+            "status-current",
+            "resources-gathered",
+            "fit-assessed");
+
+        Guid contactTaskId = await QueryInAdminContextAsync(db => db.ProcessTasks
+            .Where(item => item.LeadId == leadId
+                && item.State == ProcessTaskState.Pending
+                && item.ProcessStep.Key == "contact-research")
+            .Select(item => item.Id)
+            .SingleAsync());
+        Func<Task> completeWithoutOpenedPage = () => ExecuteWorkflowAsync(service => service.CompleteTaskAsync(
+            new ProcessTaskCompletionCommand
+            {
+                ProcessTaskId = contactTaskId,
+                OutcomeKey = "contacts-extracted",
+                CompletionNote = "Reachability: direct\nPages inspected: none"
+            }).AsTask());
+
+        await completeWithoutOpenedPage.Should().ThrowAsync<WorkflowRuleViolationException>()
+            .WithMessage("*positive reachability*Pages inspected*");
+
+        Func<Task> completeWithoutRequiredLabels = () => ExecuteWorkflowAsync(service => service.CompleteTaskAsync(
+            new ProcessTaskCompletionCommand
+            {
+                ProcessTaskId = contactTaskId,
+                OutcomeKey = "contacts-extracted",
+                CompletionNote = "Pages inspected: none"
+            }).AsTask());
+
+        await completeWithoutRequiredLabels.Should().ThrowAsync<WorkflowRuleViolationException>()
+            .WithMessage("*Reachability*");
+
+        await ExecuteWorkflowAsync(service => service.CompleteTaskAsync(new ProcessTaskCompletionCommand
+        {
+            ProcessTaskId = contactTaskId,
+            OutcomeKey = "contacts-extracted",
+            CompletionNote = "Reachability: none\nPages inspected: none"
+        }).AsTask());
+
+        ProcessTask completed = await QueryInAdminContextAsync(db => db.ProcessTasks
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == contactTaskId));
+        completed.State.Should().Be(ProcessTaskState.Completed);
+    }
+
+    [CRMAcceptanceFact]
+    public async Task Workflow_NonPitchableLeadIsDeferredWithoutSuppression_AndCanBeReevaluated()
+    {
+        (Guid leadId, _) = await SeedLeadAsync();
+        await ExecuteWorkflowAsync(service => service.EnsureCoverageAsync(leadId: leadId, forceCreate: true).AsTask());
+
+        await CompletePendingLeadOutcomesAsync(
+            leadId,
+            "identity-checked",
+            "status-current",
+            "resources-gathered",
+            "fit-assessed",
+            "contacts-extracted",
+            "relationships-extracted",
+            "related-companies-tipped",
+            "deferred");
 
         Lead deferred = await QueryInAdminContextAsync(db => db.Leads.Include(item => item.Company).SingleAsync(item => item.Id == leadId));
         deferred.Status.Should().Be(LeadStatus.Deferred);
         deferred.Company.IsProspectingSuppressed.Should().BeFalse();
+
+        await ExecuteWorkflowAsync(service => service.EnsureSeedProcessesAsync().AsTask());
+        Lead stillDeferred = await QueryInAdminContextAsync(db => db.Leads.SingleAsync(item => item.Id == leadId));
+        stillDeferred.Status.Should().Be(LeadStatus.Deferred, "the current process intentionally retains non-pitchable companies for later reconsideration");
 
         int requeued = 0;
         await ExecuteWorkflowAsync(async service =>
@@ -45,6 +329,88 @@ public sealed partial class HomeControllerTests
         Lead reactivated = await QueryInAdminContextAsync(db => db.Leads.SingleAsync(item => item.Id == leadId));
         reactivated.Status.Should().Be(LeadStatus.Imported);
         bool hasPendingTask = await QueryInAdminContextAsync(db => db.ProcessTasks.AnyAsync(item => item.LeadId == leadId && item.State == ProcessTaskState.Pending));
+        hasPendingTask.Should().BeTrue();
+    }
+
+    [CRMAcceptanceFact]
+    public async Task Workflow_DeferredLeadThatClaimedAContactWithoutStructuredPersistence_IsRequeuedForContactResearch()
+    {
+        (Guid leadId, Guid contactId) = await SeedLeadAsync();
+        await ExecuteInAdminContextAsync(async db =>
+        {
+            LeadContact existingContact = await db.LeadContacts.SingleAsync(item => item.Id == contactId);
+            db.LeadContacts.Remove(existingContact);
+            await db.SaveChangesAsync();
+        });
+        await ExecuteWorkflowAsync(service => service.EnsureCoverageAsync(leadId: leadId, forceCreate: true).AsTask());
+
+        await CompletePendingLeadOutcomesAsync(
+            leadId,
+            "identity-checked",
+            "status-current",
+            "resources-gathered",
+            "fit-assessed",
+            "contacts-extracted",
+            "relationships-extracted",
+            "related-companies-tipped",
+            "deferred");
+
+        await ExecuteInAdminContextAsync(async db =>
+        {
+            ProcessTask legacyInvalidTask = await db.ProcessTasks
+                .Include(item => item.ProcessStep)
+                .SingleAsync(item => item.LeadId == leadId && item.ProcessStep.Key == "contact-research");
+            legacyInvalidTask.CompletionNotes = "Contact found: yes. Contact name: Legacy Person. Contact email: legacy@example.com.";
+            await db.SaveChangesAsync();
+        });
+
+        await ExecuteWorkflowAsync(service => service.EnsureSeedProcessesAsync().AsTask());
+
+        Lead requeued = await QueryInAdminContextAsync(db => db.Leads.SingleAsync(item => item.Id == leadId));
+        requeued.Status.Should().Be(LeadStatus.Imported);
+        bool hasPendingTask = await QueryInAdminContextAsync(db => db.ProcessTasks
+            .AnyAsync(item => item.LeadId == leadId && item.State == ProcessTaskState.Pending));
+        hasPendingTask.Should().BeTrue();
+    }
+
+    [CRMAcceptanceFact]
+    public async Task Workflow_DeferredLeadWithObsoleteNoContactEvidence_IsRequeuedForFocusedLeadershipResearch()
+    {
+        (Guid leadId, Guid contactId) = await SeedLeadAsync();
+        await ExecuteInAdminContextAsync(async db =>
+        {
+            LeadContact existingContact = await db.LeadContacts.SingleAsync(item => item.Id == contactId);
+            db.LeadContacts.Remove(existingContact);
+            await db.SaveChangesAsync();
+        });
+        await ExecuteWorkflowAsync(service => service.EnsureCoverageAsync(leadId: leadId, forceCreate: true).AsTask());
+
+        await CompletePendingLeadOutcomesAsync(
+            leadId,
+            "identity-checked",
+            "status-current",
+            "resources-gathered",
+            "fit-assessed",
+            "contacts-extracted",
+            "relationships-extracted",
+            "related-companies-tipped",
+            "deferred");
+
+        await ExecuteInAdminContextAsync(async db =>
+        {
+            ProcessTask legacyNoContactTask = await db.ProcessTasks
+                .Include(item => item.ProcessStep)
+                .SingleAsync(item => item.LeadId == leadId && item.ProcessStep.Key == "contact-research");
+            legacyNoContactTask.CompletionNotes = "Contact found: no. Contact name: none. Contact email: none. Pages inspected: https://example.com/contact.";
+            await db.SaveChangesAsync();
+        });
+
+        await ExecuteWorkflowAsync(service => service.EnsureSeedProcessesAsync().AsTask());
+
+        Lead requeued = await QueryInAdminContextAsync(db => db.Leads.SingleAsync(item => item.Id == leadId));
+        requeued.Status.Should().Be(LeadStatus.Imported);
+        bool hasPendingTask = await QueryInAdminContextAsync(db => db.ProcessTasks
+            .AnyAsync(item => item.LeadId == leadId && item.State == ProcessTaskState.Pending));
         hasPendingTask.Should().BeTrue();
     }
 

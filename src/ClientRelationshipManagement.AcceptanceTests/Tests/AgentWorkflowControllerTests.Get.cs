@@ -14,6 +14,49 @@ namespace ClientRelationshipManagement.AcceptanceTests.Tests;
 public sealed partial class AgentWorkflowControllerTests
 {
     [CRMAcceptanceFact]
+    public async Task Post_LeadResearch_PersistsVerifiedContactForQualification()
+    {
+        (Guid leadId, Guid existingContactId) = await SeedLeadAsync();
+        string token = await Fixture.IssueAgentTokenAsync();
+        using HttpRequestMessage request = new(HttpMethod.Post, $"/Api/AgentWorkflow/Leads/{leadId}/Research");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Content = JsonContent.Create(new
+        {
+            rawWebsiteUrl = "https://example.com/contact",
+            rawContactPhoneNumber = "020 7946 0018",
+            contactName = "Alex Example",
+            contactPosition = "Commercial Director",
+            contactEmailAddress = "alex@example.com",
+            contactPhoneNumber = "020 7946 0018",
+            employeeCount = 120,
+            annualRevenue = 25_000_000m,
+            revenueCurrency = "GBP",
+            qualificationNotes = "Contact found: yes.\nSource URLs: https://example.com/contact"
+        });
+
+        using HttpResponseMessage response = await Client.SendAsync(request);
+        string content = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, content);
+        Lead updatedLead = await QueryInAdminContextAsync(db => db.Leads
+            .Include(item => item.Company)
+            .Include(item => item.Contacts)
+            .SingleAsync(item => item.Id == leadId));
+        LeadContact updatedContact = updatedLead.Contacts.Single(item => item.Id == existingContactId);
+
+        updatedLead.RawContactPhoneNumber.Should().Be("020 7946 0018");
+        updatedLead.RawWebsiteUrl.Should().Be("https://example.com/contact");
+        updatedLead.QualificationNotes.Should().Contain("Source URLs: https://example.com/contact");
+        updatedContact.Name.Should().Be("Alex Example");
+        updatedContact.Position.Should().Be("Commercial Director");
+        updatedContact.EmailAddress.Should().Be("alex@example.com");
+        updatedContact.PhoneNumber.Should().Be("020 7946 0018");
+        updatedLead.Company.EmployeeCount.Should().Be(120);
+        updatedLead.Company.AnnualRevenue.Should().Be(25_000_000m);
+        updatedLead.Company.RevenueCurrency.Should().Be("GBP");
+    }
+
+    [CRMAcceptanceFact]
     public async Task Get_SentEmailReconciliation_ReturnsTrackedSentMailWithoutMailboxCandidatesWhenGraphIsNotConfigured()
     {
         (Guid relationshipId, Guid opportunityId, Guid contactId) = await SeedOpportunityWorkspaceAsync();
@@ -88,6 +131,68 @@ public sealed partial class AgentWorkflowControllerTests
         firstTask.GetProperty("producedFacts").GetString().Should().NotBeNullOrWhiteSpace();
         firstTask.GetProperty("viabilityImpact").GetString().Should().NotBeNullOrWhiteSpace();
         firstTask.GetProperty("companyHistory").ValueKind.Should().Be(JsonValueKind.Array);
+    }
+
+    [CRMAcceptanceFact]
+    public async Task Get_DueTasks_PrioritisesKnownTurnoverAheadOfLowerValueProcessProgress()
+    {
+        (Guid highValueLeadId, _) = await SeedLeadAsync();
+        (Guid lowValueLeadId, _) = await SeedLeadAsync();
+        await ExecuteInAdminContextAsync(async db =>
+        {
+            Lead highValue = await db.Leads.Include(item => item.Company).SingleAsync(item => item.Id == highValueLeadId);
+            highValue.Company.AnnualRevenue = 200_000_000m;
+            highValue.Company.RevenueCurrency = "GBP";
+            highValue.Company.PrimarySicCodes = "16100 - Sawmilling and planing of wood";
+
+            Lead lowValue = await db.Leads.Include(item => item.Company).SingleAsync(item => item.Id == lowValueLeadId);
+            lowValue.Company.AnnualRevenue = 1_000_000m;
+            lowValue.Company.RevenueCurrency = "GBP";
+            lowValue.Company.PrimarySicCodes = "47190 - Other retail sale";
+            await db.SaveChangesAsync();
+        });
+        await ExecuteWorkflowAsync(service => service.EnsureCoverageAsync(leadId: highValueLeadId, forceCreate: true).AsTask());
+        await ExecuteWorkflowAsync(service => service.EnsureCoverageAsync(leadId: lowValueLeadId, forceCreate: true).AsTask());
+
+        foreach (string outcome in new[] { "identity-checked", "status-current" })
+        {
+            Guid lowValueTaskId = await QueryInAdminContextAsync(db => db.ProcessTasks
+                .Where(item => item.LeadId == lowValueLeadId && item.State == ProcessTaskState.Pending)
+                .Select(item => item.Id)
+                .SingleAsync());
+            await ExecuteWorkflowAsync(service => service.CompleteTaskAsync(new ProcessTaskCompletionCommand
+            {
+                ProcessTaskId = lowValueTaskId,
+                OutcomeKey = outcome,
+                CompletionNote = outcome == "status-current"
+                    ? "Current status: active. Official source URL: https://find-and-update.company-information.service.gov.uk/company/01234567. Evidence: exact entity is active."
+                    : $"Completed {outcome}."
+            }).AsTask());
+        }
+
+        Guid expectedHighValueTaskId = await QueryInAdminContextAsync(db => db.ProcessTasks
+            .Where(item => item.LeadId == highValueLeadId && item.State == ProcessTaskState.Pending)
+            .Select(item => item.Id)
+            .SingleAsync());
+        Guid expectedLowValueTaskId = await QueryInAdminContextAsync(db => db.ProcessTasks
+            .Where(item => item.LeadId == lowValueLeadId && item.State == ProcessTaskState.Pending)
+            .Select(item => item.Id)
+            .SingleAsync());
+        string token = await Fixture.IssueAgentTokenAsync();
+        using HttpRequestMessage request = new(HttpMethod.Get, "/Api/AgentWorkflow/Tasks/Due?limit=100");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        using HttpResponseMessage response = await Client.SendAsync(request);
+        string content = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, content);
+        using JsonDocument document = JsonDocument.Parse(content);
+        List<Guid> orderedTaskIds = document.RootElement.EnumerateArray()
+            .Select(item => item.GetProperty("processTaskId").GetGuid())
+            .ToList();
+        orderedTaskIds.Should().Contain(expectedHighValueTaskId);
+        orderedTaskIds.Should().Contain(expectedLowValueTaskId);
+        orderedTaskIds.IndexOf(expectedHighValueTaskId).Should().BeLessThan(orderedTaskIds.IndexOf(expectedLowValueTaskId));
     }
 
     [CRMAcceptanceFact]

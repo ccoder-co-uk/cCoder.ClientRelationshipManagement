@@ -18,6 +18,7 @@ public class ProcessInstance : ICrmEntity
     public Guid? CurrentProcessStepId { get; set; }
     public Guid? CurrentProcessTaskId { get; set; }
     public ProcessInstanceState State { get; set; }
+    public string ContextJson { get; set; }
     public string CompletionOutcomeKey { get; set; }
     public DateTimeOffset StartedOn { get; set; }
     public DateTimeOffset? CompletedOn { get; set; }

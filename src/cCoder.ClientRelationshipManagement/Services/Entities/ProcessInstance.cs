@@ -101,6 +101,7 @@ internal sealed class ProcessInstanceFoundationService(IProcessInstanceStorageBr
             CurrentProcessStepId = source.CurrentProcessStepId,
             CurrentProcessTaskId = source.CurrentProcessTaskId,
             State = source.State,
+            ContextJson = source.ContextJson,
             CompletionOutcomeKey = source.CompletionOutcomeKey,
             StartedOn = source.StartedOn,
             CompletedOn = source.CompletedOn,
@@ -121,6 +122,7 @@ internal sealed class ProcessInstanceFoundationService(IProcessInstanceStorageBr
         target.CurrentProcessStepId = source.CurrentProcessStepId;
         target.CurrentProcessTaskId = source.CurrentProcessTaskId;
         target.State = source.State;
+        target.ContextJson = source.ContextJson;
         target.CompletionOutcomeKey = source.CompletionOutcomeKey;
         target.StartedOn = source.StartedOn;
         target.CompletedOn = source.CompletedOn;

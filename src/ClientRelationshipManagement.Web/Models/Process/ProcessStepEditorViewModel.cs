@@ -16,7 +16,10 @@ public sealed class ProcessStepEditorViewModel
     public int Sequence { get; init; }
     public bool IsEntryPoint { get; init; }
     public bool IsActive { get; init; }
+    public ProcessStepType StepType { get; init; }
+    public string ConfigurationJson { get; init; } = string.Empty;
     public ProcessActionType ActionType { get; init; }
+    public ProcessStepExecutionMode ExecutionMode { get; init; }
     public RelationshipStatus? RelationshipStatusOnActivate { get; init; }
     public SalesPipelineStage? SalesStageOnActivate { get; init; }
     public ClientAccountStatus? ClientAccountStatusOnActivate { get; init; }
@@ -30,6 +33,8 @@ public sealed class ProcessStepEditorViewModel
     public string CallScriptTemplate { get; init; } = string.Empty;
     public string QuestionSetTemplate { get; init; } = string.Empty;
     public IReadOnlyList<SelectListItem> ActionTypeOptions { get; init; } = Array.Empty<SelectListItem>();
+    public IReadOnlyList<SelectListItem> StepTypeOptions { get; init; } = Array.Empty<SelectListItem>();
+    public IReadOnlyList<SelectListItem> ExecutionModeOptions { get; init; } = Array.Empty<SelectListItem>();
     public IReadOnlyList<SelectListItem> EmailRecipientTargetOptions { get; init; } = Array.Empty<SelectListItem>();
     public IReadOnlyList<SelectListItem> RelationshipStatusOptions { get; init; } = Array.Empty<SelectListItem>();
     public IReadOnlyList<SelectListItem> SalesStageOptions { get; init; } = Array.Empty<SelectListItem>();

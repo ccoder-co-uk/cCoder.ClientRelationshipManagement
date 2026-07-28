@@ -16,4 +16,10 @@ public sealed class UpdateLeadResearchRequest
     public string ContactEmailAddress { get; set; }
     public string ContactPhoneNumber { get; set; }
     public string ContactLinkedInUrl { get; set; }
+    public string CompanyStatus { get; set; }
+    public DateTimeOffset? DissolvedOn { get; set; }
+    public string CompanyStatusSourceUrl { get; set; }
+    public int? EmployeeCount { get; set; }
+    public decimal? AnnualRevenue { get; set; }
+    public string RevenueCurrency { get; set; }
 }

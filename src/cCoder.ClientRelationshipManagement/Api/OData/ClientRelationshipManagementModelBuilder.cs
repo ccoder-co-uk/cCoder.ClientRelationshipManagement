@@ -24,6 +24,7 @@ public sealed class ClientRelationshipManagementModelBuilder
         Add<Company>("Companies");
         Add<CompanyHistoryItem>("CompanyHistory");
         Add<CompanyContact>("CompanyContacts");
+        Add<CompanyEvidence>("CompanyEvidence");
         Add<Lead>("Leads");
         Add<LeadContact>("LeadContacts");
         Add<TenantCompanyRelationship>("TenantCompanyRelationships");

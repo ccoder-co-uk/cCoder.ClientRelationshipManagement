@@ -9,7 +9,7 @@ public sealed class ScheduledApprovalConversationHostedService(
     IServiceScopeFactory serviceScopeFactory,
     ILoggingBroker<ScheduledApprovalConversationHostedService> loggingBroker) : BackgroundService
 {
-    static readonly TimeSpan FailedTurnRetryDelay = TimeSpan.FromMinutes(5);
+    static readonly TimeSpan FailedTurnRetryDelay = TimeSpan.FromMinutes(1);
     readonly Dictionary<Guid, DateTimeOffset> lastAttempts = [];
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -18,6 +18,7 @@ public sealed class ScheduledApprovalConversationHostedService(
         using PeriodicTimer timer = new(TimeSpan.FromSeconds(10));
         while (!stoppingToken.IsCancellationRequested)
         {
+            await RecoverAbandonedRunsAsync(stoppingToken);
             await ReviewWaitingConversationAsync(stoppingToken);
             try { if (!await timer.WaitForNextTickAsync(stoppingToken)) break; }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
@@ -30,7 +31,7 @@ public sealed class ScheduledApprovalConversationHostedService(
         IAgentRunJournalService journal = scope.ServiceProvider.GetRequiredService<IAgentRunJournalService>();
         int recovered = await journal.FailAbandonedAsync(
             AgentRunKind.ProcessOptimiser,
-            DateTimeOffset.UtcNow.AddMinutes(-5),
+            DateTimeOffset.UtcNow.Subtract(FailedTurnRetryDelay),
             cancellationToken);
         if (recovered > 0)
             loggingBroker.LogInformation("Recovered {RunCount} abandoned approval conversation run(s).", recovered);
@@ -45,7 +46,7 @@ public sealed class ScheduledApprovalConversationHostedService(
                 scope.ServiceProvider.GetRequiredService<cCoder.ClientRelationshipManagement.Services.Entities.IAgentMessageOrchestrationService>();
             var candidates = await messages.RetrieveAll().AsNoTracking().Include(item => item.Entries)
                 .Where(item => item.State == AgentMessageState.Pending)
-                .OrderBy(item => item.LastUpdated).Take(25).ToListAsync(cancellationToken);
+                .OrderByDescending(item => item.LastUpdated).Take(25).ToListAsync(cancellationToken);
             DateTimeOffset now = DateTimeOffset.UtcNow;
             var waitingMessages = candidates.Where(message =>
             {

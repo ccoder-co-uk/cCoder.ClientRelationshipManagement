@@ -10,7 +10,7 @@ public sealed class WorkflowBroker(IClientRelationshipDbContextFactory factory) 
     readonly ClientRelationshipDbContext context = factory.CreateDbContext(useAdminConnection: true);
     public IQueryable<Activity> Activities => context.Activities; public IQueryable<AgentMessageEntry> AgentMessageEntries => context.AgentMessageEntries;
     public IQueryable<AgentMessage> AgentMessages => context.AgentMessages; public IQueryable<ClientAccount> ClientAccounts => context.ClientAccounts;
-    public IQueryable<Company> Companies => context.Companies; public IQueryable<CompanyContact> CompanyContacts => context.CompanyContacts;
+    public IQueryable<Company> Companies => context.Companies; public IQueryable<CompanyContact> CompanyContacts => context.CompanyContacts; public IQueryable<CompanyEvidence> CompanyEvidence => context.CompanyEvidence;
     public IQueryable<CompanyHistoryItem> CompanyHistory => context.CompanyHistory; public IQueryable<EmailRecipient> EmailRecipients => context.EmailRecipients;
     public IQueryable<Email> Emails => context.Emails; public IQueryable<LeadContact> LeadContacts => context.LeadContacts; public IQueryable<Lead> Leads => context.Leads;
     public IQueryable<Material> Materials => context.Materials; public IQueryable<Opportunity> Opportunities => context.Opportunities;

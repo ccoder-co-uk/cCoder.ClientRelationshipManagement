@@ -107,6 +107,9 @@ internal sealed class CompanyContactFoundationService(
             EmailAddress = source.EmailAddress,
             PhoneNumber = source.PhoneNumber,
             LinkedInUrl = source.LinkedInUrl,
+            SourceUrl = source.SourceUrl,
+            SourceTitle = source.SourceTitle,
+            ObservedOn = source.ObservedOn,
             Notes = source.Notes,
     };
 
@@ -127,6 +130,9 @@ internal sealed class CompanyContactFoundationService(
         target.EmailAddress = source.EmailAddress;
         target.PhoneNumber = source.PhoneNumber;
         target.LinkedInUrl = source.LinkedInUrl;
+        target.SourceUrl = source.SourceUrl;
+        target.SourceTitle = source.SourceTitle;
+        target.ObservedOn = source.ObservedOn;
         target.Notes = source.Notes;
     }
 

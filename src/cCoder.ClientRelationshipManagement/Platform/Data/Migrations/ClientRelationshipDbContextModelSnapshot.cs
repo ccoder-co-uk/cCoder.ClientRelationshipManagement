@@ -769,12 +769,14 @@ namespace cCoder.ClientRelationshipManagement.Platform.Data.Migrations
                         .HasColumnType("nvarchar(512)");
 
                     b.Property<string>("Name")
-                        .IsRequired()
                         .HasMaxLength(256)
                         .HasColumnType("nvarchar(256)");
 
                     b.Property<string>("Notes")
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTimeOffset?>("ObservedOn")
+                        .HasColumnType("datetimeoffset");
 
                     b.Property<string>("PhoneNumber")
                         .HasMaxLength(64)
@@ -788,11 +790,82 @@ namespace cCoder.ClientRelationshipManagement.Platform.Data.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("nvarchar(128)");
 
+                    b.Property<string>("SourceTitle")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<string>("SourceUrl")
+                        .HasMaxLength(2048)
+                        .HasColumnType("nvarchar(2048)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("CompanyId");
 
                     b.ToTable("CompanyContacts", "masterdata");
+                });
+
+            modelBuilder.Entity("cCoder.ClientRelationshipManagement.Platform.Models.Entities.CompanyEvidence", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTimeOffset>("CreatedOn")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Extractor")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTimeOffset>("LastUpdated")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("LastUpdatedBy")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTimeOffset>("ObservedOn")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("ResourceHash")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<string>("SourceSnippet")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("SourceTitle")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<string>("SourceUrl")
+                        .HasMaxLength(2048)
+                        .HasColumnType("nvarchar(2048)");
+
+                    b.Property<string>("ValueJson")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CompanyId", "Key", "ResourceHash");
+
+                    b.ToTable("CompanyEvidence", "masterdata");
                 });
 
             modelBuilder.Entity("cCoder.ClientRelationshipManagement.Platform.Models.Entities.CompanyHistoryItem", b =>
@@ -1807,6 +1880,9 @@ namespace cCoder.ClientRelationshipManagement.Platform.Data.Migrations
                     b.Property<string>("CompletionOutcomeKey")
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<string>("ContextJson")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("CreatedBy")
                         .IsRequired()
                         .HasMaxLength(256)
@@ -1883,6 +1959,9 @@ namespace cCoder.ClientRelationshipManagement.Platform.Data.Migrations
                     b.Property<int?>("ClientAccountStatusOnActivate")
                         .HasColumnType("int");
 
+                    b.Property<string>("ConfigurationJson")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("CreatedBy")
                         .IsRequired()
                         .HasMaxLength(256)
@@ -1905,6 +1984,11 @@ namespace cCoder.ClientRelationshipManagement.Platform.Data.Migrations
 
                     b.Property<string>("EmailSubjectTemplate")
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("ExecutionMode")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
@@ -1956,6 +2040,11 @@ namespace cCoder.ClientRelationshipManagement.Platform.Data.Migrations
 
                     b.Property<int>("Sequence")
                         .HasColumnType("int");
+
+                    b.Property<int>("StepType")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
 
                     b.Property<string>("TaskInstructionsTemplate")
                         .HasColumnType("nvarchar(max)");
@@ -2703,6 +2792,17 @@ namespace cCoder.ClientRelationshipManagement.Platform.Data.Migrations
                     b.Navigation("Company");
                 });
 
+            modelBuilder.Entity("cCoder.ClientRelationshipManagement.Platform.Models.Entities.CompanyEvidence", b =>
+                {
+                    b.HasOne("cCoder.ClientRelationshipManagement.Platform.Models.Entities.Company", "Company")
+                        .WithMany("Evidence")
+                        .HasForeignKey("CompanyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Company");
+                });
+
             modelBuilder.Entity("cCoder.ClientRelationshipManagement.Platform.Models.Entities.CompanyHistoryItem", b =>
                 {
                     b.HasOne("cCoder.ClientRelationshipManagement.Platform.Models.Entities.Company", "Company")
@@ -3192,6 +3292,8 @@ namespace cCoder.ClientRelationshipManagement.Platform.Data.Migrations
             modelBuilder.Entity("cCoder.ClientRelationshipManagement.Platform.Models.Entities.Company", b =>
                 {
                     b.Navigation("Contacts");
+
+                    b.Navigation("Evidence");
 
                     b.Navigation("History");
 

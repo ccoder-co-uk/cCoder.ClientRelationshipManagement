@@ -145,7 +145,7 @@ public sealed class ProcessValidationService(IProcessCoordinationService process
             List<ProcessTransition> outgoing = [.. step.OutgoingTransitions];
             if (outgoing.Count == 0)
                 AddIssue(issues, ProcessValidationSeverity.Error, definition, step, "dead-end", "The step has no outcome transition.");
-            if (outgoing.Count(item => item.IsDefaultOutcome) > 1)
+            if (outgoing.Count(item => item.IsDefaultOutcome) > 1 && !IsDefaultFanOut(outgoing))
                 AddIssue(issues, ProcessValidationSeverity.Error, definition, step, "multiple-defaults", "The step has more than one default outcome.");
             if (outgoing.Count > 1 && outgoing.All(item => !item.IsDefaultOutcome))
                 AddIssue(issues, ProcessValidationSeverity.Warning, definition, step, "missing-default", "The step has several outcomes but no declared default.");
@@ -234,6 +234,7 @@ public sealed class ProcessValidationService(IProcessCoordinationService process
         // input context, not facts that an earlier workflow step needs to manufacture.
         facts.Add("lead.identity");
         facts.Add("lead.company-status");
+        facts.Add("company.authoritative-source");
     }
 
     static void ValidateStepTasks(
@@ -267,6 +268,19 @@ public sealed class ProcessValidationService(IProcessCoordinationService process
             AddIssue(issues, ProcessValidationSeverity.Error, definition, step, "unsafe-email-tasks",
                 "An email step must validate recipient content before invoking CRM.CreateEmailDraft.");
         }
+    }
+
+    static bool IsDefaultFanOut(IReadOnlyCollection<ProcessTransition> outgoing)
+    {
+        List<ProcessTransition> defaultTransitions = outgoing.Where(item => item.IsDefaultOutcome).ToList();
+        if (defaultTransitions.Count <= 1)
+            return false;
+
+        return defaultTransitions.All(item => !item.IsTerminal && item.NextProcessStepId.HasValue)
+            && defaultTransitions
+                .Select(item => item.OutcomeKey ?? string.Empty)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count() == 1;
     }
 
     static IReadOnlyList<string> SplitFacts(string value) =>

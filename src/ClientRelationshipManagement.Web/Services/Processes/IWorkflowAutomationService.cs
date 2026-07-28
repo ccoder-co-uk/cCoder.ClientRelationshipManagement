@@ -18,6 +18,14 @@ public interface IWorkflowAutomationService
     ValueTask<int> ReevaluateDeferredLeadsAsync(
         string tenantId,
         CancellationToken cancellationToken = default);
+    ValueTask<int> MoveLeadsToStepAsync(
+        IReadOnlyCollection<Guid> leadIds,
+        Guid processStepId,
+        string reason,
+        CancellationToken cancellationToken = default);
+    ValueTask<RelatedCompanyTipInResult> PromoteRelatedCompaniesAsync(
+        Guid sourceLeadId,
+        CancellationToken cancellationToken = default);
     ValueTask<int> ReschedulePendingTasksForStepAsync(
         Guid processStepId,
         CancellationToken cancellationToken = default);
@@ -35,6 +43,14 @@ public interface IWorkflowAutomationService
         CancellationToken cancellationToken = default);
     ValueTask<bool> CompleteEmailTaskAsync(Guid emailId, CancellationToken cancellationToken = default);
 }
+
+public sealed record RelatedCompanyTipInResult(
+    int CandidateCount,
+    int MatchedCount,
+    int PromotedCount,
+    IReadOnlyList<string> PromotedCompanies,
+    IReadOnlyList<string> AlreadyKnownCompanies,
+    IReadOnlyList<string> UnmatchedCompanies);
 
 public sealed record RelatedEmailDraftContext(
     Guid AgentMessageId,

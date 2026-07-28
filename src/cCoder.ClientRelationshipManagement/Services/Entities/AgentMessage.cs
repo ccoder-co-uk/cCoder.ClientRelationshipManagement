@@ -86,13 +86,8 @@ internal sealed class AgentMessageFoundationService(IAgentMessageStorageBroker b
         await broker.DeleteAsync(existing, cancellationToken);
     }
 
-    IQueryable<AgentMessage> Scope(IQueryable<AgentMessage> source, string[] tenants) => source.Where(item =>
-        tenants.Contains(item.TenantId)
-        || (item.ProcessTask != null
-            && ((item.ProcessTask.LeadId.HasValue && tenants.Contains(item.ProcessTask.Lead.TenantId))
-                || (item.ProcessTask.TenantCompanyRelationshipId.HasValue && tenants.Contains(item.ProcessTask.TenantCompanyRelationship.TenantId))
-                || (item.ProcessTask.OpportunityId.HasValue && tenants.Contains(item.ProcessTask.Opportunity.TenantCompanyRelationship.TenantId))
-                || (item.ProcessTask.ClientAccountId.HasValue && tenants.Contains(item.ProcessTask.ClientAccount.TenantCompanyRelationship.TenantId)))));
+    IQueryable<AgentMessage> Scope(IQueryable<AgentMessage> source, string[] tenants) =>
+        source.Where(item => tenants.Contains(item.TenantId));
 
     static AgentMessage Copy(AgentMessage source) => new()
     {

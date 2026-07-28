@@ -19,6 +19,9 @@ public sealed class AgentDueTaskViewModel
     public string CompanyRegistryUrl { get; init; } = string.Empty;
     public string CompanySicCodes { get; init; } = string.Empty;
     public string CompanyRegisteredOffice { get; init; } = string.Empty;
+    public int? CompanyEmployeeCount { get; init; }
+    public decimal? CompanyAnnualRevenue { get; init; }
+    public string CompanyRevenueCurrency { get; init; } = string.Empty;
     public string ExistingResearchSummary { get; init; } = string.Empty;
     public string ExistingQualificationNotes { get; init; } = string.Empty;
     public string ContactName { get; init; } = string.Empty;

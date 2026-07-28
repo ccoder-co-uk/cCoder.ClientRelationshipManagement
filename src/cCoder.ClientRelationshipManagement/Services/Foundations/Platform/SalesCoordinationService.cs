@@ -56,6 +56,7 @@ internal sealed class SalesCoordinationService(
         task.State == ProcessTaskState.Pending && task.DueOn <= now
         && (!task.AgentClaimExpiresOn.HasValue || task.AgentClaimExpiresOn <= now)
         && task.ActionType != ProcessActionType.Approval
+        && task.ProcessStep.ExecutionMode == ProcessStepExecutionMode.AgentManaged
         && !task.StepTaskRuns.Any(run => run.State == ProcessStepTaskRunState.Blocked)
         && !agentMessages.RetrieveAll().Any(message => message.ProcessTaskId == task.Id
             && message.State == AgentMessageState.Pending
