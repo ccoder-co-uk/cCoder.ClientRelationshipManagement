@@ -1,5 +1,5 @@
 @using cCoder.Security.Models.Entities
-@inject cCoder.Security.Services.Orchestrations.Interfaces.IAuthenticationOrchestrationService AccountManager
+@inject cCoder.Security.Exposures.ISecurityCurrentUserManager CurrentUserManager
 @inject cCoder.Security.Models.Configurations.ISSOAuthInfo AuthInfo
 @{
     string pageTitle = ViewData["Title"]?.ToString() ?? "Corporate LinX CRM";
@@ -10,7 +10,7 @@
     bool isAuthenticated = !string.IsNullOrWhiteSpace(AuthInfo?.SSOUserId)
         && !string.Equals(AuthInfo.SSOUserId, "Guest", StringComparison.OrdinalIgnoreCase);
     SSOUser currentUser = useProductShell && isAuthenticated
-        ? AccountManager.Me()
+        ? CurrentUserManager.GetCurrentUser()
         : null;
     string currentUserDisplay = currentUser?.DisplayName ?? AuthInfo?.SSOUserId ?? string.Empty;
     PathString currentPath = ViewContext.HttpContext.Request.Path;

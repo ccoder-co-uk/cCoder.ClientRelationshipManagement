@@ -10,6 +10,7 @@ TestResults/
 coverage/
 coverage*.xml
 artifacts/
+project.stxjson
 Agent Workspace/Authority Data/Archive/
 Agent Workspace/Authority Data/Failed/
 Agent Workspace/Process Optimiser/Session History/

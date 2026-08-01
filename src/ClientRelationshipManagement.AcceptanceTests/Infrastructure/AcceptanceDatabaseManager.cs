@@ -1,5 +1,6 @@
 using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.Security.Data.EF;
+using cCoder.Security.Data.EF.Dependencies;
 using cCoder.Security.Models;
 using cCoder.Security.Models.Configurations;
 using cCoder.Security.Models.Entities;

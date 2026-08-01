@@ -74,11 +74,7 @@ public static class Program
         MapServiceEndpoints(app);
         MapImportEndpoints(app);
 
-        using IServiceScope scope = app.Services.CreateScope();
-
-        await scope.ServiceProvider
-            .GetRequiredService<ICrmDatabaseInitialiser>()
-            .InitialiseAsync();
+        await app.Services.InitialiseCrmApplicationAsync();
 
         await app.RunAsync();
     }

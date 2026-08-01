@@ -2,14 +2,14 @@ using System.Security;
 using cCoder.Security.Models;
 using cCoder.Security.Models.Configurations;
 using cCoder.Security.Models.DTOs;
-using cCoder.Security.Services.Orchestrations.Interfaces;
+using cCoder.Security.Exposures;
 using ClientRelationshipManagement.Web.Models.Account;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ClientRelationshipManagement.Web.Controllers;
 
 public sealed class AccountController(
-    IAuthenticationOrchestrationService accountManager,
+    IAuthenticationManager accountManager,
     ISSOAuthInfo authInfo)
     : Controller
 {

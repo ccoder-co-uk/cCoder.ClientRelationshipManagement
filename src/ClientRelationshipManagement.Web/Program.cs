@@ -2,7 +2,6 @@ using cCoder.Security;
 using cCoder.Security.Exposures;
 using ClientRelationshipManagement.Web.Configuration;
 using ClientRelationshipManagement.Web.Services.Migration;
-using ClientRelationshipManagement.Web.Services.Processes;
 
 namespace ClientRelationshipManagement.Web;
 
@@ -95,19 +94,10 @@ public class Program
             name: "default",
             pattern: "{controller=Home}/{action=Index}/{id?}");
 
-        using (IServiceScope scope = app.Services.CreateScope())
-        {
-            scope.ServiceProvider
-                .GetRequiredService<ICrmDatabaseInitialiser>()
-                .InitialiseAsync()
-                .GetAwaiter()
-                .GetResult();
-            scope.ServiceProvider
-                .GetRequiredService<IWorkflowAutomationService>()
-                .EnsureSeedProcessesAsync()
-                .GetAwaiter()
-                .GetResult();
-        }
+        app.Services
+            .InitialiseCrmApplicationAsync()
+            .GetAwaiter()
+            .GetResult();
 
         app.Run();
     }

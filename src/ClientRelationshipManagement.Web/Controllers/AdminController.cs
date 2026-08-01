@@ -1,7 +1,7 @@
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.ClientRelationshipManagement.Models.Security;
-using cCoder.AI.Services.Foundations.Models;
+using cCoder.AI.Exposures;
 using cCoder.AI.Models.Responses;
 using ClientRelationshipManagement.Web.Models.Admin;
 using ClientRelationshipManagement.Web.Services.Agents;
@@ -23,7 +23,7 @@ public sealed class AdminController(
     IProcessValidationService processValidationService,
     IWorkflowAutomationService workflowAutomationService,
     IAiProviderSelectionService aiProviderSelectionService,
-    IModelManagerService modelManagerService,
+    IModelManager modelManagerService,
     IOptions<AgentWorkflowOptions> agentWorkflowOptions,
     ICRMAuthInfo authInfo)
     : Controller

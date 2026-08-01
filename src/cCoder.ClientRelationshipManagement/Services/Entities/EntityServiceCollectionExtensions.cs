@@ -62,6 +62,13 @@ public static class EntityServiceCollectionExtensions
         services.AddScoped<ICompanyEventFoundationService, CompanyEventFoundationService>();
         services.AddScoped<ICompanyEventProcessingService, CompanyEventProcessingService>();
         services.AddScoped<ICompanyOrchestrationService, CompanyOrchestrationService>();
+        services.AddScoped<ICompanyEvidenceStorageBroker, CompanyEvidenceStorageBroker>();
+        services.AddScoped<ICompanyEvidenceFoundationService, CompanyEvidenceFoundationService>();
+        services.AddScoped<ICompanyEvidenceProcessingService, CompanyEvidenceProcessingService>();
+        services.AddScoped<ICompanyEvidenceEventBroker, CompanyEvidenceEventBroker>();
+        services.AddScoped<ICompanyEvidenceEventFoundationService, CompanyEvidenceEventFoundationService>();
+        services.AddScoped<ICompanyEvidenceEventProcessingService, CompanyEvidenceEventProcessingService>();
+        services.AddScoped<ICompanyEvidenceOrchestrationService, CompanyEvidenceOrchestrationService>();
         services.AddScoped<ICompanyContactStorageBroker, CompanyContactStorageBroker>();
         services.AddScoped<ICompanyContactFoundationService, CompanyContactFoundationService>();
         services.AddScoped<ICompanyContactProcessingService, CompanyContactProcessingService>();

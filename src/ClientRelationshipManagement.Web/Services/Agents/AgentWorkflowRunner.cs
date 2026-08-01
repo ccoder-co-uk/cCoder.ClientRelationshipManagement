@@ -1,6 +1,5 @@
 using cCoder.AI.Models.Requests;
-using cCoder.AI.Services.Foundations.Completions;
-using cCoder.AI.Services.Orchestrations;
+using cCoder.AI.Exposures;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
@@ -21,8 +20,8 @@ using System.Text.RegularExpressions;
 namespace ClientRelationshipManagement.Web.Services.Agents;
 
 public sealed class AgentWorkflowRunner(
-    IAgentOrchestrationService agentOrchestrationService,
-    ICompletionProviderService completionProviderService,
+    IAgentManager agentOrchestrationService,
+    ICompletionProviderManager completionProviderService,
     IAgentExecutionTokenService agentExecutionTokenService,
     IAgentWorkspaceService agentWorkspaceService,
     IAgentSessionArchiveService agentSessionArchiveService,
