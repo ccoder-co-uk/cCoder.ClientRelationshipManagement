@@ -4,10 +4,6 @@ using cCoder.ClientRelationshipManagement.Platform;
 using cCoder.ClientRelationshipManagement.Api;
 using cCoder.Eventing;
 using cCoder.Security;
-using cCoder.Security.Data.EF;
-using cCoder.Security.Data.EF.Interfaces;
-using cCoder.Security.Models;
-using cCoder.Security.Models.Configurations;
 using ClientRelationshipManagement.Web.Brokers.Loggings;
 using ClientRelationshipManagement.Web.Brokers.Storages;
 using ClientRelationshipManagement.Web.Configuration;
@@ -136,22 +132,18 @@ public static class IServiceCollectionExtensions
             ApplyInt(configuration, "ImportWorkflow:ProcessingBatchSize", value => importWorkflowOptions.ProcessingBatchSize = value);
             ApplyInt(configuration, "ImportWorkflow:OpportunityScoreThreshold", value => importWorkflowOptions.OpportunityScoreThreshold = value);
         });
-        services.AddAI((_, aiConfiguration) =>
+        services.AddAIWeb(aiConfiguration =>
         {
             configuration.GetSection(AIConfiguration.SectionName).Bind(aiConfiguration);
             RegisterNamedAiProviders(configuration, aiConfiguration);
         });
 
-        services.AddScoped<ISecurityDbContextFactory>(provider =>
-            new MSSQLSecurityDbContextFactory(ssoConnection)
-            {
-                GetAuthInfo = ignoreAuthInfo => ignoreAuthInfo
-                    ? new SSOAuthInfo { SSOUserId = "Guest" }
-                    : provider.GetRequiredService<ISSOAuthInfo>(),
-            });
-
-        services.AddSecurity((securityServices, security) =>
-            security.UseAESHMMACPasswordEncryption(securityServices, decryptionKey));
+        services.AddSecurityWeb(security =>
+        {
+            security.ConnectionString = ssoConnection;
+            security.DecryptionKey = decryptionKey;
+            security.RootPath = string.Empty;
+        });
         services.AddSingleton(typeof(ILoggingBroker<>), typeof(LoggingBroker<>));
         services.AddScoped<IEmailWorkflowBroker, EmailWorkflowBroker>();
         services.AddScoped<IWorkflowBroker, WorkflowBroker>();
@@ -186,17 +178,29 @@ public static class IServiceCollectionExtensions
         services.AddScoped<IWorkflowAutomationService, WorkflowAutomationService>();
         services.AddScoped<IProcessValidationService, ProcessValidationService>();
 
-        if (options.IncludeHostedServices)
+        if (options.IncludeMailHostedServices)
         {
             services.AddHostedService<ScheduledEmailSenderHostedService>();
             services.AddHostedService<ScheduledMailboxSyncHostedService>();
+        }
+
+        if (options.IncludeAgentHostedServices)
+        {
             services.AddHostedService<ScheduledEmailApprovalAgentHostedService>();
             services.AddHostedService<ScheduledTaskAgentHostedService>();
             services.AddHostedService<ScheduledProcessOptimiserHostedService>();
             services.AddHostedService<ScheduledProcessHealthReviewHostedService>();
             services.AddHostedService<ScheduledApprovalConversationHostedService>();
+        }
+
+        if (options.IncludeLeadHostedServices)
+        {
             services.AddHostedService<ScheduledAuthorityDataIngestHostedService>();
             services.AddHostedService<ScheduledLeadWorkIntakeHostedService>();
+        }
+
+        if (options.IncludeImportHostedServices)
+        {
             services.AddHostedService<ScheduledImportProcessingHostedService>();
         }
 

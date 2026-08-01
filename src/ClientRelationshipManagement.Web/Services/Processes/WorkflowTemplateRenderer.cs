@@ -4,7 +4,7 @@ using PlatformEntities = cCoder.ClientRelationshipManagement.Platform.Models.Ent
 
 namespace ClientRelationshipManagement.Web.Services.Processes;
 
-internal static class WorkflowTemplateRenderer
+public static class WorkflowTemplateRenderer
 {
     public static IReadOnlyList<string> SupportedTokens { get; } =
     [

@@ -1,0 +1,90 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+
+name: publish
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+  DOTNET_NOLOGO: true
+  NUGET_DIRECTORY: ${{ github.workspace }}/artifacts/nuget
+  DOTNET_CLI_DISABLE_PERSISTENT_MSBUILD_SERVER: true
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  build-test-pack:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create version number
+        id: version
+        run: |
+          "value=$(Get-Date -Format 'yyyy.M.d.HHmm')" >> $env:GITHUB_OUTPUT
+
+      - name: Restore
+        run: dotnet restore src/cCoder.ClientRelationshipManagement.sln --no-http-cache
+
+      - name: Build
+        run: dotnet build src/cCoder.ClientRelationshipManagement.sln -c Release --no-restore -m:1 /p:BuildInParallel=false /p:UseSharedCompilation=false /p:Version="${{ steps.version.outputs.value }}"
+
+      - name: Test
+        run: dotnet test src/cCoder.ClientRelationshipManagement.sln -c Release --no-build -m:1 /p:BuildInParallel=false /p:UseSharedCompilation=false
+
+      - name: Pack
+        run: |
+          New-Item -ItemType Directory -Path "${{ env.NUGET_DIRECTORY }}" -Force | Out-Null
+          dotnet pack src/cCoder.ClientRelationshipManagement/cCoder.ClientRelationshipManagement.csproj -c Release --no-build --output "${{ env.NUGET_DIRECTORY }}" /p:Version="${{ steps.version.outputs.value }}"
+          dotnet pack src/cCoder.ClientRelationshipManagement.Runtime/cCoder.ClientRelationshipManagement.Runtime.csproj -c Release --no-build --output "${{ env.NUGET_DIRECTORY }}" /p:Version="${{ steps.version.outputs.value }}"
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            ${{ env.NUGET_DIRECTORY }}/*.nupkg
+            !${{ env.NUGET_DIRECTORY }}/*.snupkg
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: build-test-pack
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: nuget
+          path: ${{ env.NUGET_DIRECTORY }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.x
+
+      - name: NuGet login
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Publish packages
+        run: |
+          foreach ($file in (Get-ChildItem "${{ env.NUGET_DIRECTORY }}" -Filter *.nupkg)) {
+            dotnet nuget push $file.FullName --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+          }

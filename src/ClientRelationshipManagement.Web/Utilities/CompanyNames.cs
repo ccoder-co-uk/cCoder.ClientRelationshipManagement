@@ -2,7 +2,7 @@ using PlatformEntities = cCoder.ClientRelationshipManagement.Platform.Models.Ent
 
 namespace ClientRelationshipManagement.Web.Utilities;
 
-internal static class CompanyNames
+public static class CompanyNames
 {
     static readonly HashSet<string> PlaceholderNames = new(StringComparer.OrdinalIgnoreCase)
     {

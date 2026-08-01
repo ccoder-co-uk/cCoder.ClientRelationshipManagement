@@ -10,28 +10,26 @@
     <RootNamespace>ClientRelationshipManagement.Web</RootNamespace>
   </PropertyGroup>
 
-  <PropertyGroup>
-    <LocalAIProject>..\..\..\cCoder.AI\src\cCoder.AI\cCoder.AI.csproj</LocalAIProject>
-    <UseLocalAI Condition="'$(UseLocalAI)' == '' and Exists('$(LocalAIProject)')">true</UseLocalAI>
-    <UseLocalAI Condition="'$(UseLocalAI)' == '' and !Exists('$(LocalAIProject)')">false</UseLocalAI>
-  </PropertyGroup>
-
   <ItemGroup>
-    <PackageReference Include="cCoder.Security" Version="2026.7.22.814" />
+    <PackageReference Include="cCoder.CodeAnalysis" Version="2026.8.1.1211" />
+    <PackageReference Include="cCoder.Security" Version="2026.7.30.2059" />
     <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.2.3" />
     <PackageReference Include="Swashbuckle.AspNetCore.SwaggerGen" Version="10.2.3" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\cCoder.ClientRelationshipManagement\cCoder.ClientRelationshipManagement.csproj" />
+    <ProjectReference Include="..\cCoder.ClientRelationshipManagement.Runtime\cCoder.ClientRelationshipManagement.Runtime.csproj" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(UseLocalAI)' == 'true'">
-    <ProjectReference Include="$(LocalAIProject)" />
+  <ItemGroup>
+    <Compile Remove="Brokers\**\*.cs" />
+    <Compile Remove="Configuration\**\*.cs" />
+    <Compile Remove="IServiceCollectionExtensions.cs" />
+    <Compile Remove="Models\Admin\**\*.cs" />
+    <Compile Remove="Models\Imports\**\*.cs" />
+    <Compile Remove="Services\**\*.cs" />
+    <Compile Remove="Utilities\**\*.cs" />
   </ItemGroup>
-
-  <Target Name="ValidateLocalAIDependency" BeforeTargets="PrepareForBuild" Condition="'$(UseLocalAI)' != 'true'">
-    <Error Text="ClientRelationshipManagement.Web currently requires a local cCoder.AI checkout at $(LocalAIProject). Set UseLocalAI=true after cloning cCoder.AI beside this repo, or update the dependency once cCoder.AI is ready to consume normally." />
-  </Target>
 
 </Project>

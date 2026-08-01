@@ -1,6 +1,6 @@
 using System.Text.Json;
+using cCoder.AI.Exposures;
 using cCoder.AI.Models.Requests;
-using cCoder.AI.Services.Foundations.Completions;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
@@ -14,7 +14,7 @@ using Microsoft.Extensions.Options;
 namespace ClientRelationshipManagement.Web.Services.Agents;
 
 public sealed class EmailApprovalAgent(
-    ICompletionProviderService completionProviderService,
+    ICompletionProviderManager completionProviderService,
     IProcessCoordinationService processWorkspace,
     IOperationsCoordinationService operations,
     IAgentAutomationSettingsService automationSettingsService,

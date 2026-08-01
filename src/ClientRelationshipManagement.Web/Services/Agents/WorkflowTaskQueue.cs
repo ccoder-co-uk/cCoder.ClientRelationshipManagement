@@ -4,7 +4,7 @@ using ClientRelationshipManagement.Web.Configuration;
 
 namespace ClientRelationshipManagement.Web.Services.Agents;
 
-internal static class WorkflowTaskQueue
+public static class WorkflowTaskQueue
 {
     public static IOrderedQueryable<ProcessTask> OrderByCommercialProgress(
         IQueryable<ProcessTask> tasks) =>

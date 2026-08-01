@@ -5,9 +5,9 @@ using cCoder.ClientRelationshipManagement.Models.Security;
 using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Configuration;
 using cCoder.Security.Data.EF;
+using cCoder.Security.Data.EF.Dependencies;
 using cCoder.Security.Data.EF.Interfaces;
 using cCoder.Security.Exposures;
-using cCoder.Security.Services.Orchestrations.Interfaces;
 using cCoder.Security.Models;
 using cCoder.Security.Models.Configurations;
 using cCoder.Security.Models.DTOs;
@@ -97,10 +97,10 @@ internal sealed class CRMAcceptanceFactory(AcceptanceSettings settings)
     internal async Task EnsureSessionUserCanLoginAsync()
     {
         using IServiceScope scope = Services.CreateScope();
-        ISSOUserOrchestrationService userService = scope.ServiceProvider.GetRequiredService<ISSOUserOrchestrationService>();
+        IRegistrationManager userService = scope.ServiceProvider.GetRequiredService<IRegistrationManager>();
         ISecurityDbContextFactory dbContextFactory = scope.ServiceProvider.GetRequiredService<ISecurityDbContextFactory>();
 
-        _ = await userService.Register(new RegisterUser
+        _ = await userService.RegisterUserAsync(new RegisterUser
         {
             DisplayName = "CRM Session User",
             Email = settings.SessionUserEmail,
