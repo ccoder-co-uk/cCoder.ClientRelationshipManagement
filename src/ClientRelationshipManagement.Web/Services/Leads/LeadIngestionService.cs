@@ -1,6 +1,7 @@
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
-using cCoder.Security.Objects;
+using cCoder.Security.Models;
+using cCoder.Security.Models.Configurations;
 using Microsoft.EntityFrameworkCore;
 using PlatformEntities = cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using ClientRelationshipManagement.Web.Services.Processes;

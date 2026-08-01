@@ -1,6 +1,6 @@
-@using cCoder.Security.Objects.Entities
+@using cCoder.Security.Models.Entities
 @inject cCoder.Security.Services.Orchestrations.Interfaces.IAuthenticationOrchestrationService AccountManager
-@inject cCoder.Security.Objects.ISSOAuthInfo AuthInfo
+@inject cCoder.Security.Models.Configurations.ISSOAuthInfo AuthInfo
 @{
     string pageTitle = ViewData["Title"]?.ToString() ?? "Corporate LinX CRM";
     bool useProductShell = !string.Equals(

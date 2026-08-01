@@ -1,5 +1,5 @@
 using cCoder.Security.Exposures;
-using cCoder.Security.Objects.Entities;
+using cCoder.Security.Models.Entities;
 
 namespace ClientRelationshipManagement.Web.Services.Agents;
 

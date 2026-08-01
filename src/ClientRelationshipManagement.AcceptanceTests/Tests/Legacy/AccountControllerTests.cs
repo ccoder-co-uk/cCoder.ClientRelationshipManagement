@@ -1,6 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
-using cCoder.Security.Objects.DTOs;
+using cCoder.Security.Models.DTOs;
 using ClientRelationshipManagement.AcceptanceTests.Infrastructure;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc.Testing;

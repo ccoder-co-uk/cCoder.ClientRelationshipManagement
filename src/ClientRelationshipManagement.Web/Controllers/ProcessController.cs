@@ -1,7 +1,7 @@
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using cCoder.ClientRelationshipManagement.Models.Security;
-using cCoder.Security.Objects;
+using cCoder.Security.Models;
 using ClientRelationshipManagement.Web.Models.Process;
 using ClientRelationshipManagement.Web.Services.Processes;
 using ClientRelationshipManagement.Web.Utilities;

@@ -1,7 +1,8 @@
 using cCoder.ClientRelationshipManagement.Models.Security;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
-using cCoder.Security.Objects;
+using cCoder.Security.Models;
+using cCoder.Security.Models.Configurations;
 using ClientRelationshipManagement.Web.Configuration;
 using ClientRelationshipManagement.Web.Models.AgentWorkflow;
 using ClientRelationshipManagement.Web.Services.Agents;

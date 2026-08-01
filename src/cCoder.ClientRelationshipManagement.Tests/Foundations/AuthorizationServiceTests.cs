@@ -1,7 +1,7 @@
 using cCoder.ClientRelationshipManagement.Brokers;
 using cCoder.ClientRelationshipManagement.Models.Security;
 using cCoder.ClientRelationshipManagement.Services.Foundations;
-using cCoder.Security.Objects.Entities;
+using cCoder.Security.Models.Entities;
 using Moq;
 
 namespace cCoder.ClientRelationshipManagement.Tests.Foundations;
