@@ -1,4 +1,4 @@
-using ClientRelationshipManagement.Web.Configuration;
+using cCoder.ClientRelationshipManagement.Runtime.Configuration;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 

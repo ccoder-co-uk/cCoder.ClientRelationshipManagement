@@ -1,0 +1,12 @@
+namespace cCoder.ClientRelationshipManagement.Runtime.Services.Agents;
+
+public interface IAgentWorkspaceService
+{
+    string RootPath { get; }
+    string GetTaskAgentWorkingDirectory();
+    string GetTaskAgentSessionHistoryDirectory();
+    string GetProcessOptimiserWorkingDirectory();
+    string GetProcessOptimiserSessionHistoryDirectory();
+    ValueTask<string> ReadTaskAgentPromptAsync(CancellationToken cancellationToken = default);
+    ValueTask<string> ReadProcessOptimiserPromptAsync(CancellationToken cancellationToken = default);
+}

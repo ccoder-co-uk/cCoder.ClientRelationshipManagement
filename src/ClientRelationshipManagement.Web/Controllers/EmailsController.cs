@@ -4,14 +4,14 @@ using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.Security.Models;
 using cCoder.Security.Models.Configurations;
 using ClientRelationshipManagement.Web.Models.Emails;
-using ClientRelationshipManagement.Web.Services.Agents;
-using ClientRelationshipManagement.Web.Services.Mail;
-using ClientRelationshipManagement.Web.Services.Processes;
-using ClientRelationshipManagement.Web.Utilities;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Agents;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Mail;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Processes;
+using cCoder.ClientRelationshipManagement.Runtime.Utilities;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.EntityFrameworkCore;
-using WebAgentMessageService = ClientRelationshipManagement.Web.Services.Agents.IAgentMessageService;
+using WebAgentMessageService = cCoder.ClientRelationshipManagement.Runtime.Services.Agents.IAgentMessageService;
 
 namespace ClientRelationshipManagement.Web.Controllers;
 

@@ -1,7 +1,7 @@
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using ClientRelationshipManagement.AcceptanceTests.Infrastructure;
-using ClientRelationshipManagement.Web.Services.Leads;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Leads;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;

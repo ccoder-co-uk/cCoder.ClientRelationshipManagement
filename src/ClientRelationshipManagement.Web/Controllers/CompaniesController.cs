@@ -5,7 +5,7 @@ using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.Security.Models;
 using cCoder.Security.Models.Configurations;
 using ClientRelationshipManagement.Web.Models.Companies;
-using ClientRelationshipManagement.Web.Utilities;
+using cCoder.ClientRelationshipManagement.Runtime.Utilities;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 

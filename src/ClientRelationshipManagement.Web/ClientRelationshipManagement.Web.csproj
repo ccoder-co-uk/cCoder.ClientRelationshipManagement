@@ -19,17 +19,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\cCoder.ClientRelationshipManagement\cCoder.ClientRelationshipManagement.csproj" />
-    <ProjectReference Include="..\cCoder.ClientRelationshipManagement.Runtime\cCoder.ClientRelationshipManagement.Runtime.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Compile Remove="Brokers\**\*.cs" />
-    <Compile Remove="Configuration\**\*.cs" />
-    <Compile Remove="IServiceCollectionExtensions.cs" />
-    <Compile Remove="Models\Admin\**\*.cs" />
-    <Compile Remove="Models\Imports\**\*.cs" />
-    <Compile Remove="Services\**\*.cs" />
-    <Compile Remove="Utilities\**\*.cs" />
   </ItemGroup>
 
 </Project>
