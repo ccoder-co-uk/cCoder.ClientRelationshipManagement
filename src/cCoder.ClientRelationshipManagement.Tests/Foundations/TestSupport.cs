@@ -10,7 +10,7 @@ using cCoder.ClientRelationshipManagement.Services.Orchestrations;
 using cCoder.ClientRelationshipManagement.Services.Processings;
 using cCoder.Eventing;
 using cCoder.Eventing.Models;
-using cCoder.Security.Objects.Entities;
+using cCoder.Security.Models.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;

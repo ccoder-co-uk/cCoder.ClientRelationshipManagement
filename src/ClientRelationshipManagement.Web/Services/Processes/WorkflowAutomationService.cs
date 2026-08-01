@@ -2,7 +2,7 @@ using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.ClientRelationshipManagement.Models.Security;
 using cCoder.Eventing;
 using cCoder.Eventing.Models;
-using cCoder.Security.Objects;
+using cCoder.Security.Models;
 using ClientRelationshipManagement.Web.Brokers.Loggings;
 using ClientRelationshipManagement.Web.Services.Execution;
 using Microsoft.EntityFrameworkCore;

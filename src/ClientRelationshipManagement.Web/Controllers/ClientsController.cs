@@ -1,7 +1,8 @@
 using cCoder.ClientRelationshipManagement.Models.Security;
 using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
-using cCoder.Security.Objects;
+using cCoder.Security.Models;
+using cCoder.Security.Models.Configurations;
 using ClientRelationshipManagement.Web.Models.Clients;
 using ClientRelationshipManagement.Web.Services.Mail;
 using ClientRelationshipManagement.Web.Services.Processes;

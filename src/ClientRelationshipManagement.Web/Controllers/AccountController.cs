@@ -1,6 +1,7 @@
 using System.Security;
-using cCoder.Security.Objects;
-using cCoder.Security.Objects.DTOs;
+using cCoder.Security.Models;
+using cCoder.Security.Models.Configurations;
+using cCoder.Security.Models.DTOs;
 using cCoder.Security.Services.Orchestrations.Interfaces;
 using ClientRelationshipManagement.Web.Models.Account;
 using Microsoft.AspNetCore.Mvc;

@@ -1,5 +1,5 @@
 using cCoder.Security.Exposures;
-using cCoder.Security.Objects.Entities;
+using cCoder.Security.Models.Entities;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;

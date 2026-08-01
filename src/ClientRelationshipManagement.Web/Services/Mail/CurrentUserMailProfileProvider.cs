@@ -1,6 +1,7 @@
 using cCoder.Security.Data.EF.Interfaces;
-using cCoder.Security.Objects;
-using cCoder.Security.Objects.Entities;
+using cCoder.Security.Models;
+using cCoder.Security.Models.Configurations;
+using cCoder.Security.Models.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace ClientRelationshipManagement.Web.Services.Mail;

@@ -1,5 +1,6 @@
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
-using cCoder.Security.Objects;
+using cCoder.Security.Models;
+using cCoder.Security.Models.Configurations;
 using ClientRelationshipManagement.Web.Brokers.Loggings;
 using ClientRelationshipManagement.Web.Services.Execution;
 using ClientRelationshipManagement.Web.Utilities;
