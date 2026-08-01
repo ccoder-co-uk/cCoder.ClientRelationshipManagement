@@ -34,7 +34,10 @@ public static class IServiceCollectionExtensions
         if (options.IncludeMvc)
         {
             services.AddControllersWithViews().AddClientRelationshipManagementApi();
-            services.AddClientRelationshipManagementApiDocumentation();
+
+            if (options.IncludeApiDocumentation)
+                services.AddClientRelationshipManagementApiDocumentation();
+
             services.AddCors();
             services.AddSession();
         }
@@ -132,18 +135,24 @@ public static class IServiceCollectionExtensions
             ApplyInt(configuration, "ImportWorkflow:ProcessingBatchSize", value => importWorkflowOptions.ProcessingBatchSize = value);
             ApplyInt(configuration, "ImportWorkflow:OpportunityScoreThreshold", value => importWorkflowOptions.OpportunityScoreThreshold = value);
         });
-        services.AddAIWeb(aiConfiguration =>
+        if (options.IncludeAI)
         {
-            configuration.GetSection(AIConfiguration.SectionName).Bind(aiConfiguration);
-            RegisterNamedAiProviders(configuration, aiConfiguration);
-        });
+            services.AddAIWeb(aiConfiguration =>
+            {
+                configuration.GetSection(AIConfiguration.SectionName).Bind(aiConfiguration);
+                RegisterNamedAiProviders(configuration, aiConfiguration);
+            });
+        }
 
-        services.AddSecurityWeb(security =>
+        if (options.IncludeSecurity)
         {
-            security.ConnectionString = ssoConnection;
-            security.DecryptionKey = decryptionKey;
-            security.RootPath = string.Empty;
-        });
+            services.AddSecurityWeb(security =>
+            {
+                security.ConnectionString = ssoConnection;
+                security.DecryptionKey = decryptionKey;
+                security.RootPath = string.Empty;
+            });
+        }
         services.AddSingleton(typeof(ILoggingBroker<>), typeof(LoggingBroker<>));
         services.AddScoped<IEmailWorkflowBroker, EmailWorkflowBroker>();
         services.AddScoped<IWorkflowBroker, WorkflowBroker>();
