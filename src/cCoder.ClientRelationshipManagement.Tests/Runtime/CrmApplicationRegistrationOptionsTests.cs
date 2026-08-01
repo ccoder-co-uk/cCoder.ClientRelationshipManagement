@@ -30,10 +30,13 @@ public sealed class CrmApplicationRegistrationOptionsTests
             options =>
             {
                 options.IncludeMvc = false;
+                options.IncludeAI = false;
+                options.IncludeApiDocumentation = false;
                 options.IncludeAgentHostedServices = false;
                 options.IncludeImportHostedServices = true;
                 options.IncludeLeadHostedServices = false;
                 options.IncludeMailHostedServices = true;
+                options.IncludeSecurity = false;
             });
 
         Type[] hostedServiceTypes = services
@@ -46,6 +49,8 @@ public sealed class CrmApplicationRegistrationOptionsTests
         Assert.Contains(typeof(ScheduledImportProcessingHostedService), hostedServiceTypes);
         Assert.DoesNotContain(typeof(ScheduledTaskAgentHostedService), hostedServiceTypes);
         Assert.DoesNotContain(typeof(ScheduledLeadWorkIntakeHostedService), hostedServiceTypes);
+        Assert.DoesNotContain(services, descriptor => descriptor.ServiceType.FullName?.StartsWith("cCoder.AI.") == true);
+        Assert.DoesNotContain(services, descriptor => descriptor.ServiceType.FullName?.StartsWith("cCoder.Security.") == true);
     }
 
     [Fact]
