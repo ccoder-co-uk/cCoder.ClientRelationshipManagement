@@ -27,7 +27,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\cCoder.ClientRelationshipManagement\cCoder.ClientRelationshipManagement.csproj" />
-    <ProjectReference Include="..\cCoder.ClientRelationshipManagement.Runtime\cCoder.ClientRelationshipManagement.Runtime.csproj" />
   </ItemGroup>
 
   <ItemGroup>

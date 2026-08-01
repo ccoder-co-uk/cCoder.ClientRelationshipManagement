@@ -1,7 +1,8 @@
 using cCoder.Security;
 using cCoder.Security.Exposures;
-using ClientRelationshipManagement.Web.Configuration;
-using ClientRelationshipManagement.Web.Services.Migration;
+using cCoder.ClientRelationshipManagement.Runtime;
+using cCoder.ClientRelationshipManagement.Runtime.Configuration;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Migration;
 
 namespace ClientRelationshipManagement.Web;
 

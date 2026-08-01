@@ -1,4 +1,4 @@
-using ClientRelationshipManagement.Web.Services.Mail;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Mail;
 using FluentAssertions;
 using Xunit;
 

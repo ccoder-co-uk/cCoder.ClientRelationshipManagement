@@ -2,8 +2,8 @@ using cCoder.ClientRelationshipManagement.Models.Security;
 using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
-using ClientRelationshipManagement.Web.Models.Imports;
-using ClientRelationshipManagement.Web.Services.Imports;
+using cCoder.ClientRelationshipManagement.Runtime.Models.Imports;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Imports;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 

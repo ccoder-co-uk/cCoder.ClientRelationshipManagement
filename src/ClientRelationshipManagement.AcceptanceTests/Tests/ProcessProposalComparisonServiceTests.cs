@@ -1,7 +1,7 @@
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
-using ClientRelationshipManagement.Web.Models.Admin;
-using ClientRelationshipManagement.Web.Services.Processes;
+using cCoder.ClientRelationshipManagement.Runtime.Models.Admin;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Processes;
 using FluentAssertions;
 
 namespace ClientRelationshipManagement.AcceptanceTests.Tests;

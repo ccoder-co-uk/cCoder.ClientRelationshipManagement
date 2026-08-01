@@ -1,6 +1,6 @@
 @using System.Text.Json
 @using cCoder.ClientRelationshipManagement.Platform.Models.Enums
-@model ClientRelationshipManagement.Web.Models.Imports.ImportListPageViewModel
+@model cCoder.ClientRelationshipManagement.Runtime.Models.Imports.ImportListPageViewModel
 @{
     ViewData["Title"] = "Imports";
     string sourceOptionsJson = JsonSerializer.Serialize(Model.Sources);

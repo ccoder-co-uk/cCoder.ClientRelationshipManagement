@@ -1,4 +1,4 @@
-using ClientRelationshipManagement.Web.Services.Migration;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Migration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 

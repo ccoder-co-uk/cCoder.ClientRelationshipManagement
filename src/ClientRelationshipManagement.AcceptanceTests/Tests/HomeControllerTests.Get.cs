@@ -125,7 +125,7 @@ public sealed partial class HomeControllerTests
             .OutcomeKey;
 
         await ExecuteWorkflowAsync(service => service.CompleteTaskAsync(
-            new ClientRelationshipManagement.Web.Services.Processes.ProcessTaskCompletionCommand
+            new cCoder.ClientRelationshipManagement.Runtime.Services.Processes.ProcessTaskCompletionCommand
             {
                 ProcessTaskId = task.Id,
                 OutcomeKey = outcomeKey,

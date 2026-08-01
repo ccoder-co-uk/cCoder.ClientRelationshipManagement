@@ -2,7 +2,7 @@ using System.Net;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using ClientRelationshipManagement.AcceptanceTests.Infrastructure;
-using ClientRelationshipManagement.Web.Services.Processes;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Processes;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 

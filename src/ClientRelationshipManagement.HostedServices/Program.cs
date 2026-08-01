@@ -1,8 +1,8 @@
-using ClientRelationshipManagement.Web;
-using ClientRelationshipManagement.Web.Configuration;
-using ClientRelationshipManagement.Web.Models.Imports;
-using ClientRelationshipManagement.Web.Services.Imports;
-using ClientRelationshipManagement.Web.Services.Migration;
+using cCoder.ClientRelationshipManagement.Runtime;
+using cCoder.ClientRelationshipManagement.Runtime.Configuration;
+using cCoder.ClientRelationshipManagement.Runtime.Models.Imports;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Imports;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Migration;
 using cCoder.ClientRelationshipManagement.Models.Security;
 using cCoder.ClientRelationshipManagement.Brokers;
 

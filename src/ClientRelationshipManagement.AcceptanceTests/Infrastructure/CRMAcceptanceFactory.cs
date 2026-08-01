@@ -12,7 +12,7 @@ using cCoder.Security.Models;
 using cCoder.Security.Models.Configurations;
 using cCoder.Security.Models.DTOs;
 using cCoder.Security.Models.Entities;
-using ClientRelationshipManagement.Web.Services.Mail;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Mail;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;

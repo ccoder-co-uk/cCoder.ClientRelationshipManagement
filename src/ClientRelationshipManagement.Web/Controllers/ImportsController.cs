@@ -1,7 +1,7 @@
 using cCoder.ClientRelationshipManagement.Models.Security;
 using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
-using ClientRelationshipManagement.Web.Configuration;
-using ClientRelationshipManagement.Web.Models.Imports;
+using cCoder.ClientRelationshipManagement.Runtime.Configuration;
+using cCoder.ClientRelationshipManagement.Runtime.Models.Imports;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;

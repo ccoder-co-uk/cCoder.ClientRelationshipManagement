@@ -1,6 +1,6 @@
 using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
-using ClientRelationshipManagement.Web.Services.Leads;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Leads;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 

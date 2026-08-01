@@ -50,7 +50,7 @@ public static class DocumentationCatalog
                     Bullets =
                     [
                         .. ClientStateGuide.Entries.Select(entry =>
-                            $"{Utilities.DisplayText.Humanize(entry.Status)}: {entry.Summary} {entry.ProgressionHint}")
+                            $"{cCoder.ClientRelationshipManagement.Runtime.Utilities.DisplayText.Humanize(entry.Status)}: {entry.Summary} {entry.ProgressionHint}")
                     ]
                 },
                 new DocumentationSectionDefinition

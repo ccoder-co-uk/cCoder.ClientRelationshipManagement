@@ -36,9 +36,10 @@ public sealed class ArchitectureBoundaryTests
     }
 
     [Fact]
-    public void WebServices_DoNotAddNewDirectPlatformDatabaseDependencies()
+    public void RuntimeServices_DoNotAddNewDirectPlatformDatabaseDependencies()
     {
-        string directory = FindRepositoryDirectory("src", "ClientRelationshipManagement.Web", "Services");
+        string directory = FindRepositoryDirectory(
+            "src", "cCoder.ClientRelationshipManagement", "Runtime", "Services");
         string[] offenders = Directory.GetFiles(directory, "*.cs", SearchOption.AllDirectories)
             .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}Migration{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
             .Where(ContainsPlatformDatabaseDependency)

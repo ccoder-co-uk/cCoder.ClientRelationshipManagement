@@ -1,9 +1,9 @@
-using ClientRelationshipManagement.Web;
-using ClientRelationshipManagement.Web.Configuration;
-using ClientRelationshipManagement.Web.Services.Agents;
-using ClientRelationshipManagement.Web.Services.Imports;
-using ClientRelationshipManagement.Web.Services.Leads;
-using ClientRelationshipManagement.Web.Services.Mail;
+using cCoder.ClientRelationshipManagement.Runtime;
+using cCoder.ClientRelationshipManagement.Runtime.Configuration;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Agents;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Imports;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Leads;
+using cCoder.ClientRelationshipManagement.Runtime.Services.Mail;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
