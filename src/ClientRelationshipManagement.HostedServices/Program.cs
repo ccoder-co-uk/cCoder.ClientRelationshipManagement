@@ -29,10 +29,12 @@ public static class Program
 
         string crmConnection = ConfigurationValueResolver.GetRequiredSqlConnection(
             builder.Configuration,
+            "CRM:ConnectionString",
             "ConnectionStrings:CRM");
 
         string crmAdminConnection = ConfigurationValueResolver.GetOptionalSqlConnection(
             builder.Configuration,
+            "CRM:AdminConnectionString",
             "ConnectionStrings:CRMAdmin")
             ?? crmConnection;
 
@@ -58,7 +60,7 @@ public static class Program
 
         builder.Services.AddSingleton<ICRMAuthInfo>(new HostedAuthorizationBroker(
             crmAdminConnection,
-            builder.Configuration["AgentWorkflows:ExecutionUserId"]));
+            builder.Configuration["CRM:AgentWorkflows:ExecutionUserId"]));
 
         builder.Services.AddCors();
         builder.Services.AddDistributedMemoryCache();

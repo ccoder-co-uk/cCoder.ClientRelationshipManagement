@@ -36,20 +36,29 @@ dotnet test src/ClientRelationshipManagement.AcceptanceTests/ClientRelationshipM
 
 The web and hosted-services entry points read configuration from their local `appsettings.json` files, with secrets overridable through environment variables.
 
-Before running locally, set:
+The CRM domain owns the top-level `CRM` section. AI provider configuration remains
+under the separate top-level `AI` section owned by `cCoder.AI`. Environment-variable
+paths use the standard double-underscore mapping, for example:
 
-- `ConnectionStrings__CRM`
-- `ConnectionStrings__CRMAdmin`
+- `CRM__ConnectionString`
+- `CRM__AdminConnectionString`
+- `CRM__AgentWorkflows__ExecutionUserId`
+- `AI__Providers__open-ai__CompletionProvider__ApiKey`
+- `AI__DefaultProvider`
 - `ConnectionStrings__SSO`
 - `Settings__DecryptionKey`
 
+The standalone hosts continue to accept `ConnectionStrings__CRM` and
+`ConnectionStrings__CRMAdmin` as compatibility aliases for database tooling and
+existing deployments. CRM-owned workflow, routing, import, authority-data, and mail
+settings have moved from their former top-level sections beneath `CRM`; those former
+flat paths are no longer bound.
+
 ## Local AI Dependency
 
-`ClientRelationshipManagement.Web` currently depends on a local sibling checkout of `cCoder.AI` at:
-
-- `..\..\..\cCoder.AI\src\cCoder.AI\cCoder.AI.csproj`
-
-This keeps the repository aligned with the current local code while `cCoder.AI` is reviewed and brought up to date for normal reuse. If that dependency shape changes later, this repo should be updated to consume it through the agreed package or repo flow instead of a machine-specific path.
+The domain library consumes the published `cCoder.AI` package. CRM owns agent
+workflow selection and named-routing profiles; `cCoder.AI` owns provider composition
+and the `AI` configuration section.
 
 ## Package
 

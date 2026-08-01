@@ -2,6 +2,8 @@ namespace cCoder.ClientRelationshipManagement.Runtime.Configuration;
 
 public sealed class ImportWorkflowOptions
 {
+    public const string SectionName = "ImportWorkflow";
+
     public string HostedServicesBaseUrl { get; set; } = "https://localhost:7295";
     public string AgentWorkspacePath { get; set; } = "Agent Workspace";
     public int UploadSessionExpiryMinutes { get; set; } = 120;

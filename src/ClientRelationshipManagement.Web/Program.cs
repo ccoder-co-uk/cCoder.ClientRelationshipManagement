@@ -26,10 +26,12 @@ public class Program
 
         string crmConnection = ConfigurationValueResolver.GetRequiredSqlConnection(
             builder.Configuration,
+            "CRM:ConnectionString",
             "ConnectionStrings:CRM");
 
         string crmAdminConnection = ConfigurationValueResolver.GetOptionalSqlConnection(
             builder.Configuration,
+            "CRM:AdminConnectionString",
             "ConnectionStrings:CRMAdmin")
             ?? crmConnection;
 

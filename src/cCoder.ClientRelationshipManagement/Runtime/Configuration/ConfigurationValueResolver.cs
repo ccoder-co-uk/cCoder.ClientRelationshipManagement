@@ -16,28 +16,6 @@ public static class ConfigurationValueResolver
             string value = configuration[key];
             if (!string.IsNullOrWhiteSpace(value))
                 return value;
-
-            string environmentVariableName = key.Contains(':')
-                ? key.Replace(":", "__")
-                : key;
-
-            string processValue =
-                Environment.GetEnvironmentVariable(environmentVariableName, EnvironmentVariableTarget.Process);
-
-            if (!string.IsNullOrWhiteSpace(processValue))
-                return processValue;
-
-            string userValue =
-                Environment.GetEnvironmentVariable(environmentVariableName, EnvironmentVariableTarget.User);
-
-            if (!string.IsNullOrWhiteSpace(userValue))
-                return userValue;
-
-            string machineValue =
-                Environment.GetEnvironmentVariable(environmentVariableName, EnvironmentVariableTarget.Machine);
-
-            if (!string.IsNullOrWhiteSpace(machineValue))
-                return machineValue;
         }
 
         return null;

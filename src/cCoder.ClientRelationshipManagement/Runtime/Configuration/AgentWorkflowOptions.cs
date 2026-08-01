@@ -2,6 +2,8 @@ namespace cCoder.ClientRelationshipManagement.Runtime.Configuration;
 
 public sealed class AgentWorkflowOptions
 {
+    public const string SectionName = "AgentWorkflows";
+
     public bool Enabled { get; set; }
     public bool TaskAgentEnabled { get; set; }
     public bool ProcessOptimiserEnabled { get; set; }
