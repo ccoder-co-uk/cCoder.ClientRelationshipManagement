@@ -2,6 +2,8 @@ namespace cCoder.ClientRelationshipManagement.Runtime.Configuration;
 
 public sealed class AuthorityDataOptions
 {
+    public const string SectionName = "AuthorityData";
+
     public bool Enabled { get; set; }
     public int IntervalHours { get; set; } = 24;
     public string DropPath { get; set; } = "..\\Authority Data";

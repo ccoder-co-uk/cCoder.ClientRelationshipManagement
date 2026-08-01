@@ -43,11 +43,11 @@ internal sealed class CRMAcceptanceFactory(AcceptanceSettings settings)
                 new KeyValuePair<string, string>("ConnectionStrings:CRMAdmin", settings.CrmAdminConnectionString),
                 new KeyValuePair<string, string>("ConnectionStrings:SSO", settings.SsoConnectionString),
                 new KeyValuePair<string, string>("Settings:DecryptionKey", settings.DecryptionKey),
-                new KeyValuePair<string, string>("AgentWorkflows:ExecutionUserId", settings.UserId),
-                new KeyValuePair<string, string>("AuthorityData:PriorityDiscoveryOnly", "false"),
-                new KeyValuePair<string, string>("Mail:EmailSendingEnabled", "true"),
-                new KeyValuePair<string, string>("Mail:Provider", "SendGrid"),
-                new KeyValuePair<string, string>("Mail:ApiKey", "acceptance-sendgrid-key")
+                new KeyValuePair<string, string>("CRM:AgentWorkflows:ExecutionUserId", settings.UserId),
+                new KeyValuePair<string, string>("CRM:AuthorityData:PriorityDiscoveryOnly", "false"),
+                new KeyValuePair<string, string>("CRM:Mail:EmailSendingEnabled", "true"),
+                new KeyValuePair<string, string>("CRM:Mail:Provider", "SendGrid"),
+                new KeyValuePair<string, string>("CRM:Mail:ApiKey", "acceptance-sendgrid-key")
             ]);
         });
         builder.ConfigureServices(services =>

@@ -2,6 +2,8 @@ namespace cCoder.ClientRelationshipManagement.Runtime.Configuration;
 
 public sealed class MailOptions
 {
+    public const string SectionName = "Mail";
+
     public bool EmailSendingEnabled { get; set; }
     public string Provider { get; set; } = "SendGrid";
     public string Host { get; set; }

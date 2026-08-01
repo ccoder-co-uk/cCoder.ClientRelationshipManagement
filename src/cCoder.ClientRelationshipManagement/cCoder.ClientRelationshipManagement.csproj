@@ -19,8 +19,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="cCoder.AI" Version="2026.8.1.1210" />
-    <PackageReference Include="cCoder.CodeAnalysis" Version="2026.8.1.1211" />
+    <PackageReference Include="cCoder.AI" Version="2026.8.1.1632" />
+    <PackageReference Include="cCoder.CodeAnalysis" Version="2026.8.1.1532" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.10" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.10">
       <PrivateAssets>all</PrivateAssets>

@@ -1,6 +1,7 @@
 using cCoder.AI;
 using cCoder.AI.Models.Configurations;
 using cCoder.ClientRelationshipManagement.Platform;
+using cCoder.ClientRelationshipManagement.Platform.Models.Configuration;
 using cCoder.ClientRelationshipManagement.Api;
 using cCoder.Eventing;
 using cCoder.Security;
@@ -21,7 +22,7 @@ public static class IServiceCollectionExtensions
 {
     public static IServiceCollection AddCrmApplication(
         this IServiceCollection services,
-        IConfiguration configuration,
+        IConfiguration rootConfiguration,
         string crmConnection,
         string crmAdminConnection,
         string ssoConnection,
@@ -30,6 +31,7 @@ public static class IServiceCollectionExtensions
     {
         CrmApplicationRegistrationOptions options = new();
         configure?.Invoke(options);
+        IConfigurationSection configuration = rootConfiguration.GetSection(CRMConfiguration.SectionName);
 
         if (options.IncludeMvc)
         {
@@ -44,11 +46,11 @@ public static class IServiceCollectionExtensions
 
         services.AddEventing();
         services.AddHttpClient();
-        services.Configure<MailOptions>(configuration.GetSection("Mail"));
-        services.Configure<AgentWorkflowOptions>(configuration.GetSection("AgentWorkflows"));
+        services.Configure<MailOptions>(configuration.GetSection(MailOptions.SectionName));
+        services.Configure<AgentWorkflowOptions>(configuration.GetSection(AgentWorkflowOptions.SectionName));
         services.Configure<AiRoutingOptions>(configuration.GetSection(AiRoutingOptions.SectionName));
-        services.Configure<AuthorityDataOptions>(configuration.GetSection("AuthorityData"));
-        services.Configure<ImportWorkflowOptions>(configuration.GetSection("ImportWorkflow"));
+        services.Configure<AuthorityDataOptions>(configuration.GetSection(AuthorityDataOptions.SectionName));
+        services.Configure<ImportWorkflowOptions>(configuration.GetSection(ImportWorkflowOptions.SectionName));
         services.PostConfigure<MailOptions>(mailOptions =>
         {
             ApplyBool(configuration, "Mail:EmailSendingEnabled", value => mailOptions.EmailSendingEnabled = value);
@@ -69,21 +71,17 @@ public static class IServiceCollectionExtensions
             ApplyInt(configuration, "Mail:MailboxSyncIntervalSeconds", value => mailOptions.MailboxSyncIntervalSeconds = value);
             ApplyInt(configuration, "Mail:MailboxSyncBatchSize", value => mailOptions.MailboxSyncBatchSize = value);
             ApplyFirstString(configuration, value => mailOptions.MicrosoftGraphTenantId = value,
-                "Mail:MicrosoftGraph:TenantId", "CCODER_MAIL_GRAPH_TENANT_ID");
+                "Mail:MicrosoftGraph:TenantId");
             ApplyFirstString(configuration, value => mailOptions.MicrosoftGraphClientId = value,
-                "Mail:MicrosoftGraph:ClientId", "CCODER_MAIL_GRAPH_CLIENT_ID");
+                "Mail:MicrosoftGraph:ClientId");
             ApplyFirstString(configuration, value => mailOptions.MicrosoftGraphClientSecret = value,
-                "Mail:MicrosoftGraph:ClientSecret", "CCODER_MAIL_GRAPH_CLIENT_SECRET");
+                "Mail:MicrosoftGraph:ClientSecret");
             ApplyFirstString(configuration, value => mailOptions.MicrosoftGraphMailboxUser = value,
-                "Mail:MicrosoftGraph:MailboxUser",
-                "CCODER_MAIL_RECEIVE_USER",
-                "CCODER_MAIL_INTEGRATION_RECEIVE_USER",
-                "CCODER_MAIL_INTEGRATION_SEND_USER",
-                "CCODER_MAIL_INTEGRATION_SMTP_USER");
+                "Mail:MicrosoftGraph:MailboxUser");
             ApplyFirstString(configuration, value => mailOptions.MicrosoftGraphBaseUrl = value,
-                "Mail:MicrosoftGraph:GraphBaseUrl", "CCODER_MAIL_GRAPH_BASE_URL");
+                "Mail:MicrosoftGraph:GraphBaseUrl");
             ApplyFirstString(configuration, value => mailOptions.MicrosoftGraphLoginBaseUrl = value,
-                "Mail:MicrosoftGraph:LoginBaseUrl", "CCODER_MAIL_GRAPH_LOGIN_BASE_URL", "CCODER_MAIL_GRAPH_LOGIN_URL");
+                "Mail:MicrosoftGraph:LoginBaseUrl");
         });
         services.PostConfigure<AgentWorkflowOptions>(agentWorkflowOptions =>
         {
@@ -139,8 +137,8 @@ public static class IServiceCollectionExtensions
         {
             services.AddAIWeb(aiConfiguration =>
             {
-                configuration.GetSection(AIConfiguration.SectionName).Bind(aiConfiguration);
-                RegisterNamedAiProviders(configuration, aiConfiguration);
+                rootConfiguration.GetSection(AIConfiguration.SectionName).Bind(aiConfiguration);
+                RegisterNamedAiProviders(rootConfiguration, configuration, aiConfiguration);
             });
         }
 
@@ -224,10 +222,11 @@ public static class IServiceCollectionExtensions
 
     static void RegisterNamedAiProviders(
         IConfiguration configuration,
+        IConfiguration crmConfiguration,
         AIConfiguration aiConfiguration)
     {
         AiRoutingOptions routing = new();
-        configuration.GetSection(AiRoutingOptions.SectionName).Bind(routing);
+        crmConfiguration.GetSection(AiRoutingOptions.SectionName).Bind(routing);
 
         foreach ((string key, AiRoutingProfileOptions profile) in routing.Profiles)
         {
@@ -254,8 +253,7 @@ public static class IServiceCollectionExtensions
                     provider.Model = profile.Model;
                     provider.ApiKey = FirstConfiguredValue(
                         profile.ApiKey,
-                        configuration["OPENAI_API_KEY"],
-                        configuration[$"AI:Providers:{key}:ApiKey"]);
+                        configuration[$"AI:Providers:{key}:CompletionProvider:ApiKey"]);
                     provider.MaxConcurrency = profile.MaxConcurrency;
                 });
                 continue;
@@ -268,7 +266,7 @@ public static class IServiceCollectionExtensions
                 {
                     provider.ExecutablePath = FirstConfiguredValue(
                         profile.ExecutablePath,
-                        configuration["CODEX_EXECUTABLE_PATH"],
+                        configuration[$"AI:Providers:{key}:CodexCli:ExecutablePath"],
                         "codex");
                     provider.WorkingDirectory = profile.WorkingDirectory;
                     provider.Model = profile.Model;
@@ -287,14 +285,14 @@ public static class IServiceCollectionExtensions
                 {
                     provider.Endpoint = FirstConfiguredValue(
                         profile.CompletionEndpoint,
-                        configuration["FOUNDRY_ENDPOINT"]);
+                        configuration[$"AI:Providers:{key}:CompletionProvider:Endpoint"]);
                     provider.ModelEndpoint = profile.ModelEndpoint;
                     provider.Model = FirstConfiguredValue(
                         profile.Model,
-                        configuration["FOUNDRY_MODEL"]);
+                        configuration[$"AI:Providers:{key}:CompletionProvider:DefaultModel"]);
                     provider.ApiKey = FirstConfiguredValue(
                         profile.ApiKey,
-                        configuration["FOUNDRY_API_KEY"]);
+                        configuration[$"AI:Providers:{key}:CompletionProvider:ApiKey"]);
                     provider.MaxConcurrency = profile.MaxConcurrency;
                 });
             }
