@@ -9,7 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="cCoder.CodeAnalysis" Version="2026.8.1.1532" />
+    <PackageReference Include="cCoder.CodeAnalysis" Version="2026.8.4.2107" />
     <ProjectReference Include="..\ClientRelationshipManagement.Web\ClientRelationshipManagement.Web.csproj" />
   </ItemGroup>
 

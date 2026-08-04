@@ -2,6 +2,8 @@
 
 `cCoder.ClientRelationshipManagement` contains the Client Relationship Management domain for the cCoder platform.
 
+[View the latest main-branch code coverage report](https://ccoder-co-uk.github.io/cCoder.ClientRelationshipManagement/)
+
 ## Contents
 
 - `src/cCoder.ClientRelationshipManagement`
