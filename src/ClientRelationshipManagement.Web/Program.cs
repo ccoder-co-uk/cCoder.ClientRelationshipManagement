@@ -1,8 +1,9 @@
 using cCoder.Security;
+using cCoder.Security.Data.EF;
 using cCoder.Security.Exposures;
 using cCoder.ClientRelationshipManagement.Runtime;
-using cCoder.ClientRelationshipManagement.Runtime.Configuration;
 using cCoder.ClientRelationshipManagement.Runtime.Services.Migration;
+using ClientRelationshipManagement.Web.Models;
 
 namespace ClientRelationshipManagement.Web;
 
@@ -24,32 +25,17 @@ public class Program
             options.TimestampFormat = "HH:mm:ss ";
         });
 
-        string crmConnection = ConfigurationValueResolver.GetRequiredSqlConnection(
-            builder.Configuration,
-            "CRM:ConnectionString",
-            "ConnectionStrings:CRM");
+        AppConfiguration configuration = new();
+        builder.Configuration.Bind(instance: configuration);
 
-        string crmAdminConnection = ConfigurationValueResolver.GetOptionalSqlConnection(
-            builder.Configuration,
-            "CRM:AdminConnectionString",
-            "ConnectionStrings:CRMAdmin")
-            ?? crmConnection;
-
-        string ssoConnection = ConfigurationValueResolver.GetRequiredSqlConnection(
-            builder.Configuration,
-            "ConnectionStrings:SSO");
-
-        string decryptionKey = ConfigurationValueResolver.GetRequired(
-            builder.Configuration,
-            "Settings:DecryptionKey");
+        builder.Services.AddSecurityData(configuration.SecurityData);
+        builder.Services.AddSecurityWeb(configuration.Security);
+        builder.Services.AddCrmData(configuration.CRMData);
 
         builder.Services.AddCrmApplication(
-            builder.Configuration,
-            crmConnection,
-            crmAdminConnection,
-            ssoConnection,
-            decryptionKey,
-            options =>
+            rootConfiguration: builder.Configuration,
+            aiConfiguration: configuration.AI,
+            configure: options =>
             {
                 options.IncludeMvc = true;
                 options.IncludeHostedServices = false;

@@ -3344,8 +3344,16 @@ Kind regards,
             selection.Profile.ProviderKey,
             selection.Model,
             [
-                new ChatCompletionMessage("system", systemPrompt),
-                new ChatCompletionMessage("user", JsonSerializer.Serialize(input))
+                new ChatCompletionMessage
+                {
+                    Role = "system",
+                    Content = systemPrompt
+                },
+                new ChatCompletionMessage
+                {
+                    Role = "user",
+                    Content = JsonSerializer.Serialize(input)
+                }
             ],
             temperature: 0.1,
             enableShellTooling: false,

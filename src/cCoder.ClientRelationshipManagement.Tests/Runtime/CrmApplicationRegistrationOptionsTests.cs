@@ -31,15 +31,11 @@ public sealed class CrmApplicationRegistrationOptionsTests
 
         services.AddCrmApplication(
             configuration,
-            "Server=(localdb)\\MSSQLLocalDB;Database=crm-runtime-tests;",
-            "Server=(localdb)\\MSSQLLocalDB;Database=crm-runtime-tests;",
-            "Server=(localdb)\\MSSQLLocalDB;Database=sso-runtime-tests;",
-            "runtime-test-key",
+            new AIConfiguration(),
             options =>
             {
                 options.IncludeMvc = false;
                 options.IncludeHostedServices = false;
-                options.IncludeSecurity = false;
             });
 
         using ServiceProvider provider = services.BuildServiceProvider();
@@ -66,16 +62,12 @@ public sealed class CrmApplicationRegistrationOptionsTests
 
         services.AddCrmApplication(
             configuration,
-            "Server=(localdb)\\MSSQLLocalDB;Database=crm-runtime-tests;",
-            "Server=(localdb)\\MSSQLLocalDB;Database=crm-runtime-tests;",
-            "Server=(localdb)\\MSSQLLocalDB;Database=sso-runtime-tests;",
-            "runtime-test-key",
+            new AIConfiguration(),
             options =>
             {
                 options.IncludeMvc = false;
                 options.IncludeAI = false;
                 options.IncludeHostedServices = false;
-                options.IncludeSecurity = false;
             });
 
         using ServiceProvider provider = services.BuildServiceProvider();
@@ -97,10 +89,7 @@ public sealed class CrmApplicationRegistrationOptionsTests
 
         services.AddCrmApplication(
             configuration,
-            "Server=(localdb)\\MSSQLLocalDB;Database=crm-runtime-tests;",
-            "Server=(localdb)\\MSSQLLocalDB;Database=crm-runtime-tests;",
-            "Server=(localdb)\\MSSQLLocalDB;Database=sso-runtime-tests;",
-            "runtime-test-key",
+            new AIConfiguration(),
             options =>
             {
                 options.IncludeMvc = false;
@@ -110,7 +99,6 @@ public sealed class CrmApplicationRegistrationOptionsTests
                 options.IncludeImportHostedServices = true;
                 options.IncludeLeadHostedServices = false;
                 options.IncludeMailHostedServices = true;
-                options.IncludeSecurity = false;
             });
 
         Type[] hostedServiceTypes = services

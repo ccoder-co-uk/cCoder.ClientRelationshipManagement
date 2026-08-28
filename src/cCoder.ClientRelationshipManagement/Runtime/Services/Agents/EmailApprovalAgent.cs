@@ -286,11 +286,19 @@ public sealed class EmailApprovalAgent(
                 aiSelection.Profile.ProviderKey,
                 aiSelection.Model,
                 [
-                    new ChatCompletionMessage("system", instructions),
-                    new ChatCompletionMessage("user", reviewInput
-                        + (string.IsNullOrWhiteSpace(retryContext)
-                            ? string.Empty
-                            : $"\n\nRetry feedback:\n{retryContext}"))
+                    new ChatCompletionMessage
+                    {
+                        Role = "system",
+                        Content = instructions
+                    },
+                    new ChatCompletionMessage
+                    {
+                        Role = "user",
+                        Content = reviewInput
+                            + (string.IsNullOrWhiteSpace(retryContext)
+                                ? string.Empty
+                                : $"\n\nRetry feedback:\n{retryContext}")
+                    }
                 ],
                 temperature: 0.1,
                 enableShellTooling: false,

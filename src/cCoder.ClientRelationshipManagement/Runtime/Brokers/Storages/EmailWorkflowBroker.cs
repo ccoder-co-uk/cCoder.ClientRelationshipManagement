@@ -3,7 +3,7 @@ using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 namespace cCoder.ClientRelationshipManagement.Runtime.Brokers.Storages;
 public sealed class EmailWorkflowBroker(IClientRelationshipDbContextFactory factory) : IEmailWorkflowBroker, IDisposable
 {
-    readonly ClientRelationshipDbContext context = factory.CreateDbContext(useAdminConnection: true);
+    readonly ClientRelationshipDbContext context = factory.CreateDbContext();
     public IQueryable<Email> Emails => context.Emails; public IQueryable<TenantCompanyRelationship> Relationships => context.TenantCompanyRelationships;
     public IQueryable<Material> Materials => context.Materials; public IQueryable<CompanyContact> CompanyContacts => context.CompanyContacts;
     public IQueryable<RelationshipContact> RelationshipContacts => context.RelationshipContacts; public IQueryable<EmailRecipient> EmailRecipients => context.EmailRecipients;

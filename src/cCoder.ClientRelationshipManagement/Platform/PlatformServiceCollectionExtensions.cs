@@ -13,16 +13,15 @@ public static class PlatformServiceCollectionExtensions
 {
     public static IServiceCollection AddCrmPlatform(
         this IServiceCollection services,
-        Action<CRMConfiguration> configure)
+        CRMDataConfiguration configuration)
     {
-        CRMConfiguration configuration = new();
-        configure?.Invoke(configuration);
+        ArgumentNullException.ThrowIfNull(configuration);
 
         if (string.IsNullOrWhiteSpace(configuration.ConnectionString))
-            throw new InvalidOperationException("CRMConfiguration.ConnectionString is required.");
+            throw new InvalidOperationException("CRMData.ConnectionString is required.");
 
         if (string.IsNullOrWhiteSpace(configuration.AdminConnectionString))
-            throw new InvalidOperationException("CRMConfiguration.AdminConnectionString is required.");
+            configuration.AdminConnectionString = configuration.ConnectionString;
 
         services.AddSingleton(configuration);
         services.AddDbContext<ClientRelationshipDbContext>(options =>

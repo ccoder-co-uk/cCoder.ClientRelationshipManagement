@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 namespace cCoder.ClientRelationshipManagement.Platform.Data;
 
 public class ClientRelationshipDbContextFactory(
-    Platform.Models.Configuration.CRMConfiguration configuration,
+    Platform.Models.Configuration.CRMDataConfiguration configuration,
     ICRMAuthInfo authInfo)
     : IClientRelationshipDbContextFactory
 {

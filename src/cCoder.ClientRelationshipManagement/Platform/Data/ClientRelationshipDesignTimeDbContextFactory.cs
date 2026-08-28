@@ -9,10 +9,8 @@ public class ClientRelationshipDesignTimeDbContextFactory : IDesignTimeDbContext
     public ClientRelationshipDbContext CreateDbContext(string[] args)
     {
         string connectionString =
-            Environment.GetEnvironmentVariable("CRM__AdminConnectionString", EnvironmentVariableTarget.Process)
-            ?? Environment.GetEnvironmentVariable("CRM__ConnectionString", EnvironmentVariableTarget.Process)
-            ?? Environment.GetEnvironmentVariable("ConnectionStrings__CRMAdmin", EnvironmentVariableTarget.Process)
-            ?? Environment.GetEnvironmentVariable("ConnectionStrings__CRM", EnvironmentVariableTarget.Process)
+            Environment.GetEnvironmentVariable("CRMData__AdminConnectionString", EnvironmentVariableTarget.Process)
+            ?? Environment.GetEnvironmentVariable("CRMData__ConnectionString", EnvironmentVariableTarget.Process)
             ?? "Server=(localdb)\\MSSQLLocalDB;Database=dev-CRMPlatform;Trusted_Connection=True;TrustServerCertificate=True;";
 
         DbContextOptions<ClientRelationshipDbContext> options =

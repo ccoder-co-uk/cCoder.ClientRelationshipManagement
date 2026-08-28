@@ -13,13 +13,13 @@ public sealed class PlatformServiceCollectionExtensionsTests
     {
         IServiceCollection services = new ServiceCollection();
 
-        services.AddCrmPlatform(configuration =>
+        services.AddCrmPlatform(new CRMDataConfiguration
         {
-            configuration.ConnectionString = "Server=(localdb)\\MSSQLLocalDB;Database=crm-platform-tests;";
-            configuration.AdminConnectionString = "Server=(localdb)\\MSSQLLocalDB;Database=crm-platform-tests;";
+            ConnectionString = "Server=(localdb)\\MSSQLLocalDB;Database=crm-platform-tests;",
+            AdminConnectionString = "Server=(localdb)\\MSSQLLocalDB;Database=crm-platform-tests;"
         });
 
-        ServiceDescriptor platformConfigurationDescriptor = Assert.Single(services, item => item.ServiceType == typeof(CRMConfiguration));
+        ServiceDescriptor platformConfigurationDescriptor = Assert.Single(services, item => item.ServiceType == typeof(CRMDataConfiguration));
         ServiceDescriptor dbContextFactoryDescriptor = Assert.Single(services, item => item.ServiceType == typeof(IClientRelationshipDbContextFactory));
 
         Assert.NotNull(platformConfigurationDescriptor.ImplementationInstance);
@@ -27,16 +27,17 @@ public sealed class PlatformServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void ShouldRequireAdminConnectionString()
+    public void ShouldUseRegularConnectionWhenAdminConnectionIsOmitted()
     {
         IServiceCollection services = new ServiceCollection();
 
-        Action action = () => services.AddCrmPlatform(configuration =>
+        CRMDataConfiguration configuration = new()
         {
-            configuration.ConnectionString = "Server=(localdb)\\MSSQLLocalDB;Database=crm-platform-tests;";
-            configuration.AdminConnectionString = string.Empty;
-        });
+            ConnectionString = "Server=(localdb)\\MSSQLLocalDB;Database=crm-platform-tests;"
+        };
 
-        Assert.Throws<InvalidOperationException>(action);
+        services.AddCrmPlatform(configuration);
+
+        Assert.Equal(configuration.ConnectionString, configuration.AdminConnectionString);
     }
 }

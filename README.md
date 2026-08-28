@@ -36,25 +36,34 @@ dotnet test src/ClientRelationshipManagement.AcceptanceTests/ClientRelationshipM
 
 ## Local Configuration
 
-The web and hosted-services entry points read configuration from their local `appsettings.json` files, with secrets overridable through environment variables.
+The Web and HostedServices executables bind the complete configuration root to
+their own `AppConfiguration`. Each root contains the domain configurations the
+host requires and is populated from appsettings plus environment-variable
+overrides.
 
-The CRM domain owns the top-level `CRM` section. AI provider configuration remains
-under the separate top-level `AI` section owned by `cCoder.AI`. Environment-variable
-paths use the standard double-underscore mapping, for example:
+Composition is explicit at the app boundary. `CRMData` owns CRM persistence,
+`SecurityData` owns SSO persistence, and the `CRM`, `Security`, and `AI`
+sections configure business behavior. The CRM domain no longer accepts raw
+connection strings or silently registers Security persistence.
 
-- `CRM__ConnectionString`
-- `CRM__AdminConnectionString`
+Environment-variable paths use the standard double-underscore mapping:
+
+- `CRMData__ConnectionString`
+- `CRMData__AdminConnectionString`
 - `CRM__AgentWorkflows__ExecutionUserId`
 - `AI__Providers__open-ai__CompletionProvider__ApiKey`
 - `AI__DefaultProvider`
-- `ConnectionStrings__SSO`
-- `Settings__DecryptionKey`
+- `SecurityData__ConnectionString`
+- `SecurityData__AdminConnectionString`
+- `Security__DecryptionKey`
 
-The standalone hosts continue to accept `ConnectionStrings__CRM` and
-`ConnectionStrings__CRMAdmin` as compatibility aliases for database tooling and
-existing deployments. CRM-owned workflow, routing, import, authority-data, and mail
-settings have moved from their former top-level sections beneath `CRM`; those former
-flat paths are no longer bound.
+`CRMData__AdminConnectionString` and
+`SecurityData__AdminConnectionString` are optional migration-only overrides.
+When omitted, startup migration uses the corresponding regular connection;
+normal runtime operations always use the regular connection. CRM-owned
+workflow, routing, import, authority-data, and mail settings remain beneath
+`CRM`; former flat and `ConnectionStrings` aliases are not part of the current
+configuration contract.
 
 ## Local AI Dependency
 

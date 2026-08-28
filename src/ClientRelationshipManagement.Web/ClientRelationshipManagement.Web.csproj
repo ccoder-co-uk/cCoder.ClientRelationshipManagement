@@ -11,8 +11,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="cCoder.CodeAnalysis" Version="2026.8.4.2107" />
-    <PackageReference Include="cCoder.Security" Version="2026.8.4.2118" />
+    <PackageReference Include="cCoder.CodeAnalysis" Version="2026.8.27.1637">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="cCoder.Security" Version="2026.8.28.1335" />
     <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.2.3" />
     <PackageReference Include="Swashbuckle.AspNetCore.SwaggerGen" Version="10.2.3" />
   </ItemGroup>
