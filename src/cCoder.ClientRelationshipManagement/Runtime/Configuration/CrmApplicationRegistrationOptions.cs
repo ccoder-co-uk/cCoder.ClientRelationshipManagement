@@ -9,7 +9,6 @@ public sealed class CrmApplicationRegistrationOptions
     public bool IncludeLeadHostedServices { get; set; } = true;
     public bool IncludeMailHostedServices { get; set; } = true;
     public bool IncludeMvc { get; set; } = true;
-    public bool IncludeSecurity { get; set; } = true;
 
     public bool IncludeHostedServices
     {

@@ -1,10 +1,12 @@
 using cCoder.ClientRelationshipManagement.Runtime;
-using cCoder.ClientRelationshipManagement.Runtime.Configuration;
 using cCoder.ClientRelationshipManagement.Runtime.Models.Imports;
 using cCoder.ClientRelationshipManagement.Runtime.Services.Imports;
 using cCoder.ClientRelationshipManagement.Runtime.Services.Migration;
 using cCoder.ClientRelationshipManagement.Models.Security;
 using cCoder.ClientRelationshipManagement.Brokers;
+using cCoder.Security;
+using cCoder.Security.Data.EF;
+using ClientRelationshipManagement.HostedServices.Models;
 
 namespace ClientRelationshipManagement.HostedServices;
 
@@ -27,39 +29,24 @@ public static class Program
             options.TimestampFormat = "HH:mm:ss ";
         });
 
-        string crmConnection = ConfigurationValueResolver.GetRequiredSqlConnection(
-            builder.Configuration,
-            "CRM:ConnectionString",
-            "ConnectionStrings:CRM");
+        AppConfiguration configuration = new();
+        builder.Configuration.Bind(instance: configuration);
 
-        string crmAdminConnection = ConfigurationValueResolver.GetOptionalSqlConnection(
-            builder.Configuration,
-            "CRM:AdminConnectionString",
-            "ConnectionStrings:CRMAdmin")
-            ?? crmConnection;
-
-        string ssoConnection = ConfigurationValueResolver.GetRequiredSqlConnection(
-            builder.Configuration,
-            "ConnectionStrings:SSO");
-
-        string decryptionKey = ConfigurationValueResolver.GetRequired(
-            builder.Configuration,
-            "Settings:DecryptionKey");
+        builder.Services.AddSecurityData(configuration.SecurityData);
+        builder.Services.AddSecurityHostedServices(configuration.Security);
+        builder.Services.AddCrmData(configuration.CRMData);
 
         builder.Services.AddCrmApplication(
-            builder.Configuration,
-            crmConnection,
-            crmAdminConnection,
-            ssoConnection,
-            decryptionKey,
-            options =>
+            rootConfiguration: builder.Configuration,
+            aiConfiguration: configuration.AI,
+            configure: options =>
             {
                 options.IncludeMvc = false;
                 options.IncludeHostedServices = true;
             });
 
         builder.Services.AddSingleton<ICRMAuthInfo>(new HostedAuthorizationBroker(
-            crmAdminConnection,
+            configuration.CRMData.ConnectionString,
             builder.Configuration["CRM:AgentWorkflows:ExecutionUserId"]));
 
         builder.Services.AddCors();

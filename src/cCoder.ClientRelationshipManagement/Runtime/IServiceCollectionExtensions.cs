@@ -4,7 +4,6 @@ using cCoder.ClientRelationshipManagement.Platform;
 using cCoder.ClientRelationshipManagement.Platform.Models.Configuration;
 using cCoder.ClientRelationshipManagement.Api;
 using cCoder.Eventing;
-using cCoder.Security;
 using cCoder.ClientRelationshipManagement.Runtime.Brokers.Loggings;
 using cCoder.ClientRelationshipManagement.Runtime.Brokers.Storages;
 using cCoder.ClientRelationshipManagement.Runtime.Configuration;
@@ -23,10 +22,7 @@ public static class IServiceCollectionExtensions
     public static IServiceCollection AddCrmApplication(
         this IServiceCollection services,
         IConfiguration rootConfiguration,
-        string crmConnection,
-        string crmAdminConnection,
-        string ssoConnection,
-        string decryptionKey,
+        AIConfiguration aiConfiguration,
         Action<CrmApplicationRegistrationOptions> configure = null)
     {
         CrmApplicationRegistrationOptions options = new();
@@ -135,21 +131,12 @@ public static class IServiceCollectionExtensions
         });
         if (options.IncludeAI)
         {
-            services.AddAIWeb(aiConfiguration =>
-            {
-                rootConfiguration.GetSection(AIConfiguration.SectionName).Bind(aiConfiguration);
-                RegisterNamedAiProviders(rootConfiguration, configuration, aiConfiguration);
-            });
-        }
+            RegisterNamedAiProviders(
+                configuration: rootConfiguration,
+                crmConfiguration: configuration,
+                aiConfiguration: aiConfiguration);
 
-        if (options.IncludeSecurity)
-        {
-            services.AddSecurityWeb(security =>
-            {
-                security.ConnectionString = ssoConnection;
-                security.DecryptionKey = decryptionKey;
-                security.RootPath = string.Empty;
-            });
+            services.AddAIWeb(configuration: aiConfiguration);
         }
         services.AddSingleton(typeof(ILoggingBroker<>), typeof(LoggingBroker<>));
         services.AddScoped<IEmailWorkflowBroker, EmailWorkflowBroker>();
@@ -172,7 +159,6 @@ public static class IServiceCollectionExtensions
         services.AddScoped<IMicrosoftGraphMailboxClient, MicrosoftGraphMailboxClient>();
         services.AddScoped<IEmailTaskEvidenceService, EmailTaskEvidenceService>();
         services.AddScoped<IEmailDispatchProcessor, EmailDispatchProcessor>();
-        services.AddSingleton<IMailboxSyncLockBroker>(new MailboxSyncLockBroker(crmConnection));
         services.AddScoped<IMailboxSyncProcessor, MailboxSyncProcessor>();
         services.AddScoped<ILeadIngestionService, LeadIngestionService>();
         services.AddScoped<IAuthorityDataImportCoordinationService, AuthorityDataImportCoordinationService>();
@@ -211,11 +197,20 @@ public static class IServiceCollectionExtensions
             services.AddHostedService<ScheduledImportProcessingHostedService>();
         }
 
-        services.AddCrmPlatform(platformConfiguration =>
-        {
-            platformConfiguration.ConnectionString = crmConnection;
-            platformConfiguration.AdminConnectionString = crmAdminConnection;
-        });
+        return services;
+    }
+
+    public static IServiceCollection AddCrmData(
+        this IServiceCollection services,
+        CRMDataConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        services.AddSingleton<IMailboxSyncLockBroker>(
+            implementationInstance: new MailboxSyncLockBroker(
+                connectionString: configuration.ConnectionString));
+
+        services.AddCrmPlatform(configuration: configuration);
 
         return services;
     }

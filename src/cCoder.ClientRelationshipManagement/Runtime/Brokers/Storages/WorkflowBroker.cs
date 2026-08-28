@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore.Storage;
 namespace cCoder.ClientRelationshipManagement.Runtime.Brokers.Storages;
 public sealed class WorkflowBroker(IClientRelationshipDbContextFactory factory) : IWorkflowBroker, IDisposable
 {
-    readonly ClientRelationshipDbContext context = factory.CreateDbContext(useAdminConnection: true);
+    readonly ClientRelationshipDbContext context = factory.CreateDbContext();
     public IQueryable<Activity> Activities => context.Activities; public IQueryable<AgentMessageEntry> AgentMessageEntries => context.AgentMessageEntries;
     public IQueryable<AgentMessage> AgentMessages => context.AgentMessages; public IQueryable<ClientAccount> ClientAccounts => context.ClientAccounts;
     public IQueryable<Company> Companies => context.Companies; public IQueryable<CompanyContact> CompanyContacts => context.CompanyContacts; public IQueryable<CompanyEvidence> CompanyEvidence => context.CompanyEvidence;

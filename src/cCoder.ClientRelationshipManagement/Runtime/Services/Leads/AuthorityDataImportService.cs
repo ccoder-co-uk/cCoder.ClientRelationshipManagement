@@ -16,7 +16,7 @@ namespace cCoder.ClientRelationshipManagement.Runtime.Services.Leads;
 
 public sealed class AuthorityDataImportCoordinationService(
     IHostEnvironment environment,
-    CRMConfiguration platformConfiguration,
+    CRMDataConfiguration platformConfiguration,
     IImportCoordinationService imports,
     IOptions<AuthorityDataOptions> options,
     IOptions<AgentWorkflowOptions> agentWorkflowOptions,
@@ -295,7 +295,7 @@ public sealed class AuthorityDataImportCoordinationService(
 
         List<StagedBatchInfo> stagedBatches = [];
 
-        using SqlConnection connection = new(GetAdminConnectionString());
+        using SqlConnection connection = new(GetConnectionString());
         await connection.OpenAsync(cancellationToken);
 
         using SqlCommand command = new(sql, connection)
@@ -332,7 +332,7 @@ public sealed class AuthorityDataImportCoordinationService(
             ORDER BY stage.BatchId;
             """;
 
-        using SqlConnection connection = new(GetAdminConnectionString());
+        using SqlConnection connection = new(GetConnectionString());
         await connection.OpenAsync(cancellationToken);
 
         using SqlCommand command = new(sql, connection)
@@ -541,7 +541,7 @@ public sealed class AuthorityDataImportCoordinationService(
         int batchSize,
         CancellationToken cancellationToken)
     {
-        using SqlConnection connection = new(GetAdminConnectionString());
+        using SqlConnection connection = new(GetConnectionString());
         await connection.OpenAsync(cancellationToken);
 
         using SqlBulkCopy bulkCopy = new(connection)
@@ -1285,7 +1285,7 @@ public sealed class AuthorityDataImportCoordinationService(
         IEnumerable<SqlParameter> parameters,
         CancellationToken cancellationToken)
     {
-        using SqlConnection connection = new(GetAdminConnectionString());
+        using SqlConnection connection = new(GetConnectionString());
         await connection.OpenAsync(cancellationToken);
 
         using SqlCommand command = new(sql, connection)
@@ -1304,7 +1304,7 @@ public sealed class AuthorityDataImportCoordinationService(
         IEnumerable<SqlParameter> parameters,
         CancellationToken cancellationToken)
     {
-        using SqlConnection connection = new(GetAdminConnectionString());
+        using SqlConnection connection = new(GetConnectionString());
         await connection.OpenAsync(cancellationToken);
 
         using SqlCommand command = new(sql, connection)
@@ -1360,10 +1360,8 @@ public sealed class AuthorityDataImportCoordinationService(
             configuredPath));
     }
 
-    string GetAdminConnectionString() =>
-        !string.IsNullOrWhiteSpace(platformConfiguration.AdminConnectionString)
-            ? platformConfiguration.AdminConnectionString
-            : platformConfiguration.ConnectionString;
+    string GetConnectionString() =>
+        platformConfiguration.ConnectionString;
 
     string ResolveExecutionUserId() =>
         string.IsNullOrWhiteSpace(agentWorkflowOptions.Value.ExecutionUserId)

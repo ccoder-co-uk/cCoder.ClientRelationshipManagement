@@ -39,10 +39,10 @@ internal sealed class CRMAcceptanceFactory(AcceptanceSettings settings)
         {
             config.AddInMemoryCollection(
             [
-                new KeyValuePair<string, string>("ConnectionStrings:CRM", settings.CrmConnectionString),
-                new KeyValuePair<string, string>("ConnectionStrings:CRMAdmin", settings.CrmAdminConnectionString),
-                new KeyValuePair<string, string>("ConnectionStrings:SSO", settings.SsoConnectionString),
-                new KeyValuePair<string, string>("Settings:DecryptionKey", settings.DecryptionKey),
+                new KeyValuePair<string, string>("CRMData:ConnectionString", settings.CrmConnectionString),
+                new KeyValuePair<string, string>("CRMData:AdminConnectionString", settings.CrmAdminConnectionString),
+                new KeyValuePair<string, string>("SecurityData:ConnectionString", settings.SsoConnectionString),
+                new KeyValuePair<string, string>("Security:DecryptionKey", settings.DecryptionKey),
                 new KeyValuePair<string, string>("CRM:AgentWorkflows:ExecutionUserId", settings.UserId),
                 new KeyValuePair<string, string>("CRM:AuthorityData:PriorityDiscoveryOnly", "false"),
                 new KeyValuePair<string, string>("CRM:Mail:EmailSendingEnabled", "true"),
@@ -54,7 +54,7 @@ internal sealed class CRMAcceptanceFactory(AcceptanceSettings settings)
         {
             services.RemoveAll<ISecurityDbContextFactory>();
             services.RemoveAll<IEventHub>();
-            services.RemoveAll<CRMConfiguration>();
+            services.RemoveAll<CRMDataConfiguration>();
             services.RemoveAll<ClientRelationshipDbContext>();
             services.RemoveAll<DbContextOptions<ClientRelationshipDbContext>>();
             services.RemoveAll<IClientRelationshipDbContextFactory>();
@@ -63,7 +63,7 @@ internal sealed class CRMAcceptanceFactory(AcceptanceSettings settings)
             services.RemoveAll<IMailClientFactory>();
             services.AddSingleton<IEventHub, NoOpEventHub>();
             services.AddSingleton<IMailClientFactory, AcceptanceMailClientFactory>();
-            services.AddSingleton(new CRMConfiguration
+            services.AddSingleton(new CRMDataConfiguration
             {
                 ConnectionString = settings.CrmConnectionString,
                 AdminConnectionString = settings.CrmAdminConnectionString,
