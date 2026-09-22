@@ -9,7 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="cCoder.CodeAnalysis" Version="2026.8.27.1637">
+    <PackageReference Include="cCoder.CodeAnalysis" Version="2026.9.22.2024">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
