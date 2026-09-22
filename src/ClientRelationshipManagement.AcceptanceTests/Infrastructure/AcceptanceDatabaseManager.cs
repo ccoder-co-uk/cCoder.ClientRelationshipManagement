@@ -1,11 +1,12 @@
 using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.Security.Data.EF;
-using cCoder.Security.Data.EF.Dependencies;
+using cCoder.Security.Data.EF.Interfaces;
 using cCoder.Security.Models;
 using cCoder.Security.Models.Configurations;
 using cCoder.Security.Models.Entities;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClientRelationshipManagement.AcceptanceTests.Infrastructure;
 
@@ -90,11 +91,22 @@ internal sealed class AcceptanceDatabaseManager(AcceptanceSettings settings)
         await sso.SaveChangesAsync();
     }
 
-    cCoder.Security.Data.EF.SecurityDbContext CreateSsoContext() =>
-        new MSSQLSecurityDbContextFactory(settings.SsoConnectionString)
+    cCoder.Security.Data.EF.SecurityDbContext CreateSsoContext()
+    {
+        ServiceCollection services = new();
+        services.AddSingleton<ISSOAuthInfo>(new SSOAuthInfo { SSOUserId = "Guest" });
+        services.AddSecurityData(new SecurityDataConfiguration
         {
-            GetAuthInfo = _ => new SSOAuthInfo { SSOUserId = "Guest" },
-        }.CreateDbContext(true);
+            ConnectionString = settings.SsoConnectionString,
+            AdminConnectionString = settings.SsoConnectionString,
+        });
+
+        using ServiceProvider serviceProvider = services.BuildServiceProvider();
+
+        return serviceProvider
+            .GetRequiredService<ISecurityDbContextFactory>()
+            .CreateDbContext(ignoreAuthInfo: true);
+    }
 
     void MigrateCrmPlatform()
     {

@@ -5,7 +5,6 @@ using cCoder.ClientRelationshipManagement.Models.Security;
 using cCoder.ClientRelationshipManagement.Platform.Data;
 using cCoder.ClientRelationshipManagement.Platform.Models.Configuration;
 using cCoder.Security.Data.EF;
-using cCoder.Security.Data.EF.Dependencies;
 using cCoder.Security.Data.EF.Interfaces;
 using cCoder.Security.Exposures;
 using cCoder.Security.Models;
@@ -84,13 +83,11 @@ internal sealed class CRMAcceptanceFactory(AcceptanceSettings settings)
                 provider.GetRequiredService<IClientRelationshipDbContextFactory>()
                     .CreateDbContext(useAdminConnection: true));
 
-            services.AddScoped<ISecurityDbContextFactory>(
-                provider => new MSSQLSecurityDbContextFactory(settings.SsoConnectionString)
-                {
-                    GetAuthInfo = ignoreAuthInfo => ignoreAuthInfo
-                        ? new SSOAuthInfo { SSOUserId = "Guest" }
-                        : provider.GetRequiredService<ISSOAuthInfo>(),
-                });
+            services.AddSecurityData(new SecurityDataConfiguration
+            {
+                ConnectionString = settings.SsoConnectionString,
+                AdminConnectionString = settings.SsoConnectionString,
+            });
         });
     }
 

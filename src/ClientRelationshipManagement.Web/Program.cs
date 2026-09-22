@@ -1,3 +1,4 @@
+using cCoder.Eventing;
 using cCoder.Security;
 using cCoder.Security.Data.EF;
 using cCoder.Security.Exposures;
@@ -70,7 +71,9 @@ public class Program
         });
 
         app.UseSecurityExposure(log);
-        app.ListenToSecurityEvents();
+        app.Services
+            .GetRequiredService<IEventHub>()
+            .ListenToSecurityEvents();
 
         app.MapControllers();
 
