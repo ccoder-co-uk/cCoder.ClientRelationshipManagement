@@ -19,23 +19,24 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="cCoder.AI" Version="2026.9.22.2143" />
-    <PackageReference Include="cCoder.CodeAnalysis" Version="2026.9.22.2024">
+    <PackageReference Include="cCoder.AI" Version="2026.10.8.1224" />
+    <PackageReference Include="cCoder.CodeAnalysis" Version="2026.10.8.1211">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.11" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11">
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.14" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.14">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.11" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.11" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.14" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.14" />
     <PackageReference Include="Microsoft.AspNetCore.OData" Version="9.5.0" />
-    <PackageReference Include="Swashbuckle.AspNetCore.SwaggerGen" Version="10.2.3" />
-    <PackageReference Include="cCoder.Eventing" Version="2026.9.22.2040" />
-    <PackageReference Include="cCoder.Security" Version="2026.9.22.2049" />
-    <PackageReference Include="cCoder.Security.Data" Version="2026.9.22.2049" />
+    <PackageReference Include="Swashbuckle.AspNetCore.SwaggerGen" Version="10.3.1" />
+    <PackageReference Include="cCoder.Eventing" Version="2026.10.28.1123" />
+    <PackageReference Include="cCoder.Security" Version="2026.10.14.1427" />
+    <PackageReference Include="cCoder.Security.Data" Version="2026.10.14.1427" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.14" />
   </ItemGroup>
 
   <ItemGroup>

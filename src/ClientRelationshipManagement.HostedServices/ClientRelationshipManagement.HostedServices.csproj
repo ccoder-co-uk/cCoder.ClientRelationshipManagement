@@ -9,10 +9,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="cCoder.CodeAnalysis" Version="2026.9.22.2024">
+    <PackageReference Include="cCoder.CodeAnalysis" Version="2026.10.8.1211">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.14" />
     <ProjectReference Include="..\ClientRelationshipManagement.Web\ClientRelationshipManagement.Web.csproj" />
   </ItemGroup>
 
