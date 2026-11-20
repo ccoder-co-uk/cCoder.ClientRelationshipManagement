@@ -1,4 +1,9 @@
+using System.ComponentModel.DataAnnotations;
+using System.Security;
+using System.Security.Authentication;
+using cCoder.ClientRelationshipManagement.Api.Controllers;
 using cCoder.ClientRelationshipManagement.Models.Security;
+using cCoder.ClientRelationshipManagement.Runtime.Brokers.Loggings;
 using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using cCoder.ClientRelationshipManagement.Platform.Models.Entities;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
@@ -15,8 +20,9 @@ namespace ClientRelationshipManagement.Web.Controllers;
 public sealed class CompaniesController(
     ISalesCoordinationService salesWorkspaceService,
     ICRMAuthInfo authInfo,
-    ISSOAuthInfo ssoAuthInfo)
-    : Controller
+    ISSOAuthInfo ssoAuthInfo,
+    ILoggingBroker<CompaniesController> loggingBroker)
+    : CrmController<CompaniesController>(loggingBroker)
 {
     [HttpGet("")]
     public async Task<IActionResult> Index(
@@ -29,6 +35,30 @@ public sealed class CompaniesController(
         int page = 1,
         int pageSize = 50,
         CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return Complete(response: await IndexCore(
+                search, status, source, country, sort, descending, page, pageSize, cancellationToken));
+        }
+        catch (ValidationException exception) { return Reject(exception: exception); }
+        catch (ArgumentException exception) { return RejectArgument(exception: exception); }
+        catch (AuthenticationException exception) { return RequireAuthentication(exception: exception); }
+        catch (UnauthorizedAccessException exception) { return Forbid(exception: exception); }
+        catch (SecurityException exception) { return Forbid(exception: exception); }
+        catch (Exception exception) { return Fail(exception: exception); }
+    }
+
+    async Task<IActionResult> IndexCore(
+        string search,
+        string status,
+        string source,
+        string country,
+        string sort,
+        bool descending,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
@@ -105,6 +135,17 @@ public sealed class CompaniesController(
 
     [HttpGet("{id:guid}/Details")]
     public async Task<IActionResult> Details(Guid id, CancellationToken cancellationToken)
+    {
+        try { return Complete(response: await DetailsCore(id: id, cancellationToken: cancellationToken)); }
+        catch (ValidationException exception) { return Reject(exception: exception); }
+        catch (ArgumentException exception) { return RejectArgument(exception: exception); }
+        catch (AuthenticationException exception) { return RequireAuthentication(exception: exception); }
+        catch (UnauthorizedAccessException exception) { return Forbid(exception: exception); }
+        catch (SecurityException exception) { return Forbid(exception: exception); }
+        catch (Exception exception) { return Fail(exception: exception); }
+    }
+
+    async Task<IActionResult> DetailsCore(Guid id, CancellationToken cancellationToken)
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
@@ -300,6 +341,17 @@ public sealed class CompaniesController(
 
     [HttpGet("{id:guid}/History")]
     public async Task<IActionResult> History(Guid id, CancellationToken cancellationToken)
+    {
+        try { return Complete(response: await HistoryCore(id: id, cancellationToken: cancellationToken)); }
+        catch (ValidationException exception) { return Reject(exception: exception); }
+        catch (ArgumentException exception) { return RejectArgument(exception: exception); }
+        catch (AuthenticationException exception) { return RequireAuthentication(exception: exception); }
+        catch (UnauthorizedAccessException exception) { return Forbid(exception: exception); }
+        catch (SecurityException exception) { return Forbid(exception: exception); }
+        catch (Exception exception) { return Fail(exception: exception); }
+    }
+
+    async Task<IActionResult> HistoryCore(Guid id, CancellationToken cancellationToken)
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
