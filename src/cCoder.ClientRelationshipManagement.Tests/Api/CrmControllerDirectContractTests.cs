@@ -11,6 +11,8 @@ using cCoder.ClientRelationshipManagement.Runtime.Brokers.Loggings;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
+using Microsoft.AspNetCore.Mvc.ViewFeatures;
+using Microsoft.AspNetCore.Mvc.Routing;
 using Microsoft.AspNetCore.OData.Formatter;
 using Microsoft.EntityFrameworkCore.Query;
 using Xunit;
@@ -21,10 +23,18 @@ namespace cCoder.ClientRelationshipManagement.Tests.Api;
 public sealed class CrmControllerDirectContractTests
 {
     static readonly string[] Names = ["AccountController", "AdminController", "AgentAutomationSettingsController", "AgentMessageEntriesController", "AgentMessagesController", "AgentRunsController", "AgentWorkflowController", "DocumentationController", "HomeController", "ImportsController", "ImportsApiController", "ImportLinksController", "HandoffPacksController", "MailboxMessageRecordsController", "MaterialsController"];
+    static readonly string[] MissingAdminHappyActions =
+    [
+        "Message", "ApproveProcessProposal", "RejectProcessProposal", "ProviderModels",
+        "ReplyToMessage", "ApproveMessage", "RejectMessage", "DismissMessage"
+    ];
     public static IEnumerable<object[]> AllActions => Actions().Select(action => new object[] { action });
     public static IEnumerable<object[]> ApiActions => Actions().Where(action => action.ControllerType.Namespace == "cCoder.ClientRelationshipManagement.Api.Controllers").Select(action => new object[] { action });
     public static IEnumerable<object[]> ApiMissingEntityActions => Actions().Where(action => action.ControllerType.Namespace == "cCoder.ClientRelationshipManagement.Api.Controllers" && new[] { "Put", "Patch", "Delete" }.Contains(action.Method.Name) && !(action.ControllerType.Name == "AgentMessagesController" && action.Method.Name == "Put")).Select(action => new object[] { action });
     public static IEnumerable<object[]> DependencyActions => Actions().Where(action => action.HasDependency).Select(action => new object[] { action });
+    public static IEnumerable<object[]> MissingAdminHappyCases => Actions()
+        .Where(action => action.ControllerType.Name == "AdminController" && MissingAdminHappyActions.Contains(action.Method.Name))
+        .Select(action => new object[] { action });
 
     [Theory, MemberData(nameof(ApiActions))]
     public async Task ApiAction_WhenDependenciesComplete_ShouldReturnSuccessAndLogInformation(ActionCase action)
@@ -69,6 +79,17 @@ public sealed class CrmControllerDirectContractTests
         ActionCase action = Actions().Single(candidate => candidate.ControllerType.Name == "DocumentationController" && candidate.Method.Name == "Index");
         Outcome outcome = await Invoke(action, null);
         Assert.IsType<ViewResult>(outcome.Result);
+        Assert.Equal(1, outcome.Logging.InformationCount);
+        Assert.Equal(0, outcome.Logging.WarningCount);
+        Assert.Equal(0, outcome.Logging.ErrorCount);
+    }
+
+    [Theory, MemberData(nameof(MissingAdminHappyCases))]
+    public async Task AdminActionWithoutAcceptanceEvidence_WhenDependenciesSucceed_ShouldReturnSuccessAndLogInformation(ActionCase action)
+    {
+        Outcome outcome = await Invoke(action, null);
+        int statusCode = (outcome.Result as IStatusCodeActionResult)?.StatusCode ?? StatusCodes.Status200OK;
+        Assert.True(statusCode is >= 200 and <= 399, $"{action.ControllerType.Name}.{action.Method.Name}: {outcome.Logging.LastError}");
         Assert.Equal(1, outcome.Logging.InformationCount);
         Assert.Equal(0, outcome.Logging.WarningCount);
         Assert.Equal(0, outcome.Logging.ErrorCount);
@@ -136,6 +157,11 @@ public sealed class CrmControllerDirectContractTests
         ], "ContractTest"));
         httpContext.Request.Headers.Authorization = "Bearer contract-test-token";
         controller.ControllerContext = new ControllerContext { HttpContext = httpContext };
+        if (controller is Controller mvcController)
+        {
+            mvcController.TempData = new TempDataDictionary(httpContext, new TestTempDataProvider());
+            mvcController.Url = new TestUrlHelper(mvcController.ControllerContext);
+        }
         object[] arguments = action.Method.GetParameters().Select(parameter => Value(parameter.ParameterType)).ToArray();
         object invocation = action.Method.Invoke(controller, arguments)!;
         IActionResult result = await Resolve(invocation);
@@ -163,13 +189,14 @@ public sealed class CrmControllerDirectContractTests
                 ["auditNote"] = "value"
             };
         if (type == typeof(string)) return "value";
+        if (type == typeof(bool)) return true;
         if (type == typeof(CancellationToken)) return CancellationToken.None;
         if (type == typeof(Task)) return Task.CompletedTask;
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Task<>))
             return typeof(Task).GetMethod(nameof(Task.FromResult))!.MakeGenericMethod(type.GetGenericArguments()[0])
                 .Invoke(null, [Value(type.GetGenericArguments()[0])])!;
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(ValueTask<>))
-            return Activator.CreateInstance(type, Value(type.GetGenericArguments()[0]))!;
+            return type.GetConstructor([type.GetGenericArguments()[0]])!.Invoke([Value(type.GetGenericArguments()[0])]);
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IQueryable<>))
         {
             Type itemType = type.GetGenericArguments()[0];
@@ -186,7 +213,12 @@ public sealed class CrmControllerDirectContractTests
         }
         if (type.IsValueType) return Activator.CreateInstance(type)!;
         if (type.IsArray) return Array.CreateInstance(type.GetElementType()!, 0);
-        try { return Activator.CreateInstance(type)!; } catch { return null; }
+        try { return Activator.CreateInstance(type)!; }
+        catch
+        {
+            ConstructorInfo constructor = type.GetConstructors().OrderBy(candidate => candidate.GetParameters().Length).FirstOrDefault();
+            return constructor?.Invoke(constructor.GetParameters().Select(parameter => Value(parameter.ParameterType)).ToArray());
+        }
     }
 
     static async Task<IActionResult> Resolve(object invocation)
@@ -221,6 +253,22 @@ public sealed class CrmControllerDirectContractTests
             }
             return Value(targetMethod.ReturnType);
         }
+    }
+
+    sealed class TestTempDataProvider : ITempDataProvider
+    {
+        public IDictionary<string, object> LoadTempData(HttpContext context) => new Dictionary<string, object>();
+        public void SaveTempData(HttpContext context, IDictionary<string, object> values) { }
+    }
+
+    sealed class TestUrlHelper(ActionContext actionContext) : IUrlHelper
+    {
+        public ActionContext ActionContext { get; } = actionContext;
+        public string Action(UrlActionContext actionContext) => "/";
+        public string Content(string contentPath) => contentPath;
+        public bool IsLocalUrl(string url) => !string.IsNullOrEmpty(url) && url.StartsWith('/');
+        public string Link(string routeName, object values) => "/";
+        public string RouteUrl(UrlRouteContext routeContext) => "/";
     }
 
     sealed class TestAsyncQueryProvider<TEntity>(IQueryProvider inner) : IAsyncQueryProvider
