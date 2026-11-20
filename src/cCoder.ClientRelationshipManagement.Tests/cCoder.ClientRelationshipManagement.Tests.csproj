@@ -31,6 +31,7 @@
   <ItemGroup>
     <ProjectReference Include="..\ClientRelationshipManagement.Web\ClientRelationshipManagement.Web.csproj" />
     <ProjectReference Include="..\cCoder.ClientRelationshipManagement\cCoder.ClientRelationshipManagement.csproj" />
+    <ProjectReference Include="..\ClientRelationshipManagement.Web\ClientRelationshipManagement.Web.csproj" />
   </ItemGroup>
 
   <ItemGroup>
