@@ -1,4 +1,9 @@
+using System.ComponentModel.DataAnnotations;
+using System.Security;
+using System.Security.Authentication;
+using cCoder.ClientRelationshipManagement.Api.Controllers;
 using cCoder.ClientRelationshipManagement.Models.Security;
+using cCoder.ClientRelationshipManagement.Runtime.Brokers.Loggings;
 using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
 using cCoder.ClientRelationshipManagement.Platform.Models.Enums;
 using cCoder.Security.Models;
@@ -20,16 +25,55 @@ public sealed class ClientsController(
     IEmailDraftWorkflowService emailDraftWorkflowService,
     IWorkflowAutomationService workflowAutomationService,
     ICRMAuthInfo authInfo,
-    ISSOAuthInfo ssoAuthInfo)
-    : Controller
+    ISSOAuthInfo ssoAuthInfo,
+    ILoggingBroker<ClientsController> loggingBroker)
+    : CrmController<ClientsController>(loggingBroker)
 {
-    public IActionResult Create() => RedirectToAction("Index", "Leads");
+    public IActionResult Create()
+    {
+        try { return Complete(response: CreateGetCore()); }
+        catch (ValidationException exception) { return Reject(exception: exception); }
+        catch (ArgumentException exception) { return RejectArgument(exception: exception); }
+        catch (AuthenticationException exception) { return RequireAuthentication(exception: exception); }
+        catch (UnauthorizedAccessException exception) { return Forbid(exception: exception); }
+        catch (SecurityException exception) { return Forbid(exception: exception); }
+        catch (Exception exception) { return Fail(exception: exception); }
+    }
+
+    IActionResult CreateGetCore() => RedirectToAction("Index", "Leads");
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public IActionResult Create(ClientEditorViewModel _) => RedirectToAction("Index", "Leads");
+    public IActionResult Create(ClientEditorViewModel model)
+    {
+        try { return Complete(response: CreatePostCore(model: model)); }
+        catch (ValidationException exception) { return Reject(exception: exception); }
+        catch (ArgumentException exception) { return RejectArgument(exception: exception); }
+        catch (AuthenticationException exception) { return RequireAuthentication(exception: exception); }
+        catch (UnauthorizedAccessException exception) { return Forbid(exception: exception); }
+        catch (SecurityException exception) { return Forbid(exception: exception); }
+        catch (Exception exception) { return Fail(exception: exception); }
+    }
+
+    IActionResult CreatePostCore(ClientEditorViewModel model) => RedirectToAction("Index", "Leads");
 
     public async Task<IActionResult> Index(
+        string search = null,
+        string status = null,
+        string sort = "name",
+        string scope = null,
+        string tasks = null)
+    {
+        try { return Complete(response: await IndexCore(search, status, sort, scope, tasks)); }
+        catch (ValidationException exception) { return Reject(exception: exception); }
+        catch (ArgumentException exception) { return RejectArgument(exception: exception); }
+        catch (AuthenticationException exception) { return RequireAuthentication(exception: exception); }
+        catch (UnauthorizedAccessException exception) { return Forbid(exception: exception); }
+        catch (SecurityException exception) { return Forbid(exception: exception); }
+        catch (Exception exception) { return Fail(exception: exception); }
+    }
+
+    async Task<IActionResult> IndexCore(
         string search = null,
         string status = null,
         string sort = "name",
@@ -177,6 +221,17 @@ public sealed class ClientsController(
     [HttpGet]
     public async Task<IActionResult> Edit(Guid id)
     {
+        try { return Complete(response: await EditGetCore(id: id)); }
+        catch (ValidationException exception) { return Reject(exception: exception); }
+        catch (ArgumentException exception) { return RejectArgument(exception: exception); }
+        catch (AuthenticationException exception) { return RequireAuthentication(exception: exception); }
+        catch (UnauthorizedAccessException exception) { return Forbid(exception: exception); }
+        catch (SecurityException exception) { return Forbid(exception: exception); }
+        catch (Exception exception) { return Fail(exception: exception); }
+    }
+
+    async Task<IActionResult> EditGetCore(Guid id)
+    {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
@@ -188,6 +243,17 @@ public sealed class ClientsController(
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Edit(ClientEditorViewModel model)
+    {
+        try { return Complete(response: await EditPostCore(model: model)); }
+        catch (ValidationException exception) { return Reject(exception: exception); }
+        catch (ArgumentException exception) { return RejectArgument(exception: exception); }
+        catch (AuthenticationException exception) { return RequireAuthentication(exception: exception); }
+        catch (UnauthorizedAccessException exception) { return Forbid(exception: exception); }
+        catch (SecurityException exception) { return Forbid(exception: exception); }
+        catch (Exception exception) { return Fail(exception: exception); }
+    }
+
+    async Task<IActionResult> EditPostCore(ClientEditorViewModel model)
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
@@ -215,6 +281,17 @@ public sealed class ClientsController(
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> RecordActivity(RecordClientActivityRequest request)
     {
+        try { return Complete(response: await RecordActivityCore(request: request)); }
+        catch (ValidationException exception) { return Reject(exception: exception); }
+        catch (ArgumentException exception) { return RejectArgument(exception: exception); }
+        catch (AuthenticationException exception) { return RequireAuthentication(exception: exception); }
+        catch (UnauthorizedAccessException exception) { return Forbid(exception: exception); }
+        catch (SecurityException exception) { return Forbid(exception: exception); }
+        catch (Exception exception) { return Fail(exception: exception); }
+    }
+
+    async Task<IActionResult> RecordActivityCore(RecordClientActivityRequest request)
+    {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
@@ -240,6 +317,17 @@ public sealed class ClientsController(
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> AddOpportunity(CreateClientOpportunityRequest request)
+    {
+        try { return Complete(response: await AddOpportunityCore(request: request)); }
+        catch (ValidationException exception) { return Reject(exception: exception); }
+        catch (ArgumentException exception) { return RejectArgument(exception: exception); }
+        catch (AuthenticationException exception) { return RequireAuthentication(exception: exception); }
+        catch (UnauthorizedAccessException exception) { return Forbid(exception: exception); }
+        catch (SecurityException exception) { return Forbid(exception: exception); }
+        catch (Exception exception) { return Fail(exception: exception); }
+    }
+
+    async Task<IActionResult> AddOpportunityCore(CreateClientOpportunityRequest request)
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
@@ -267,6 +355,17 @@ public sealed class ClientsController(
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> SaveEmailDraft(DraftClientEmailRequest request)
+    {
+        try { return Complete(response: await SaveEmailDraftCore(request: request)); }
+        catch (ValidationException exception) { return Reject(exception: exception); }
+        catch (ArgumentException exception) { return RejectArgument(exception: exception); }
+        catch (AuthenticationException exception) { return RequireAuthentication(exception: exception); }
+        catch (UnauthorizedAccessException exception) { return Forbid(exception: exception); }
+        catch (SecurityException exception) { return Forbid(exception: exception); }
+        catch (Exception exception) { return Fail(exception: exception); }
+    }
+
+    async Task<IActionResult> SaveEmailDraftCore(DraftClientEmailRequest request)
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
@@ -312,6 +411,17 @@ public sealed class ClientsController(
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> ApproveEmail(ApproveClientEmailRequest request)
     {
+        try { return Complete(response: await ApproveEmailCore(request: request)); }
+        catch (ValidationException exception) { return Reject(exception: exception); }
+        catch (ArgumentException exception) { return RejectArgument(exception: exception); }
+        catch (AuthenticationException exception) { return RequireAuthentication(exception: exception); }
+        catch (UnauthorizedAccessException exception) { return Forbid(exception: exception); }
+        catch (SecurityException exception) { return Forbid(exception: exception); }
+        catch (Exception exception) { return Fail(exception: exception); }
+    }
+
+    async Task<IActionResult> ApproveEmailCore(ApproveClientEmailRequest request)
+    {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
 
@@ -333,6 +443,17 @@ public sealed class ClientsController(
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> MarkEmailSent(MarkClientEmailSentRequest request)
+    {
+        try { return Complete(response: await MarkEmailSentCore(request: request)); }
+        catch (ValidationException exception) { return Reject(exception: exception); }
+        catch (ArgumentException exception) { return RejectArgument(exception: exception); }
+        catch (AuthenticationException exception) { return RequireAuthentication(exception: exception); }
+        catch (UnauthorizedAccessException exception) { return Forbid(exception: exception); }
+        catch (SecurityException exception) { return Forbid(exception: exception); }
+        catch (Exception exception) { return Fail(exception: exception); }
+    }
+
+    async Task<IActionResult> MarkEmailSentCore(MarkClientEmailSentRequest request)
     {
         if (RedirectIfUnauthenticated() is IActionResult redirect)
             return redirect;
