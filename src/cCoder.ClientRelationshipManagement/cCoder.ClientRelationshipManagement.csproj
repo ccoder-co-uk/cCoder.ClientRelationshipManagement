@@ -19,12 +19,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="cCoder.AI" Version="2026.9.22.2143" />
+    <PackageReference Include="cCoder.AI" Version="2026.11.20.1724" />
     <PackageReference Include="cCoder.CodeAnalysis" Version="2026.10.28.1133">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="cCoder.CodeAnalysis.Contracts" Version="2026.10.28.1133" />
+    <PackageReference Include="cCoder.CodeAnalysis.Contracts" Version="2026.11.20.1604" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.11" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11">
       <PrivateAssets>all</PrivateAssets>
@@ -34,9 +34,9 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.11" />
     <PackageReference Include="Microsoft.AspNetCore.OData" Version="9.5.0" />
     <PackageReference Include="Swashbuckle.AspNetCore.SwaggerGen" Version="10.2.3" />
-    <PackageReference Include="cCoder.Eventing" Version="2026.9.22.2040" />
-    <PackageReference Include="cCoder.Security" Version="2026.9.22.2049" />
-    <PackageReference Include="cCoder.Security.Data" Version="2026.9.22.2049" />
+    <PackageReference Include="cCoder.Eventing" Version="2026.11.20.1711" />
+    <PackageReference Include="cCoder.Security" Version="2026.11.20.1640" />
+    <PackageReference Include="cCoder.Security.Data" Version="2026.11.20.1640" />
   </ItemGroup>
 
   <ItemGroup>
