@@ -12,383 +12,752 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using DomainAgentMessageService = cCoder.ClientRelationshipManagement.Services.Entities.IAgentMessageOrchestrationService;
 using cCoder.ClientRelationshipManagement.Services.Foundations.Platform;
+using System.ComponentModel.DataAnnotations;
+using System.Security;
+using System.Security.Authentication;
+using cCoder.ClientRelationshipManagement.Runtime.Brokers.Loggings;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc.Infrastructure;
 
 namespace ClientRelationshipManagement.Web.Controllers;
-
-public sealed class AdminController(
-    DomainAgentMessageService agentMessageService,
-    IOperationsCoordinationService operationsService,
-    IProcessCoordinationService processService,
-    IProcessDraftService processDraftService,
-    IProcessValidationService processValidationService,
-    IWorkflowAutomationService workflowAutomationService,
-    IAiProviderSelectionService aiProviderSelectionService,
-    IModelManager modelManagerService,
-    IOptions<AgentWorkflowOptions> agentWorkflowOptions,
-    ICRMAuthInfo authInfo)
-    : Controller
+public sealed class AdminController(DomainAgentMessageService agentMessageService, IOperationsCoordinationService operationsService, IProcessCoordinationService processService, IProcessDraftService processDraftService, IProcessValidationService processValidationService, IWorkflowAutomationService workflowAutomationService, IAiProviderSelectionService aiProviderSelectionService, IModelManager modelManagerService, IOptions<AgentWorkflowOptions> agentWorkflowOptions, ICRMAuthInfo authInfo, ILoggingBroker<AdminController> loggingBroker) : Controller
 {
     [HttpGet("/Admin")]
     public async Task<IActionResult> Index()
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect)
-            return redirect;
-
-        int pendingEmailApprovalCount = await operationsService.RetrieveAllEmails().CountAsync(item =>
-            item.State == EmailState.Draft
-            && (!processService.RetrieveTasks().Any(task => task.EmailId == item.Id)
-                || processService.RetrieveTasks().Any(task =>
-                    task.EmailId == item.Id && task.State == ProcessTaskState.Pending)));
-        int pendingMessageCount = await agentMessageService.RetrieveAll().CountAsync(item => item.State == AgentMessageState.Pending);
-        int pendingProposalCount = await operationsService.RetrieveAllProcessDefinitions().CountAsync(
-            item => item.LifecycleState == ProcessDefinitionLifecycleState.Draft);
-        AiProviderSelection aiSelection = await aiProviderSelectionService.GetAsync(RoutingUserId);
-        int approvalConcurrency = await operationsService.RetrieveAutomationSettings(RoutingUserId)
-            .AsNoTracking()
-            .Where(item => item.UserId == RoutingUserId)
-            .Select(item => (int?)item.ApprovalAgentConcurrency)
-            .SingleOrDefaultAsync() ?? 2;
-        IReadOnlyList<AiWorkLaneSelection> workLanes =
-            await aiProviderSelectionService.GetWorkLanesAsync(RoutingUserId);
-
-        return View(new AdminDashboardViewModel
+        try
         {
-            Notice = TempData["AdminNotice"]?.ToString() ?? string.Empty,
-            PendingEmailApprovalCount = pendingEmailApprovalCount,
-            PendingAgentMessageCount = pendingMessageCount,
-            PendingProcessProposalCount = pendingProposalCount,
-            SelectedAiProfileKey = aiSelection.Profile.Key,
-            SelectedAiModel = aiSelection.Model,
-            ApprovalConcurrency = approvalConcurrency,
-            AiProfiles =
-            [
-                .. aiProviderSelectionService.GetProfiles().Select(profile => new AdminAiProfileViewModel
-                {
-                    Key = profile.Key,
-                    DisplayName = profile.DisplayName,
-                    Description = profile.Description,
-                    Model = profile.Model,
-                    Endpoint = profile.CompletionEndpoint,
-                    MaxConcurrency = profile.MaxConcurrency,
-                    IsConfigured = profile.IsConfigured
-                })
-            ],
-            AiWorkLanes =
-            [
-                .. workLanes.Select(lane => new AdminAiWorkLaneViewModel
-                {
-                    Lane = lane.Lane.ToString(),
-                    DisplayName = lane.Lane switch
-                    {
-                        AgentWorkLane.Lead => "Lead generation",
-                        AgentWorkLane.Opportunity => "Opportunity conversion",
-                        AgentWorkLane.Client => "Client maintenance",
-                        _ => lane.Lane.ToString()
-                    },
-                    SelectedProfileKey = lane.IsEnabled ? lane.Profile.Key : "none",
-                    SelectedModel = lane.Model,
-                    IsEnabled = lane.IsEnabled,
-                    Concurrency = lane.Concurrency
-                })
-            ]
-        });
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
+        }
+
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            int pendingEmailApprovalCount = await operationsService.RetrieveAllEmails().CountAsync(item => item.State == EmailState.Draft && (!processService.RetrieveTasks().Any(task => task.EmailId == item.Id) || processService.RetrieveTasks().Any(task => task.EmailId == item.Id && task.State == ProcessTaskState.Pending)));
+            int pendingMessageCount = await agentMessageService.RetrieveAll().CountAsync(item => item.State == AgentMessageState.Pending);
+            int pendingProposalCount = await operationsService.RetrieveAllProcessDefinitions().CountAsync(item => item.LifecycleState == ProcessDefinitionLifecycleState.Draft);
+            AiProviderSelection aiSelection = await aiProviderSelectionService.GetAsync(RoutingUserId);
+            int approvalConcurrency = await operationsService.RetrieveAutomationSettings(RoutingUserId).AsNoTracking().Where(item => item.UserId == RoutingUserId).Select(item => (int? )item.ApprovalAgentConcurrency).SingleOrDefaultAsync() ?? 2;
+            IReadOnlyList<AiWorkLaneSelection> workLanes = await aiProviderSelectionService.GetWorkLanesAsync(RoutingUserId);
+            return View(new AdminDashboardViewModel { Notice = TempData["AdminNotice"]?.ToString() ?? string.Empty, PendingEmailApprovalCount = pendingEmailApprovalCount, PendingAgentMessageCount = pendingMessageCount, PendingProcessProposalCount = pendingProposalCount, SelectedAiProfileKey = aiSelection.Profile.Key, SelectedAiModel = aiSelection.Model, ApprovalConcurrency = approvalConcurrency, AiProfiles = [..aiProviderSelectionService.GetProfiles().Select(profile => new AdminAiProfileViewModel { Key = profile.Key, DisplayName = profile.DisplayName, Description = profile.Description, Model = profile.Model, Endpoint = profile.CompletionEndpoint, MaxConcurrency = profile.MaxConcurrency, IsConfigured = profile.IsConfigured })], AiWorkLanes = [..workLanes.Select(lane => new AdminAiWorkLaneViewModel { Lane = lane.Lane.ToString(), DisplayName = lane.Lane switch
+            {
+                AgentWorkLane.Lead => "Lead generation",
+                AgentWorkLane.Opportunity => "Opportunity conversion",
+                AgentWorkLane.Client => "Client maintenance",
+                _ => lane.Lane.ToString()}, SelectedProfileKey = lane.IsEnabled ? lane.Profile.Key : "none", SelectedModel = lane.Model, IsEnabled = lane.IsEnabled, Concurrency = lane.Concurrency })] });
+        }
     }
 
     [HttpGet]
     public async Task<IActionResult> Runs(int page = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect)
-            return redirect;
-
-        pageSize = pageSize is 10 or 25 or 50 ? pageSize : 25;
-        IQueryable<AgentRun> agentRuns = operationsService.RetrieveAllAgentRuns();
-        int totalCount = await agentRuns.CountAsync(cancellationToken);
-        int totalPages = Math.Max(1, (int)Math.Ceiling(totalCount / (double)pageSize));
-        page = Math.Clamp(page, 1, totalPages);
-        List<AgentRun> runs = await agentRuns
-            .AsNoTracking()
-            .OrderByDescending(item => item.StartedOn)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync(cancellationToken);
-        return View(new AdminAgentRunsPageViewModel
+        try
         {
-            Runs = [.. runs.Select(MapRun)],
-            Page = page,
-            PageSize = pageSize,
-            TotalCount = totalCount
-        });
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
+        }
+
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            pageSize = pageSize is 10 or 25 or 50 ? pageSize : 25;
+            IQueryable<AgentRun> agentRuns = operationsService.RetrieveAllAgentRuns();
+            int totalCount = await agentRuns.CountAsync(cancellationToken);
+            int totalPages = Math.Max(1, (int)Math.Ceiling(totalCount / (double)pageSize));
+            page = Math.Clamp(page, 1, totalPages);
+            List<AgentRun> runs = await agentRuns.AsNoTracking().OrderByDescending(item => item.StartedOn).Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(cancellationToken);
+            return View(new AdminAgentRunsPageViewModel { Runs = [..runs.Select(MapRun)], Page = page, PageSize = pageSize, TotalCount = totalCount });
+        }
     }
 
     [HttpGet]
     public async Task<IActionResult> Messages(CancellationToken cancellationToken)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect)
-            return redirect;
+        try
+        {
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
+        }
 
-        string[] readableTenantIds = authInfo.ReadableTenants.Length > 0 ? authInfo.ReadableTenants : authInfo.WriteableTenants;
-        if (readableTenantIds.Length == 0) readableTenantIds = ["default"];
-        List<AgentMessage> messages = await agentMessageService.RetrieveAll()
-            .Include(item => item.Entries)
-            .AsNoTracking()
-            .OrderByDescending(item => item.LastUpdated)
-            .Take(200)
-            .ToListAsync(cancellationToken);
-        return View(new AdminAgentMessagesPageViewModel { Messages = [.. messages.Select(MapMessage)] });
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            string[] readableTenantIds = authInfo.ReadableTenants.Length > 0 ? authInfo.ReadableTenants : authInfo.WriteableTenants;
+            if (readableTenantIds.Length == 0)
+                readableTenantIds = ["default"];
+            List<AgentMessage> messages = await agentMessageService.RetrieveAll().Include(item => item.Entries).AsNoTracking().OrderByDescending(item => item.LastUpdated).Take(200).ToListAsync(cancellationToken);
+            return View(new AdminAgentMessagesPageViewModel { Messages = [..messages.Select(MapMessage)] });
+        }
     }
 
     [HttpGet("/Admin/Messages/{id:guid}")]
     public async Task<IActionResult> Message(Guid id, CancellationToken cancellationToken)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect)
-            return redirect;
-
-        string[] readableTenantIds = authInfo.ReadableTenants.Length > 0 ? authInfo.ReadableTenants : authInfo.WriteableTenants;
-        if (readableTenantIds.Length == 0) readableTenantIds = ["default"];
-        AgentMessage message = await agentMessageService.RetrieveAll().Include(item => item.Entries).AsNoTracking()
-            .FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
-        if (message is null)
-            return NotFound();
-
-        List<AgentMessage> conversations = await agentMessageService.RetrieveAll().Include(item => item.Entries).AsNoTracking()
-            .OrderByDescending(item => item.LastUpdated)
-            .Take(200)
-            .ToListAsync(cancellationToken);
-        return View("Message", new AdminAgentConversationPageViewModel
+        try
         {
-            Conversation = MapMessage(message),
-            Conversations = [.. conversations.Select(MapMessage)]
-        });
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
+        }
+
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            string[] readableTenantIds = authInfo.ReadableTenants.Length > 0 ? authInfo.ReadableTenants : authInfo.WriteableTenants;
+            if (readableTenantIds.Length == 0)
+                readableTenantIds = ["default"];
+            AgentMessage message = await agentMessageService.RetrieveAll().Include(item => item.Entries).AsNoTracking().FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
+            if (message is null)
+                return NotFound();
+            List<AgentMessage> conversations = await agentMessageService.RetrieveAll().Include(item => item.Entries).AsNoTracking().OrderByDescending(item => item.LastUpdated).Take(200).ToListAsync(cancellationToken);
+            return View("Message", new AdminAgentConversationPageViewModel { Conversation = MapMessage(message), Conversations = [..conversations.Select(MapMessage)] });
+        }
     }
 
     [HttpGet("/Admin/Messages/{id:guid}/Updates")]
     public async Task<IActionResult> MessageUpdates(Guid id, CancellationToken cancellationToken)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect)
-            return redirect;
-
-        string[] readableTenantIds = authInfo.ReadableTenants.Length > 0 ? authInfo.ReadableTenants : authInfo.WriteableTenants;
-        if (readableTenantIds.Length == 0) readableTenantIds = ["default"];
-        AgentMessage message = await agentMessageService.RetrieveAll().Include(item => item.Entries).AsNoTracking()
-            .FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
-        if (message is null)
-            return NotFound();
-
-        return Json(new
+        try
         {
-            message.Id,
-            state = message.State.ToString(),
-            message.ProposedProcessDefinitionId,
-            lastUpdated = message.LastUpdated,
-            awaitingAgent = message.State == AgentMessageState.Pending
-                && AgentConversationTurnPolicy.IsAgentTurn(message),
-            entries = message.Entries.OrderBy(entry => entry.CreatedOn).Select(entry => new
-            {
-                entry.Id,
-                entry.Role,
-                entry.Body,
-                createdOn = entry.CreatedOn.LocalDateTime.ToString("dd MMM yyyy HH:mm")
-            })
-        });
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
+        }
+
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            string[] readableTenantIds = authInfo.ReadableTenants.Length > 0 ? authInfo.ReadableTenants : authInfo.WriteableTenants;
+            if (readableTenantIds.Length == 0)
+                readableTenantIds = ["default"];
+            AgentMessage message = await agentMessageService.RetrieveAll().Include(item => item.Entries).AsNoTracking().FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
+            if (message is null)
+                return NotFound();
+            return Json(new { message.Id, state = message.State.ToString(), message.ProposedProcessDefinitionId, lastUpdated = message.LastUpdated, awaitingAgent = message.State == AgentMessageState.Pending && AgentConversationTurnPolicy.IsAgentTurn(message), entries = message.Entries.OrderBy(entry => entry.CreatedOn).Select(entry => new { entry.Id, entry.Role, entry.Body, createdOn = entry.CreatedOn.LocalDateTime.ToString("dd MMM yyyy HH:mm") }) });
+        }
     }
 
     [HttpGet]
     public async Task<IActionResult> ProcessProposals(CancellationToken cancellationToken)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect)
-            return redirect;
+        try
+        {
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
+        }
 
-        List<ProcessDefinition> proposals = await operationsService.RetrieveAllProcessDefinitions()
-            .AsNoTracking()
-            .Where(item => item.LifecycleState == ProcessDefinitionLifecycleState.Draft)
-            .OrderByDescending(item => item.CreatedOn)
-            .Take(200)
-            .ToListAsync(cancellationToken);
-        return View(new AdminProcessProposalsPageViewModel { Proposals = [.. proposals.Select(MapProposal)] });
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            List<ProcessDefinition> proposals = await operationsService.RetrieveAllProcessDefinitions().AsNoTracking().Where(item => item.LifecycleState == ProcessDefinitionLifecycleState.Draft).OrderByDescending(item => item.CreatedOn).Take(200).ToListAsync(cancellationToken);
+            return View(new AdminProcessProposalsPageViewModel { Proposals = [..proposals.Select(MapProposal)] });
+        }
     }
 
     [HttpGet("/Admin/ProcessProposals/{id:guid}")]
     public async Task<IActionResult> ProcessProposal(Guid id, CancellationToken cancellationToken)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect) return redirect;
-        ProcessDefinition proposal = await operationsService.RetrieveAllProcessDefinitions().AsNoTracking()
-            .Include(item => item.Steps).ThenInclude(step => step.OutgoingTransitions)
-            .Include(item => item.Steps).ThenInclude(step => step.StepTasks)
-            .FirstOrDefaultAsync(item => item.Id == id && item.LifecycleState == ProcessDefinitionLifecycleState.Draft, cancellationToken);
-        if (proposal?.SupersedesProcessDefinitionId is null) return NotFound();
-        ProcessDefinition current = await operationsService.RetrieveAllProcessDefinitions().AsNoTracking()
-            .Include(item => item.Steps).ThenInclude(step => step.OutgoingTransitions)
-            .Include(item => item.Steps).ThenInclude(step => step.StepTasks)
-            .FirstOrDefaultAsync(item => item.Id == proposal.SupersedesProcessDefinitionId.Value, cancellationToken);
-        return current is null ? NotFound() : View(ProcessProposalComparisonService.Build(current, proposal));
+        try
+        {
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
+        }
+
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            ProcessDefinition proposal = await operationsService.RetrieveAllProcessDefinitions().AsNoTracking().Include(item => item.Steps).ThenInclude(step => step.OutgoingTransitions).Include(item => item.Steps).ThenInclude(step => step.StepTasks).FirstOrDefaultAsync(item => item.Id == id && item.LifecycleState == ProcessDefinitionLifecycleState.Draft, cancellationToken);
+            if (proposal?.SupersedesProcessDefinitionId is null)
+                return NotFound();
+            ProcessDefinition current = await operationsService.RetrieveAllProcessDefinitions().AsNoTracking().Include(item => item.Steps).ThenInclude(step => step.OutgoingTransitions).Include(item => item.Steps).ThenInclude(step => step.StepTasks).FirstOrDefaultAsync(item => item.Id == proposal.SupersedesProcessDefinitionId.Value, cancellationToken);
+            return current is null ? NotFound() : View(ProcessProposalComparisonService.Build(current, proposal));
+        }
     }
 
     [HttpPost("/Admin/ProcessProposals/{id:guid}/Approve")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> ApproveProcessProposal(Guid id, string approvalNotes, CancellationToken cancellationToken)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect) return redirect;
-        await workflowAutomationService.EnsureDefinitionStepTasksAsync(id, cancellationToken);
-        ProcessValidationResult validation = await processValidationService.ValidateActivationAsync(id, cancellationToken);
-        if (!validation.IsValid)
+        try
         {
-            string errors = string.Join(" ", validation.Issues
-                .Where(issue => issue.Severity == ProcessValidationSeverity.Error)
-                .Take(3).Select(issue => $"{issue.StepName}: {issue.Message}".TrimStart(':', ' ')));
-            TempData["AdminNotice"] = $"Proposal was not activated because validation failed. {errors}";
-            return RedirectToAction(nameof(ProcessProposal), new { id });
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
         }
 
-        ProcessDefinition activated = await processDraftService.ActivateDraftAsync(id, CurrentUserId, approvalNotes, cancellationToken);
-        if (activated is null) return NotFound();
-        await workflowAutomationService.EnsureDefinitionCoverageAsync(activated.Id, cancellationToken);
-        if (activated.ScopeType == ProcessScopeType.Lead)
-            await workflowAutomationService.ReevaluateDeferredLeadsAsync(activated.TenantId, cancellationToken);
-        TempData["AdminNotice"] = "Proposal approved and activated.";
-        return RedirectToAction(nameof(ProcessProposals));
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            await workflowAutomationService.EnsureDefinitionStepTasksAsync(id, cancellationToken);
+            ProcessValidationResult validation = await processValidationService.ValidateActivationAsync(id, cancellationToken);
+            if (!validation.IsValid)
+            {
+                string errors = string.Join(" ", validation.Issues.Where(issue => issue.Severity == ProcessValidationSeverity.Error).Take(3).Select(issue => $"{issue.StepName}: {issue.Message}".TrimStart(':', ' ')));
+                TempData["AdminNotice"] = $"Proposal was not activated because validation failed. {errors}";
+                return RedirectToAction(nameof(ProcessProposal), new { id });
+            }
+
+            ProcessDefinition activated = await processDraftService.ActivateDraftAsync(id, CurrentUserId, approvalNotes, cancellationToken);
+            if (activated is null)
+                return NotFound();
+            await workflowAutomationService.EnsureDefinitionCoverageAsync(activated.Id, cancellationToken);
+            if (activated.ScopeType == ProcessScopeType.Lead)
+                await workflowAutomationService.ReevaluateDeferredLeadsAsync(activated.TenantId, cancellationToken);
+            TempData["AdminNotice"] = "Proposal approved and activated.";
+            return RedirectToAction(nameof(ProcessProposals));
+        }
     }
 
     [HttpPost("/Admin/ProcessProposals/{id:guid}/Reject")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> RejectProcessProposal(Guid id, string rejectionNotes, CancellationToken cancellationToken)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect) return redirect;
-        ProcessDefinition rejected = await processDraftService.RejectDraftAsync(id, CurrentUserId, rejectionNotes, cancellationToken);
-        if (rejected is null) return NotFound();
-        TempData["AdminNotice"] = "Proposal rejected and removed from the review queue.";
-        return RedirectToAction(nameof(ProcessProposals));
+        try
+        {
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
+        }
+
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            ProcessDefinition rejected = await processDraftService.RejectDraftAsync(id, CurrentUserId, rejectionNotes, cancellationToken);
+            if (rejected is null)
+                return NotFound();
+            TempData["AdminNotice"] = "Proposal rejected and removed from the review queue.";
+            return RedirectToAction(nameof(ProcessProposals));
+        }
     }
 
     [HttpGet("Admin/AiProviders/{providerKey}/Models")]
-    public async Task<IActionResult> ProviderModels(
-        string providerKey,
-        CancellationToken cancellationToken)
+    public async Task<IActionResult> ProviderModels(string providerKey, CancellationToken cancellationToken)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect)
-            return redirect;
-
-        AiProviderProfile profile = aiProviderSelectionService.GetProfiles().FirstOrDefault(item =>
-            string.Equals(item.Key, providerKey, StringComparison.OrdinalIgnoreCase));
-        if (profile is null || !profile.IsConfigured)
-            return NotFound();
-
-        AIProviderCapabilitiesResponse capabilities = modelManagerService.GetProviderCapabilities(providerKey);
-        List<string> models = [];
         try
         {
-            if (capabilities.SupportsModelListing)
-            {
-                using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeout.CancelAfter(TimeSpan.FromSeconds(5));
-                models.AddRange((await modelManagerService.RetrieveAvailableModelsAsync(providerKey, timeout.Token))
-                    .Where(item => item.IsAvailable && !string.IsNullOrWhiteSpace(item.Id))
-                    .Select(item => item.Id.Trim()));
-            }
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
         }
-        catch (Exception exception) when (exception is InvalidOperationException
-            or HttpRequestException
-            or TaskCanceledException)
+        catch (ValidationException exception)
         {
-            // Providers such as Codex CLI may expose only their configured model.
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
         }
 
-        models.Add(profile.Model);
-        return Json(new
+        async Task<IActionResult> ExecuteActionAsync()
         {
-            provider = profile.Key,
-            defaultModel = profile.Model,
-            maxConcurrency = capabilities.MaxConcurrency,
-            supportsModelListing = capabilities.SupportsModelListing,
-            models = models.Where(model => !string.IsNullOrWhiteSpace(model))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(model => model)
-        });
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            AiProviderProfile profile = aiProviderSelectionService.GetProfiles().FirstOrDefault(item => string.Equals(item.Key, providerKey, StringComparison.OrdinalIgnoreCase));
+            if (profile is null || !profile.IsConfigured)
+                return NotFound();
+            AIProviderCapabilitiesResponse capabilities = modelManagerService.GetProviderCapabilities(providerKey);
+            List<string> models = [];
+            try
+            {
+                if (capabilities.SupportsModelListing)
+                {
+                    using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    timeout.CancelAfter(TimeSpan.FromSeconds(5));
+                    models.AddRange((await modelManagerService.RetrieveAvailableModelsAsync(providerKey, timeout.Token)).Where(item => item.IsAvailable && !string.IsNullOrWhiteSpace(item.Id)).Select(item => item.Id.Trim()));
+                }
+            }
+            catch (Exception exception)when (exception is InvalidOperationException or HttpRequestException or TaskCanceledException)
+            {
+            // Providers such as Codex CLI may expose only their configured model.
+            }
+
+            models.Add(profile.Model);
+            return Json(new { provider = profile.Key, defaultModel = profile.Model, maxConcurrency = capabilities.MaxConcurrency, supportsModelListing = capabilities.SupportsModelListing, models = models.Where(model => !string.IsNullOrWhiteSpace(model)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(model => model) });
+        }
     }
 
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> SelectAiProfile(string profileKey, CancellationToken cancellationToken)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect)
-            return redirect;
-
         try
         {
-            AiProviderSelection selection = await aiProviderSelectionService.SetAsync(
-                RoutingUserId,
-                profileKey,
-                cancellationToken);
-            TempData["AdminNotice"] = $"Future LLM calls will use {selection.Profile.DisplayName}.";
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
         }
         catch (ArgumentException exception)
         {
-            TempData["AdminNotice"] = exception.Message;
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
         }
 
-        return RedirectToAction(nameof(Index));
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            try
+            {
+                AiProviderSelection selection = await aiProviderSelectionService.SetAsync(RoutingUserId, profileKey, cancellationToken);
+                TempData["AdminNotice"] = $"Future LLM calls will use {selection.Profile.DisplayName}.";
+            }
+            catch (ArgumentException exception)
+            {
+                TempData["AdminNotice"] = exception.Message;
+            }
+
+            return RedirectToAction(nameof(Index));
+        }
     }
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> ConfigureAiLane(
-        AgentWorkLane lane,
-        string profileKey,
-        int concurrency,
-        CancellationToken cancellationToken)
+    public async Task<IActionResult> ConfigureAiLane(AgentWorkLane lane, string profileKey, int concurrency, CancellationToken cancellationToken)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect)
-            return redirect;
-
         try
         {
-            AiWorkLaneSelection selection = await aiProviderSelectionService.SetWorkLaneAsync(
-                RoutingUserId,
-                lane,
-                profileKey,
-                concurrency,
-                cancellationToken);
-            TempData["AdminNotice"] = selection.IsEnabled
-                ? $"{lane} work will use {selection.Profile.DisplayName} with concurrency {selection.Concurrency}."
-                : $"{lane} work is now human managed.";
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
         }
         catch (ArgumentException exception)
         {
-            TempData["AdminNotice"] = exception.Message;
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
         }
 
-        return RedirectToAction(nameof(Index));
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            try
+            {
+                AiWorkLaneSelection selection = await aiProviderSelectionService.SetWorkLaneAsync(RoutingUserId, lane, profileKey, concurrency, cancellationToken);
+                TempData["AdminNotice"] = selection.IsEnabled ? $"{lane} work will use {selection.Profile.DisplayName} with concurrency {selection.Concurrency}." : $"{lane} work is now human managed.";
+            }
+            catch (ArgumentException exception)
+            {
+                TempData["AdminNotice"] = exception.Message;
+            }
+
+            return RedirectToAction(nameof(Index));
+        }
     }
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> ConfigureAiRouting(
-        ConfigureAiRoutingRequest request,
-        CancellationToken cancellationToken)
+    public async Task<IActionResult> ConfigureAiRouting(ConfigureAiRoutingRequest request, CancellationToken cancellationToken)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect)
-            return redirect;
-
         try
         {
-            await aiProviderSelectionService.SetRoutingAsync(
-                RoutingUserId,
-                request.ApprovalProfileKey,
-                request.ApprovalModel,
-                request.ApprovalConcurrency,
-                [
-                    new AiWorkLaneUpdate(AgentWorkLane.Lead, request.LeadProfileKey, request.LeadModel, request.LeadConcurrency),
-                    new AiWorkLaneUpdate(AgentWorkLane.Opportunity, request.OpportunityProfileKey, request.OpportunityModel, request.OpportunityConcurrency),
-                    new AiWorkLaneUpdate(AgentWorkLane.Client, request.ClientProfileKey, request.ClientModel, request.ClientConcurrency)
-                ],
-                cancellationToken);
-            TempData["AdminNotice"] = "AI routing was updated for all workflow lanes.";
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
         }
         catch (ArgumentException exception)
         {
-            TempData["AdminNotice"] = exception.Message;
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
         }
 
-        return RedirectToAction(nameof(Index));
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            try
+            {
+                await aiProviderSelectionService.SetRoutingAsync(RoutingUserId, request.ApprovalProfileKey, request.ApprovalModel, request.ApprovalConcurrency, [new AiWorkLaneUpdate(AgentWorkLane.Lead, request.LeadProfileKey, request.LeadModel, request.LeadConcurrency), new AiWorkLaneUpdate(AgentWorkLane.Opportunity, request.OpportunityProfileKey, request.OpportunityModel, request.OpportunityConcurrency), new AiWorkLaneUpdate(AgentWorkLane.Client, request.ClientProfileKey, request.ClientModel, request.ClientConcurrency)], cancellationToken);
+                TempData["AdminNotice"] = "AI routing was updated for all workflow lanes.";
+            }
+            catch (ArgumentException exception)
+            {
+                TempData["AdminNotice"] = exception.Message;
+            }
+
+            return RedirectToAction(nameof(Index));
+        }
     }
 
     static AdminAgentRunViewModel MapRun(AgentRun item) => new()
@@ -410,15 +779,10 @@ public sealed class AdminController(
         Summary = item.Summary ?? string.Empty,
         ErrorMessage = item.ErrorMessage ?? string.Empty
     };
-
     static AdminAgentMessageViewModel MapMessage(AgentMessage item)
     {
-        DateTimeOffset latestHumanOrSystem = item.Entries
-            .Where(entry => !string.Equals(entry.Role, "Agent", StringComparison.OrdinalIgnoreCase))
-            .Select(entry => entry.CreatedOn).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
-        DateTimeOffset latestAgent = item.Entries
-            .Where(entry => string.Equals(entry.Role, "Agent", StringComparison.OrdinalIgnoreCase))
-            .Select(entry => entry.CreatedOn).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
+        DateTimeOffset latestHumanOrSystem = item.Entries.Where(entry => !string.Equals(entry.Role, "Agent", StringComparison.OrdinalIgnoreCase)).Select(entry => entry.CreatedOn).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
+        DateTimeOffset latestAgent = item.Entries.Where(entry => string.Equals(entry.Role, "Agent", StringComparison.OrdinalIgnoreCase)).Select(entry => entry.CreatedOn).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
         return new AdminAgentMessageViewModel
         {
             Id = item.Id,
@@ -434,13 +798,7 @@ public sealed class AdminController(
             LastUpdatedOn = item.LastUpdated.LocalDateTime.ToString("dd MMM yyyy HH:mm"),
             EntryCount = item.Entries.Count,
             IsAwaitingAgent = item.State == AgentMessageState.Pending && latestHumanOrSystem > latestAgent,
-            Entries = item.Entries.OrderBy(entry => entry.CreatedOn).Select(entry => new AdminAgentMessageEntryViewModel
-            {
-                Id = entry.Id,
-                Role = entry.Role,
-                Body = entry.Body,
-                CreatedOn = entry.CreatedOn.LocalDateTime.ToString("dd MMM yyyy HH:mm")
-            }).ToList()
+            Entries = item.Entries.OrderBy(entry => entry.CreatedOn).Select(entry => new AdminAgentMessageEntryViewModel { Id = entry.Id, Role = entry.Role, Body = entry.Body, CreatedOn = entry.CreatedOn.LocalDateTime.ToString("dd MMM yyyy HH:mm") }).ToList()
         };
     }
 
@@ -455,172 +813,375 @@ public sealed class AdminController(
         ProposedByAgent = item.ProposedByAgent ?? string.Empty,
         CreatedOn = item.CreatedOn.LocalDateTime.ToString("dd MMM yyyy HH:mm")
     };
-
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> ReplyToMessage(Guid id, string responseNotes, string returnUrl, CancellationToken cancellationToken)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect)
-            return redirect;
-
-        if (string.IsNullOrWhiteSpace(responseNotes))
+        try
         {
-            TempData["AdminNotice"] = "Add feedback or a question before sending the message.";
-            return RedirectAfterMessageAction(returnUrl);
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
         }
 
-        await agentMessageService.AppendEntryAsync(id, "User", responseNotes, cancellationToken);
-        TempData["AdminNotice"] = "Your response was added. The Approval Agent will continue the review.";
-        return RedirectAfterMessageAction(returnUrl);
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            if (string.IsNullOrWhiteSpace(responseNotes))
+            {
+                TempData["AdminNotice"] = "Add feedback or a question before sending the message.";
+                return RedirectAfterMessageAction(returnUrl);
+            }
+
+            await agentMessageService.AppendEntryAsync(id, "User", responseNotes, cancellationToken);
+            TempData["AdminNotice"] = "Your response was added. The Approval Agent will continue the review.";
+            return RedirectAfterMessageAction(returnUrl);
+        }
     }
 
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> ResolveMessage(Guid id, string returnUrl, CancellationToken cancellationToken)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect)
-            return redirect;
+        try
+        {
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
+        }
 
-        AgentMessage message = await agentMessageService.ChangeStateAsync(
-            id,
-            AgentMessageState.Completed,
-            $"Conversation resolved by {CurrentUserId}.",
-            cancellationToken);
-        TempData["AdminNotice"] = message is null ? "Conversation was not found." : "Conversation resolved.";
-        return RedirectAfterMessageAction(returnUrl);
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            AgentMessage message = await agentMessageService.ChangeStateAsync(id, AgentMessageState.Completed, $"Conversation resolved by {CurrentUserId}.", cancellationToken);
+            TempData["AdminNotice"] = message is null ? "Conversation was not found." : "Conversation resolved.";
+            return RedirectAfterMessageAction(returnUrl);
+        }
     }
 
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> ReopenMessage(Guid id, string returnUrl, CancellationToken cancellationToken)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect)
-            return redirect;
+        try
+        {
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
+        }
 
-        AgentMessage message = await agentMessageService.ChangeStateAsync(
-            id,
-            AgentMessageState.Pending,
-            $"Conversation reopened by {CurrentUserId}.",
-            cancellationToken);
-        TempData["AdminNotice"] = message is null ? "Conversation was not found." : "Conversation reopened for the Approval Agent.";
-        return RedirectAfterMessageAction(returnUrl);
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            AgentMessage message = await agentMessageService.ChangeStateAsync(id, AgentMessageState.Pending, $"Conversation reopened by {CurrentUserId}.", cancellationToken);
+            TempData["AdminNotice"] = message is null ? "Conversation was not found." : "Conversation reopened for the Approval Agent.";
+            return RedirectAfterMessageAction(returnUrl);
+        }
     }
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> ApproveMessage(
-        Guid id,
-        Guid? proposedProcessDefinitionId,
-        string responseNotes,
-        string returnUrl)
+    public async Task<IActionResult> ApproveMessage(Guid id, Guid? proposedProcessDefinitionId, string responseNotes, string returnUrl)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect)
-            return redirect;
-
-        if (proposedProcessDefinitionId.HasValue)
+        try
         {
-            ProcessValidationResult validation = await processValidationService.ValidateDefinitionAsync(proposedProcessDefinitionId.Value);
-            if (!validation.IsValid)
-            {
-                string errors = string.Join(" ", validation.Issues
-                    .Where(issue => issue.Severity == ProcessValidationSeverity.Error)
-                    .Take(3)
-                    .Select(issue => $"{issue.StepName}: {issue.Message}".TrimStart(':', ' ')));
-                TempData["AdminNotice"] = $"Draft was not activated because validation failed. {errors}";
-                return RedirectAfterMessageAction(returnUrl);
-            }
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
         }
 
-        await agentMessageService.RespondAsync(id, AgentMessageState.Approved, responseNotes);
-
-        if (proposedProcessDefinitionId.HasValue)
+        async Task<IActionResult> ExecuteActionAsync()
         {
-            ProcessDefinition activated = await processDraftService.ActivateDraftAsync(proposedProcessDefinitionId.Value, CurrentUserId, responseNotes);
-            if (activated is not null)
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            if (proposedProcessDefinitionId.HasValue)
             {
-                await workflowAutomationService.EnsureDefinitionCoverageAsync(activated.Id);
-                if (activated.ScopeType == ProcessScopeType.Lead)
-                    await workflowAutomationService.ReevaluateDeferredLeadsAsync(activated.TenantId);
+                ProcessValidationResult validation = await processValidationService.ValidateDefinitionAsync(proposedProcessDefinitionId.Value);
+                if (!validation.IsValid)
+                {
+                    string errors = string.Join(" ", validation.Issues.Where(issue => issue.Severity == ProcessValidationSeverity.Error).Take(3).Select(issue => $"{issue.StepName}: {issue.Message}".TrimStart(':', ' ')));
+                    TempData["AdminNotice"] = $"Draft was not activated because validation failed. {errors}";
+                    return RedirectAfterMessageAction(returnUrl);
+                }
             }
-        }
 
-        TempData["AdminNotice"] = "Approval recorded.";
-        return RedirectAfterMessageAction(returnUrl);
+            await agentMessageService.RespondAsync(id, AgentMessageState.Approved, responseNotes);
+            if (proposedProcessDefinitionId.HasValue)
+            {
+                ProcessDefinition activated = await processDraftService.ActivateDraftAsync(proposedProcessDefinitionId.Value, CurrentUserId, responseNotes);
+                if (activated is not null)
+                {
+                    await workflowAutomationService.EnsureDefinitionCoverageAsync(activated.Id);
+                    if (activated.ScopeType == ProcessScopeType.Lead)
+                        await workflowAutomationService.ReevaluateDeferredLeadsAsync(activated.TenantId);
+                }
+            }
+
+            TempData["AdminNotice"] = "Approval recorded.";
+            return RedirectAfterMessageAction(returnUrl);
+        }
     }
 
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> RejectMessage(Guid id, string responseNotes, string returnUrl)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect)
-            return redirect;
+        try
+        {
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
+        }
 
-        await agentMessageService.RespondAsync(id, AgentMessageState.Rejected, responseNotes);
-        TempData["AdminNotice"] = "Rejection recorded.";
-        return RedirectAfterMessageAction(returnUrl);
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            await agentMessageService.RespondAsync(id, AgentMessageState.Rejected, responseNotes);
+            TempData["AdminNotice"] = "Rejection recorded.";
+            return RedirectAfterMessageAction(returnUrl);
+        }
     }
 
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> DismissMessage(Guid id, string responseNotes, string returnUrl)
     {
-        if (RedirectIfUnauthenticated() is IActionResult redirect)
-            return redirect;
+        try
+        {
+            IActionResult result = await ExecuteActionAsync();
+            LogActionResult(result);
+            return result;
+        }
+        catch (ValidationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status400BadRequest, "The request is invalid.");
+        }
+        catch (AuthenticationException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status401Unauthorized, exception.Message);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (SecurityException exception)
+        {
+            loggingBroker.LogWarning(exception.Message);
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception)
+        {
+            loggingBroker.LogError(exception, "Controller request failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError);
+        }
 
-        await agentMessageService.RespondAsync(id, AgentMessageState.Dismissed, responseNotes);
-        TempData["AdminNotice"] = "Message dismissed.";
-        return RedirectAfterMessageAction(returnUrl);
+        async Task<IActionResult> ExecuteActionAsync()
+        {
+            if (RedirectIfUnauthenticated()is IActionResult redirect)
+                return redirect;
+            await agentMessageService.RespondAsync(id, AgentMessageState.Dismissed, responseNotes);
+            TempData["AdminNotice"] = "Message dismissed.";
+            return RedirectAfterMessageAction(returnUrl);
+        }
     }
 
-    IActionResult RedirectAfterMessageAction(string returnUrl) =>
-        !string.IsNullOrWhiteSpace(returnUrl) && Url.IsLocalUrl(returnUrl)
-            ? LocalRedirect(returnUrl)
-            : RedirectToAction(nameof(Messages));
-
+    IActionResult RedirectAfterMessageAction(string returnUrl) => !string.IsNullOrWhiteSpace(returnUrl) && Url.IsLocalUrl(returnUrl) ? LocalRedirect(returnUrl) : RedirectToAction(nameof(Messages));
     IActionResult RedirectIfUnauthenticated()
     {
-        if (!string.IsNullOrWhiteSpace(authInfo?.SSOUserId)
-            && !string.Equals(authInfo.SSOUserId, "Guest", StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(authInfo?.SSOUserId) && !string.Equals(authInfo.SSOUserId, "Guest", StringComparison.OrdinalIgnoreCase))
             return null;
-
         string returnUrl = $"{Request.Path}{Request.QueryString}";
         return RedirectToAction("Login", "Account", new { returnUrl });
     }
 
-    string CurrentUserId =>
-        string.IsNullOrWhiteSpace(authInfo?.SSOUserId)
-            ? "system"
-            : authInfo.SSOUserId;
+    string CurrentUserId => string.IsNullOrWhiteSpace(authInfo?.SSOUserId) ? "system" : authInfo.SSOUserId;
 
-    string RoutingUserId => string.IsNullOrWhiteSpace(agentWorkflowOptions.Value.ExecutionUserId)
-        ? CurrentUserId
-        : agentWorkflowOptions.Value.ExecutionUserId.Trim();
+    string RoutingUserId => string.IsNullOrWhiteSpace(agentWorkflowOptions.Value.ExecutionUserId) ? CurrentUserId : agentWorkflowOptions.Value.ExecutionUserId.Trim();
 
     static string BuildContextLink(AgentMessage message)
     {
         if (message.EmailId.HasValue)
             return $"/Admin/Emails?id={message.EmailId.Value}#email-{message.EmailId.Value}";
-
         if (message.ProcessDefinitionId.HasValue)
             return $"/Admin/Process/Edit/{message.ProcessDefinitionId.Value}";
-
         if (message.TenantCompanyRelationshipId.HasValue)
             return $"/Clients/Edit/{message.TenantCompanyRelationshipId.Value}";
-
         if (message.LeadId.HasValue)
             return $"/Leads/Edit/{message.LeadId.Value}";
-
         if (message.OpportunityId.HasValue)
             return $"/Opportunities";
-
         return string.Empty;
     }
 
-    static string BuildContextLabel(AgentMessage message) =>
-        message.EmailId.HasValue ? "View source email"
-        : message.ProcessDefinitionId.HasValue ? "View source process"
-        : message.TenantCompanyRelationshipId.HasValue ? "View related account"
-        : message.LeadId.HasValue ? "View related lead"
-        : message.OpportunityId.HasValue ? "View related opportunity"
-        : string.Empty;
+    static string BuildContextLabel(AgentMessage message) => message.EmailId.HasValue ? "View source email" : message.ProcessDefinitionId.HasValue ? "View source process" : message.TenantCompanyRelationshipId.HasValue ? "View related account" : message.LeadId.HasValue ? "View related lead" : message.OpportunityId.HasValue ? "View related opportunity" : string.Empty;
+    private void LogActionResult(IActionResult result)
+    {
+        int statusCode = result is IStatusCodeActionResult response ? response.StatusCode ?? StatusCodes.Status200OK : result is RedirectResult or RedirectToActionResult ? StatusCodes.Status302Found : StatusCodes.Status200OK;
+        if (statusCode >= 200 && statusCode < 400)
+            loggingBroker.LogInformation("Controller action completed successfully.");
+        else if (statusCode >= 400 && statusCode < 500)
+            loggingBroker.LogWarning("Controller action returned {StatusCode}.", statusCode);
+    }
 }
